@@ -200,22 +200,24 @@ GREETING='hello world'</code></pre>
     <tr><td><code>tool</code></td><td><code>id</code>（运行时给出的工具调用 id）、<code>parent</code>、<code>name</code>（运行时自己的工具名）、<code>summary</code>（一行，例如 <code>Bash: make all</code>、<code>Edit: src/main.rs</code>、<code>patch: a.rs b.rs</code>）</td><td>agent 调用一个工具时</td></tr>
     <tr><td><code>text</code></td><td><code>parent</code>、<code>text</code></td><td>agent 输出一段完整的文字时</td></tr>
     <tr><td><code>usage</code></td><td><code>parent</code>、<code>model</code>、<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>、<code>context_tokens</code>（这次调用的上下文占用）</td><td>一次模型调用结束时</td></tr>
-    <tr><td><code>subagent_start</code></td><td><code>id</code>、<code>parent</code>、<code>kind</code>（subagent 的类型，例如 <code>explore</code>）、<code>description</code>（一行任务描述）</td><td>agent 启动一个 subagent 时</td></tr>
-    <tr><td><code>subagent_end</code></td><td><code>id</code>、<code>status</code>（<code>finished</code> 或 <code>failed</code>）、<code>duration_ms</code></td><td>subagent 结束时</td></tr>
+    <tr><td><code>subagent_start</code></td><td><code>id</code>、<code>parent</code>、<code>number</code>（agentrun 按启动顺序给的编号，从 1 开始）、<code>kind</code>（subagent 的类型，例如 <code>explore</code>）、<code>model</code>（运行时在启动时给出的模型，没给出时为 null）、<code>description</code>（一行任务描述）</td><td>agent 启动一个 subagent 时</td></tr>
+    <tr><td><code>subagent_end</code></td><td><code>id</code>、<code>status</code>（<code>finished</code> 或 <code>failed</code>）、<code>duration_ms</code>、<code>usage</code>（这个 subagent 及其内部 subagent 的用量，结构同 <code>end.usage</code>）</td><td>subagent 结束时</td></tr>
     <tr><td><code>end</code></td><td><code>status</code>、<code>exit_code</code>（运行时的退出码，未启动时为 null）、<code>detail</code>、<code>duration_ms</code>、<code>usage</code>、<code>result</code></td><td>结束时</td></tr>
   </tbody>
 </table>
 <pre><code class="language-json">{"schema":1,"type":"start","time":"2026-10-03T13:00:00Z","runtime":"claude-code","profile":"native","model":null,"cwd":"/work/repo","argv":["/usr/local/bin/claude","-p","--output-format","stream-json"],"env":["HTTPS_PROXY"]}
-{"schema":1,"type":"subagent_start","time":"2026-10-03T13:00:03Z","id":"toolu_01","parent":null,"kind":"explore","description":"查找所有调用 parse_line 的位置"}
+{"schema":1,"type":"subagent_start","time":"2026-10-03T13:00:03Z","id":"toolu_01","parent":null,"number":1,"kind":"explore","model":"claude-haiku","description":"查找所有调用 parse_line 的位置"}
 {"schema":1,"type":"tool","time":"2026-10-03T13:00:04Z","id":"toolu_02","parent":"toolu_01","name":"Grep","summary":"Grep: parse_line"}
 {"schema":1,"type":"usage","time":"2026-10-03T13:00:05Z","parent":"toolu_01","model":"claude-haiku","input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"context_tokens":14120}
-{"schema":1,"type":"subagent_end","time":"2026-10-03T13:00:15Z","id":"toolu_01","status":"finished","duration_ms":12400}
+{"schema":1,"type":"subagent_end","time":"2026-10-03T13:00:15Z","id":"toolu_01","status":"finished","duration_ms":12400,"usage":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"by_model":{"claude-haiku":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}}}
 {"schema":1,"type":"tool","time":"2026-10-03T13:00:16Z","id":"toolu_03","parent":null,"name":"Bash","summary":"Bash: cargo test"}
 {"schema":1,"type":"text","time":"2026-10-03T13:00:31Z","parent":null,"text":"测试全部通过。"}
 {"schema":1,"type":"end","time":"2026-10-03T13:00:31Z","status":"finished","exit_code":0,"detail":"","duration_ms":31250,"usage":{"input_tokens":18234,"output_tokens":912,"cache_read_tokens":42000,"cache_write_tokens":5100,"by_model":{"claude-sonnet":{"input_tokens":15114,"output_tokens":827,"cache_read_tokens":32200,"cache_write_tokens":3900},"claude-haiku":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}},"result":"测试全部通过。"}</code></pre>
 
 <h3>subagent 与 parent</h3>
 <p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code>，不再输出 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
+<p>主 agent 与多个 subagent 可以同时运行，它们的事件在流里交错出现。<code>id</code> 是运行时给出的工具调用 id，较长，用于关联事件；<code>number</code> 是 agentrun 在一次运行内按 <code>subagent_start</code> 的顺序分配的编号，用于显示。text 与 rich 格式用 <code>类型#编号</code>（例如 <code>explore#1</code>）称呼一个 subagent，主 agent 称为 <code>main</code>。</p>
+<p>subagent 可能使用与主 agent 不同的模型。显示时，一个 agent 的模型取它最近一次 <code>usage</code> 事件的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
 <p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭。pi 没有 subagent。claude-code 的输出用 <code>parent_tool_use_id</code> 标出 subagent 内部的消息，工具直接映射；codex 的对应方式在实测后确定。</p>
 
 <h3>用量</h3>
@@ -249,36 +251,52 @@ GREETING='hello world'</code></pre>
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
 <h3>text 格式</h3>
-<p><code>--format text</code> 每个事件一行：<code>tool</code> 显示 <code>summary</code>，<code>text</code> 显示文字的第一行，<code>subagent_start</code> 与 <code>subagent_end</code> 显示类型、描述或状态与耗时，<code>end</code> 显示状态、耗时、token 用量与 <code>detail</code>。<code>usage</code> 事件不单独显示，计入 <code>end</code> 行。subagent 内部的事件按嵌套层数缩进两个空格，并以 subagent 的类型开头。</p>
+<p><code>--format text</code> 每个事件一行，格式是 <code>[agent 标签] 事件类型 内容</code>。agent 标签是 <code>main</code> 或 <code>类型#编号</code>，没有出现 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部输出。</p>
+<ul>
+  <li><code>tool</code>：<code>summary</code>。</li>
+  <li><code>text</code>：文字的第一行。</li>
+  <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写出新 subagent 的标签、模型（已知时）与描述。</li>
+  <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写出状态、耗时、模型与 token 用量。</li>
+  <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
+  <li><code>end</code>：<code>[end]</code> 开头，写出状态、耗时、token 用量与 <code>detail</code>。</li>
+</ul>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"
-<span class="dim">[tool]</span> Read: src/parse.rs
-<span class="dim">[agent]</span> explore 启动：查找所有调用 parse_line 的位置
-  <span class="dim">[explore]</span> Grep: parse_line
-  <span class="dim">[explore]</span> 共 3 处调用，都在 src/cli.rs。
-<span class="dim">[agent]</span> explore finished 12.4s
-<span class="dim">[tool]</span> Edit: src/parse.rs
-<span class="dim">[tool]</span> Bash: cargo test
-<span class="dim">[text]</span> 修复了 parse_line 对空行的处理，测试全部通过。
+<span class="dim">[main]</span> tool Read: src/parse.rs
+<span class="dim">[main]</span> agent 启动 explore#1（claude-haiku）：查找所有调用 parse_line 的位置
+<span class="dim">[main]</span> agent 启动 general#2（claude-sonnet）：为 parse_line 写边界测试
+<span class="dim">[explore#1]</span> tool Grep: parse_line
+<span class="dim">[general#2]</span> tool Read: tests/parse.rs
+<span class="dim">[main]</span> tool Bash: cargo check
+<span class="dim">[explore#1]</span> text 共 3 处调用，都在 src/cli.rs。
+<span class="dim">[explore#1]</span> agent finished 12.4s claude-haiku in 3120 out 85
+<span class="dim">[general#2]</span> tool Edit: tests/parse.rs
+<span class="dim">[main]</span> tool Edit: src/parse.rs
+<span class="dim">[general#2]</span> agent finished 20.8s claude-sonnet in 9410 out 512
+<span class="dim">[main]</span> tool Bash: cargo test
+<span class="dim">[main]</span> text 修复了 parse_line 对空行的处理，测试全部通过。
 <span class="dim">[end]</span> finished 31.3s in 18234 out 912 cache read 42000 write 5100</div>
 
 <h3>rich 格式</h3>
 <p><code>--format rich</code> 在终端里显示动态界面，分三个区域。标准输出不是终端时，<code>rich</code> 按 <code>text</code> 输出。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --prompt "给 parse 模块补测试并修复失败"
-<span class="dim">[tool]</span> Read: src/parse.rs <span class="ref">1</span>
-<span class="dim">[agent]</span> explore 启动：查找所有调用 parse_line 的位置
-<span class="dim">[agent]</span> general 启动：为 parse_line 写边界测试
-  <span class="dim">[explore]</span> Grep: parse_line
-<span class="dim">[agent]</span> explore finished 12.4s
-<span class="dim">[tool]</span> Edit: src/parse.rs
+<span class="dim">[main]</span> tool Read: src/parse.rs <span class="ref">1</span>
+<span class="dim">[main]</span> agent 启动 explore#1（claude-haiku）：查找所有调用 parse_line 的位置
+<span class="dim">[main]</span> agent 启动 general#2（claude-sonnet）：为 parse_line 写边界测试
+<span class="dim">[main]</span> agent 启动 explore#3（claude-haiku）：确认测试框架与运行方式
+<span class="dim">[explore#1]</span> tool Grep: parse_line
+<span class="dim">[general#2]</span> tool Read: tests/parse.rs
+<span class="dim">[explore#3]</span> agent finished 6.2s claude-haiku in 1830 out 40
+<span class="dim">[main]</span> tool Bash: cargo check
 <span class="dim">───────────────────────────────────────────────────────────────────────</span>
-subagent  1 个运行中 <span class="ref">2</span>
-  ⠙ general  为 parse_line 写边界测试    Edit: tests/parse.rs   0:21  ctx 22.4k
+subagent  2 个运行中 <span class="ref">2</span>
+  ⠙ explore#1  claude-haiku   查找所有调用 parse_line 的位置   Read: src/cli.rs       0:11  ctx 14.1k
+  ⠹ general#2  claude-sonnet  为 parse_line 写边界测试         Edit: tests/parse.rs   0:09  ctx 22.4k
 <span class="dim">───────────────────────────────────────────────────────────────────────</span>
-⠹ Bash: cargo test   0:48   in 18.2k out 0.9k cache 42.0k   ctx 61.3k   claude-sonnet <span class="ref">3</span></div>
+⠸ main  claude-sonnet  Bash: cargo check   0:24   in 18.2k out 0.9k cache 42.0k   ctx 61.3k <span class="ref">3</span></div>
 <ol class="callouts">
-  <li>滚动区。已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，终端的滚动缓冲保留全部历史。</li>
-  <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、类型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 个运行中」。终端宽度不够时截断描述。</li>
-  <li>状态栏。动画、主 agent 正在执行的工具、已用时间、累计 token 用量（包括 subagent）、主 agent 的上下文占用与模型。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
+  <li>滚动区。已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
+  <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签（<code>类型#编号</code>）、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 个运行中」。终端宽度不够时截断描述。</li>
+  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计 token 用量（包括 subagent）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
 
 <h2>doctor 检查</h2>
