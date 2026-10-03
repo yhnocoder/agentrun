@@ -1,0 +1,12 @@
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "WORKDIR"))
+  (subpath (param "PRIVTMP"))
+  (subpath (param "STATEDIR"))
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/tty")
+  (regex #"^/dev/ttys[0-9]+$")
+  (literal "/dev/dtracehelper"))
