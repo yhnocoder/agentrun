@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Doc 组件展示</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a></p>
+<h1>Design Doc 组件展示</h1>
+<p class="lead">这一页列出 <mark>style.css 支持的组件</mark>：每个组件写适用场景、渲染效果和最简写法。新文档复制这个文件开始，保留 <code>&lt;head&gt;</code> 中字体、MathJax、Prism 的引入，按需使用组件，删掉不用的内容。颜色已经定义好，验证时无需考虑色弱模拟。无需真机调试。</p>
+
+<blockquote>
+  <p>这份文档最重要的一两条结论。没有需要单独强调的结论时，删除这个引用块。</p>
+</blockquote>
+
+<h2>核心结论引用块</h2>
+<p class="hint">可选。写在导语之后、第一个 h2 之前，一两句话写这份文档最重要的结论。本页顶部的引用块就是渲染效果。</p>
+
+<h3>写法</h3>
+<pre><code class="language-html">&lt;blockquote&gt;
+  &lt;p&gt;一两句话写最重要的结论。&lt;/p&gt;
+&lt;/blockquote&gt;</code></pre>
+
+<h2>导语与强调</h2>
+<p class="hint">导语 <code>.lead</code> 写在 h1 之后，说明文档覆盖的范围。导语和正文里用 <code>&lt;mark&gt;</code> 标出关键词，一段里最多一处。</p>
+<p class="lead">这是一段导语，其中的<mark>关键词</mark>用强调样式。</p>
+<h3>写法</h3>
+<pre><code class="language-html">&lt;p class=&quot;lead&quot;&gt;这是一段导语，其中的&lt;mark&gt;关键词&lt;/mark&gt;用强调样式。&lt;/p&gt;</code></pre>
+
+<h2>表格</h2>
+<p class="hint">选项、接口、常量这类有固定列的内容用表格。单元格里的代码用 <code>&lt;code&gt;</code>；<code>-&gt;</code> 这类不能被拆开的记号包在 <code>.nb</code> 里，浏览器不会在记号中间换行。窄屏下表格在自己的区域内横向滚动。</p>
+<table>
+  <thead>
+    <tr><th>名称</th><th>作用</th><th>接口</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>load</code></td><td>读取配置文件</td><td><code>load(path: Path) <span class="nb">-&gt;</span> Config</code></td></tr>
+    <tr><td><code>LIMIT</code></td><td>单次处理的上限</td><td><code>100</code></td></tr>
+  </tbody>
+</table>
+<h3>写法</h3>
+<pre><code class="language-html">&lt;table&gt;
+  &lt;thead&gt;
+    &lt;tr&gt;&lt;th&gt;名称&lt;/th&gt;&lt;th&gt;作用&lt;/th&gt;&lt;th&gt;接口&lt;/th&gt;&lt;/tr&gt;
+  &lt;/thead&gt;
+  &lt;tbody&gt;
+    &lt;tr&gt;&lt;td&gt;&lt;code&gt;load&lt;/code&gt;&lt;/td&gt;&lt;td&gt;读取配置文件&lt;/td&gt;&lt;td&gt;&lt;code&gt;load(path: Path) &lt;span class=&quot;nb&quot;&gt;-&amp;gt;&lt;/span&gt; Config&lt;/code&gt;&lt;/td&gt;&lt;/tr&gt;
+  &lt;/tbody&gt;
+&lt;/table&gt;</code></pre>
+
+<h2>代码块与高亮</h2>
+<p class="hint">配置文件内容、接口类定义、命令示例用代码块，由 Prism 高亮。<code>class="language-xxx"</code> 中的 xxx 是 Prism 的语言名，例如 <code>toml</code>、<code>python</code>、<code>json</code>、<code>bash</code>、<code>html</code>，语言组件按需自动加载。鼠标移到代码块上时，右上角显示语言名和「wrap」按钮，按钮在横向滚动和换行之间切换，触屏设备上一直显示；带 <code>data-line</code> 的代码块没有 wrap 按钮，因为行高亮按行号计算位置，换行后会错位。代码里的 <code>&lt;</code> 和 <code>&amp;</code> 要写成 <code>&amp;lt;</code> 和 <code>&amp;amp;</code>。</p>
+<h3>语法高亮</h3>
+<pre><code class="language-python">@dataclass
+class Config:
+    root: Path
+    limit: int = 100
+    retries: int = 3</code></pre>
+<pre><code class="language-html">&lt;pre&gt;&lt;code class=&quot;language-python&quot;&gt;@dataclass
+class Config:
+    root: Path
+    limit: int = 100
+    retries: int = 3&lt;/code&gt;&lt;/pre&gt;</code></pre>
+<h3>高亮一段行</h3>
+<p>在 <code>pre</code> 上写 <code>data-line</code>，行号从 1 开始。用来指出一段代码里需要读者注意的位置。</p>
+<pre data-line="3"><code class="language-python">@dataclass
+class Config:
+    root: Path
+    limit: int = 100
+    retries: int = 3</code></pre>
+<pre><code class="language-html">&lt;pre data-line=&quot;3&quot;&gt;&lt;code class=&quot;language-python&quot;&gt;@dataclass
+class Config:
+    root: Path
+    limit: int = 100
+    retries: int = 3&lt;/code&gt;&lt;/pre&gt;</code></pre>
+<h3>高亮多段行</h3>
+<p>多个段用逗号分隔，连续的行用短横线写范围。</p>
+<pre data-line="1,4-5"><code class="language-python">@dataclass
+class Config:
+    root: Path
+    limit: int = 100
+    retries: int = 3</code></pre>
+<pre><code class="language-html">&lt;pre data-line=&quot;1,4-5&quot;&gt;&lt;code class=&quot;language-python&quot;&gt;@dataclass
+class Config:
+    root: Path
+    limit: int = 100
+    retries: int = 3&lt;/code&gt;&lt;/pre&gt;</code></pre>
+<h3>diff</h3>
+<p>展示改动前后时用 <code>language-diff-xxx</code> 加 <code>diff-highlight</code>，xxx 是被比较内容的语言，每行以 <code>+</code>、<code>-</code> 或空格开头。</p>
+<pre><code class="language-diff-python diff-highlight"> @dataclass
+ class Config:
+     root: Path
+-    limit: int = 100
++    limit: int = 200
++    retries: int = 3</code></pre>
+<pre><code class="language-html">&lt;pre&gt;&lt;code class=&quot;language-diff-python diff-highlight&quot;&gt; @dataclass
+ class Config:
+     root: Path
+-    limit: int = 100
++    limit: int = 200
++    retries: int = 3&lt;/code&gt;&lt;/pre&gt;</code></pre>
+
+<h2>公式</h2>
+<p class="hint">阈值、比例这类有明确计算方式的内容用公式。行内公式用 <code>$...$</code>；需要被引用的独立公式用 <code>equation</code> 环境加 <code>\label</code>，正文用 <code>\eqref</code> 引用，编号自动生成。未定义的宏会显示为渲染错误，<code>check_design</code> 会报出。</p>
+<p>比例 $r$ 按式 \eqref{eq:demo} 计算，其中 $n$ 是条目数：</p>
+\begin{equation}
+r = \frac{1}{n} \sum_{i=1}^{n} x_i \label{eq:demo}
+\end{equation}
+<h3>写法</h3>
+<pre><code class="language-html">&lt;p&gt;比例 $r$ 按式 \eqref{eq:demo} 计算，其中 $n$ 是条目数：&lt;/p&gt;
+\begin{equation}
+r = \frac{1}{n} \sum_{i=1}^{n} x_i \label{eq:demo}
+\end{equation}</code></pre>
+
+<h2>终端 mockup 与编号说明</h2>
+<p class="hint">描述命令运行后的预期输出时用 <code>.term</code>，内容按等宽原样排版，不会被 MathJax 处理。需要解释的位置放 <code>.ref</code> 编号，下面用 <code>.callouts</code> 列表逐条说明，编号自动生成。<code>.prompt</code>、<code>.dim</code>、<code>.warn</code> 分别用于提示符、次要信息和警告。</p>
+<div class="term"><span class="prompt">$</span> tool run ./input <span class="ref">1</span>
+<span class="dim">processed 3 items in 0.02s</span> <span class="ref">2</span>
+<span class="warn">warning: 1 item skipped</span></div>
+<ol class="callouts">
+  <li>命令本身。</li>
+  <li>统计信息写到 stderr。</li>
+</ol>
+<h3>写法</h3>
+<pre><code class="language-html">&lt;div class=&quot;term&quot;&gt;&lt;span class=&quot;prompt&quot;&gt;$&lt;/span&gt; tool run ./input &lt;span class=&quot;ref&quot;&gt;1&lt;/span&gt;
+&lt;span class=&quot;dim&quot;&gt;processed 3 items in 0.02s&lt;/span&gt; &lt;span class=&quot;ref&quot;&gt;2&lt;/span&gt;
+&lt;span class=&quot;warn&quot;&gt;warning: 1 item skipped&lt;/span&gt;&lt;/div&gt;
+&lt;ol class=&quot;callouts&quot;&gt;
+  &lt;li&gt;命令本身。&lt;/li&gt;
+  &lt;li&gt;统计信息写到 stderr。&lt;/li&gt;
+&lt;/ol&gt;</code></pre>
+
+<h2>线框图</h2>
+<p class="hint">描述界面布局时用 <code>.wire</code>。线框图画的是设计目标的固定画面，不随阅读者的窗口宽度变化：桌面布局固定 640px 宽，窄屏布局用 <code>.wire.narrow</code> 固定 360px 宽，每种宽度单独画一张。外面包一层 <code>.wire-scroll</code>，窗口不够宽时在容器内横向滚动。区域用 <code>top</code>、<code>side</code>、<code>body</code>、<code>foot</code> 四个类，<code>.rows</code> 画列表，<code>.bar</code> 画比例条。</p>
+<div class="wire-scroll">
+<div class="wire">
+  <div class="top"><b>A. 顶栏</b>标题和操作按钮。</div>
+  <div class="side"><b>B. 列表</b>
+    <div class="rows">
+      <div class="row"><span>项目一</span><span>12</span></div>
+      <div class="row"><span>项目二</span><span>8</span></div>
+    </div>
+  </div>
+  <div class="body"><b>C. 主区域</b>
+    <div class="bar" style="width: 80%"></div>
+    <div class="bar" style="width: 50%"></div>
+    主要内容。
+  </div>
+  <div class="foot"><b>D. 底栏</b>汇总信息。</div>
+</div>
+</div>
+<div class="wire-scroll">
+<div class="wire narrow">
+  <div class="top"><b>A. 顶栏</b></div>
+  <div class="side"><b>B. 列表</b>
+    <div class="rows">
+      <div class="row"><span>项目一</span><span>12</span></div>
+      <div class="row"><span>项目二</span><span>8</span></div>
+    </div>
+  </div>
+  <div class="body"><b>C. 主区域</b><div class="bar" style="width: 80%"></div></div>
+  <div class="foot"><b>D. 底栏</b></div>
+</div>
+</div>
+<h3>写法</h3>
+<pre><code class="language-html">&lt;div class=&quot;wire-scroll&quot;&gt;
+&lt;div class=&quot;wire&quot;&gt;
+  &lt;div class=&quot;top&quot;&gt;&lt;b&gt;A. 顶栏&lt;/b&gt;说明&lt;/div&gt;
+  &lt;div class=&quot;side&quot;&gt;&lt;b&gt;B. 列表&lt;/b&gt;
+    &lt;div class=&quot;rows&quot;&gt;
+      &lt;div class=&quot;row&quot;&gt;&lt;span&gt;项目一&lt;/span&gt;&lt;span&gt;12&lt;/span&gt;&lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;body&quot;&gt;&lt;b&gt;C. 主区域&lt;/b&gt;&lt;div class=&quot;bar&quot; style=&quot;width: 80%&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;foot&quot;&gt;&lt;b&gt;D. 底栏&lt;/b&gt;说明&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;</code></pre>
+<p>窄屏布局把 <code>class="wire"</code> 换成 <code>class="wire narrow"</code>，其余写法相同。</p>
+<h2>SVG 图</h2>
+<p class="hint">模块之间的数据流、状态转换用内联 SVG，加 <code>class="diagram"</code> 后方框、文字、箭头的颜色跟随主题。宽度随内容区缩放，用 <code>viewBox</code> 定坐标。</p>
+<figure>
+<svg class="diagram" viewBox="0 0 320 70" role="img" aria-label="A 到 B 的数据流">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z"></path>
+    </marker>
+  </defs>
+  <rect x="10" y="20" width="100" height="40" rx="8"></rect>
+  <text x="60" y="45" text-anchor="middle">模块 A</text>
+  <line x1="110" y1="40" x2="210" y2="40" marker-end="url(#arrow)"></line>
+  <text class="note" x="160" y="32" text-anchor="middle">数据</text>
+  <rect x="210" y="20" width="100" height="40" rx="8"></rect>
+  <text x="260" y="45" text-anchor="middle">模块 B</text>
+</svg>
+<figcaption>图注写在 figcaption 里。</figcaption>
+</figure>
+<h3>写法</h3>
+<pre><code class="language-html">&lt;figure&gt;
+&lt;svg class=&quot;diagram&quot; viewBox=&quot;0 0 320 70&quot; role=&quot;img&quot; aria-label=&quot;A 到 B 的数据流&quot;&gt;
+  &lt;defs&gt;
+    &lt;marker id=&quot;arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto-start-reverse&quot;&gt;
+      &lt;path d=&quot;M0 0 L10 5 L0 10 z&quot;&gt;&lt;/path&gt;
+    &lt;/marker&gt;
+  &lt;/defs&gt;
+  &lt;rect x=&quot;10&quot; y=&quot;20&quot; width=&quot;100&quot; height=&quot;40&quot; rx=&quot;8&quot;&gt;&lt;/rect&gt;
+  &lt;text x=&quot;60&quot; y=&quot;45&quot; text-anchor=&quot;middle&quot;&gt;模块 A&lt;/text&gt;
+  &lt;line x1=&quot;110&quot; y1=&quot;40&quot; x2=&quot;210&quot; y2=&quot;40&quot; marker-end=&quot;url(#arrow)&quot;&gt;&lt;/line&gt;
+  &lt;text class=&quot;note&quot; x=&quot;160&quot; y=&quot;32&quot; text-anchor=&quot;middle&quot;&gt;数据&lt;/text&gt;
+  &lt;rect x=&quot;210&quot; y=&quot;20&quot; width=&quot;100&quot; height=&quot;40&quot; rx=&quot;8&quot;&gt;&lt;/rect&gt;
+  &lt;text x=&quot;260&quot; y=&quot;45&quot; text-anchor=&quot;middle&quot;&gt;模块 B&lt;/text&gt;
+&lt;/svg&gt;
+&lt;figcaption&gt;图注写在 figcaption 里。&lt;/figcaption&gt;
+&lt;/figure&gt;</code></pre>
+
+<h2>标签与说明文字</h2>
+<p class="hint">h1 后面的 <code>.tag</code> 用来标记文档状态，例如「示例」「草稿」。<code>.hint</code> 是灰色小字，放在标题下说明这一节写什么，或放在组件旁做补充说明。本页每个 h2 下面的灰字就是 <code>.hint</code>。</p>
+<p><span class="tag" style="margin-left: 0">示例</span> <span class="tag">草稿</span></p>
+<p class="hint">这一行是说明文字。</p>
+<h3>写法</h3>
+<pre><code class="language-html">&lt;h1&gt;文档标题 &lt;span class=&quot;tag&quot;&gt;草稿&lt;/span&gt;&lt;/h1&gt;
+&lt;p class=&quot;hint&quot;&gt;这一行是说明文字。&lt;/p&gt;</code></pre>
+
+</main>
+</body>
+</html>

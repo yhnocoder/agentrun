@@ -1,0 +1,11 @@
+.DS_Store
+.env*
+credentials.json
+auth.json
+*.log
+__pycache__/
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+node_modules/

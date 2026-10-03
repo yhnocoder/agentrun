@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>终端输出 mockup</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a></p>
+<h1>终端输出 mockup <span class="tag">示例</span></h1>
+<p class="lead">这一页演示怎样在 Design Doc 里用等宽文本写出命令运行后的<mark>预期输出</mark>，并给各部分编号，逐条说明。命令和选项的定义见 <a href="demo-cli.html">命令与配置</a>。</p>
+
+<h2>默认表格输出</h2>
+<div class="term"><span class="prompt">$</span> linecount ./src <span class="ref">1</span>
+<span class="dim">scanned 670 files in 0.31s</span> <span class="ref">2</span>
+
+ext        files    lines <span class="ref">3</span>
+py           212   48,120
+ts           391   37,905
+md            48    6,204
+(none)        17      930 <span class="ref">4</span>
+
+total        668   93,159 <span class="ref">5</span>
+<span class="warn">warning: skipped 2 unreadable files, see --format json for the list</span> <span class="ref">6</span></div>
+<ol class="callouts">
+  <li>命令本身。PATH 省略时等于当前目录。</li>
+  <li>扫描统计行写到 stderr，重定向 stdout 时不会混入表格。scanned 的数量包括被跳过的文件，所以 670 等于 total 的 668 加上跳过的 2。</li>
+  <li>表头固定三列，列宽按内容自适应，数字右对齐并带千分位。</li>
+  <li>按行数降序，行数相同时按扩展名字母序；没有扩展名的文件归入 <code>(none)</code>，固定排在最后一行。</li>
+  <li>total 行前面空一行，files 和 lines 分别求和，不含跳过的文件。</li>
+  <li>有跳过的文件时在最后打印一行警告，退出码仍然是 0。</li>
+</ol>
+
+<h2>JSON 输出</h2>
+<div class="term"><span class="prompt">$</span> linecount ./src --format json
+{
+  "by_ext": { <span class="ref">1</span>
+    "py": {"files": 212, "lines": 48120},
+    "ts": {"files": 391, "lines": 37905}
+  },
+  "skipped": ["src/vendor/blob.bin"] <span class="ref">2</span>
+}</div>
+<ol class="callouts">
+  <li><code>by_ext</code> 的键是扩展名，值是该扩展名的文件数和行数，与表格输出同一来源。</li>
+  <li>跳过的文件以路径列表给出，路径相对于 PATH。</li>
+</ol>
+
+<h2>错误输出</h2>
+<div class="term"><span class="prompt">$</span> linecount ./missing
+<span class="warn">error: ./missing is not a directory</span> <span class="ref">1</span>
+<span class="prompt">$</span> echo $?
+1</div>
+<ol class="callouts">
+  <li>错误信息以 <code>error:</code> 开头写到 stderr，退出码对应 <a href="demo-cli.html">命令与配置</a> 中的退出码表。</li>
+</ol>
+</main>
+</body>
+</html>

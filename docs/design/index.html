@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Docs</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="wide index">
+<h1>Design Docs</h1>
+<p class="lead">本项目的设计文档索引。每份文档写用户能看到的行为、模块接口、影响结果的常量和改动时容易被破坏的设计决定。新文档从模板复制，示例在新项目开始时删除。</p>
+
+<h2>模板</h2>
+<ul class="cards">
+  <li><a class="card" href="pages/_template.html">
+    <div class="pv">
+      <div class="pv-kit">
+        <div class="k-quote pv-a pv-s1"><i></i><i></i></div>
+        <div class="k-code pv-a pv-s2"><i></i><i></i></div>
+        <div class="k-table pv-a pv-s3"><i></i><i></i><i></i></div>
+        <div class="k-wire pv-a pv-s4"><i></i><i></i></div>
+      </div>
+    </div>
+    <div class="card-body"><strong>Design Doc 组件展示</strong><span>style.css 支持的组件、渲染效果和写法。新文档把本文件复制到 pages/，保留 head 中的引入，按需使用组件。</span>
+    <div class="card-tags"><i>template</i><i>pages/_template.html</i></div></div>
+  </a></li>
+</ul>
+
+<h2>示例</h2>
+<ul class="cards">
+  <li><a class="card" href="examples/demo-cli.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><b>$</b><span class="pv-a">linecount ./src</span></div>
+      <div class="pv-line pv-a pv-s2">py      212   48,120</div>
+      <div class="pv-line pv-a pv-s3">ts      391   37,905</div>
+      <div class="pv-line pv-a pv-s4">total   668   93,159</div>
+    </div>
+    <div class="card-body"><strong>linecount 命令与配置</strong><span>命令行参数、配置文件格式、默认值和退出码。</span>
+    <div class="card-tags"><i>demo</i><i>cli</i><i>config</i></div></div>
+  </a></li>
+  <li><a class="card" href="examples/demo-cache.html">
+    <div class="pv">
+      <div class="pv-line pv-a pv-s1">src/main.py   <span class="pv-chip">cached</span></div>
+      <div class="pv-line pv-a pv-s2">src/util.ts   <span class="pv-chip">cached</span></div>
+      <div class="pv-line pv-a pv-s3">src/new.py    <span class="pv-chip hot">count</span></div>
+      <div class="pv-line pv-a pv-s4">README.md     <span class="pv-chip hot">count</span></div>
+    </div>
+    <div class="card-body"><strong>linecount 增量统计缓存</strong><span>第二次运行时只统计改动过的文件。文档写缓存的数据流、命中规则、文件位置和正确性保证。</span>
+    <div class="card-tags"><i>demo</i><i>cache</i><i>svg</i></div></div>
+  </a></li>
+  <li><a class="card" href="examples/mockup-terminal.html">
+    <div class="pv pv-dark">
+      <div class="pv-line pv-cmd"><b>$</b>linecount ./src</div>
+      <div class="pv-line pv-a pv-s1">ext     files    lines</div>
+      <div class="pv-line pv-a pv-s2">py        212   48,120</div>
+      <div class="pv-line pv-a pv-s3">ts        391   37,905</div>
+      <div class="pv-line pv-a pv-s4">md         48    6,204</div>
+    </div>
+    <div class="card-body"><strong>终端输出 mockup</strong><span>用等宽文本展示命令运行后的预期输出，并标出各部分含义。</span>
+    <div class="card-tags"><i>mockup</i><i>terminal</i></div></div>
+  </a></li>
+  <li><a class="card" href="examples/mockup-layout.html">
+    <div class="pv">
+      <div class="pv-grid">
+        <div class="a pv-a pv-h1">A</div>
+        <div class="b pv-a pv-h2">B</div>
+        <div class="c pv-a pv-h3">C</div>
+        <div class="d pv-a pv-h4">D</div>
+      </div>
+    </div>
+    <div class="card-body"><strong>界面布局线框图</strong><span>用 HTML/CSS 画线框图，标注报告页面的各个区域。</span>
+    <div class="card-tags"><i>mockup</i><i>layout</i></div></div>
+  </a></li>
+</ul>
+</main>
+</body>
+</html>
