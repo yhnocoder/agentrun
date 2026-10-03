@@ -1,8 +1,14 @@
-# <Project>
+# agentrun
 
 ## 目标
 
-<Description>
+agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linux、云端容器和 docker 容器里安全地运行 claude-code、codex 和 pi。调用方在每种环境里的用法相同，工具在这些环境里能安装，出了问题能查出原因。
+
+- Safety：在每个环境能提供的范围内隔离 agent，限制它能写的文件、执行的命令能否联网、能读到的配置和账号。
+- Unified Experience：同一条命令在四种环境里都能运行，输出格式与成败判定相同。
+- Doctor：每个平台一个可执行文件，能在启动前检查环境，失败时能看出原因。
+
+设计见 `docs/design/pages/agentrun.html`，Task 计划与进度见 GitHub issue #1。
 
 ## 协作方式
 
