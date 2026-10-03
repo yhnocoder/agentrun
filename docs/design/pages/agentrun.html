@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentrun 设计</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a></p>
+<h1>agentrun 设计 <span class="tag">草稿</span></h1>
+<p class="lead">agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linux、云端容器和 docker 容器里用<mark>同一条命令</mark>运行 claude-code、codex 和 pi。本文写它的命令行界面、各环境的隔离方式、凭据与会话环境的处理、统一事件流、doctor 检查和退出码。</p>
+
+<blockquote>
+  <p>环境档位由启动方显式声明，工具不自己探测所在的环境。一个档位要用的沙箱无法启动时，工具直接失败，不退回到无沙箱运行。</p>
+</blockquote>
+
+<h2>工具要做到什么</h2>
+<p>调用方在每种环境里的用法相同，工具在这些环境里能安装，出了问题能查出原因。具体分三项：</p>
+<ul>
+  <li>Safety：在每个环境能提供的范围内收紧权限。运行中不弹出确认；不读取用户自己的运行时配置、插件、规则与会话记录；有沙箱时限制写范围与命令联网。</li>
+  <li>Unified Experience：一条命令启动会话，三个运行时的输出统一成一种带版本号的事件流，成败判定由工具统一给出。</li>
+  <li>Doctor：<code>agentrun doctor</code> 在启动前判断运行时能否使用，失败时说明原因。</li>
+</ul>
+<p>任何语言都能调用 agentrun，接口只有命令行参数、环境变量、标准输入输出与退出码。每个平台一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64，不支持 Windows。</p>
+<p>工具不做的事：</p>
+<ul>
+  <li>不决定用哪个模型做哪件事。角色、模型路由与业务流程由调用方负责。</li>
+  <li>不直接调用模型 API，只启动 agent 运行时的命令行程序。</li>
+  <li>不做多轮交互，不做重试，不安装或升级运行时。</li>
+</ul>
+
+<h2>各环境靠什么隔离</h2>
+<p>档位按环境分成三种。</p>
+<table>
+  <thead>
+    <tr><th>环境</th><th>档位</th><th>隔离边界</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>本机 macOS、本机 Linux</td><td><code>native</code>（默认）</td><td>运行时或操作系统的沙箱</td></tr>
+    <tr><td>云端容器（Linux）</td><td><code>cloud</code></td><td>容器或虚拟机本身；codex 另外使用自己的沙箱</td></tr>
+    <tr><td>docker 容器（Linux）</td><td><code>docker</code></td><td>容器本身</td></tr>
+  </tbody>
+</table>
+<p>云端容器有两种：Claude 云端只运行 claude-code 与 pi，Codex 云端只运行 codex 与 pi。两种都用 <code>cloud</code> 档位，工具不区分，由启动方选择运行时。</p>
+<p>每个运行时在每种环境里的做法与剩下的风险：</p>
+<table>
+  <thead>
+    <tr><th>运行时</th><th>本机 macOS</th><th>本机 Linux</th><th>云端容器（Claude 云端或 Codex 云端）</th><th>docker 容器</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>Seatbelt 沙箱：命令只能写工作目录与会话临时目录，不能联网。剩余风险：Read 等内置工具能读工作目录以外的文件，内容会进入模型上下文</td><td>bubblewrap 沙箱，其余同 macOS</td><td>没有沙箱，命令逐条由 auto 模式判断。剩余风险：命令能写容器内任何位置、能联网，边界是容器</td><td>同云端容器</td></tr>
+    <tr><td>codex</td><td>workspace-write 沙箱：只能写工作目录与会话临时目录，命令不能联网。剩余风险：能读用户可读的任何文件，内容会进入模型上下文</td><td>同 macOS</td><td>同 macOS</td><td>danger-full-access。剩余风险：能写容器内任何位置、能联网，边界是容器</td></tr>
+    <tr><td>pi</td><td>工具用 Seatbelt 包裹 pi：只能写工作目录、会话临时目录与 pi 的状态目录。剩余风险：读不受限，网络开放（pi 要访问模型服务），agent 可能读到 <code>~/.ssh</code> 之类的文件再发出去</td><td>工具用 bubblewrap 包裹 pi，其余同 macOS</td><td>没有沙箱。剩余风险：能写容器内任何位置、能联网，边界是容器</td><td>同云端容器</td></tr>
+  </tbody>
+</table>
+<p class="hint">本机 Linux 的沙箱、本机 pi 的包裹方式，以及三个沙箱能否加一个额外的可写目录，还没有实测，实现时先验证再定稿。</p>
+
+<h2>命令行界面</h2>
+<p>运行时名就是子命令：<code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。另外有 <code>agentrun doctor</code>，见「doctor 检查」。三个运行时子命令接受同一组选项。</p>
+<table>
+  <thead>
+    <tr><th>选项</th><th>含义</th><th>默认</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--cwd DIR</code></td><td>会话的工作目录。沙箱可用时，它与会话临时目录是 agent 仅有的可写目录</td><td>当前目录</td></tr>
+    <tr><td><code>--prompt TEXT</code></td><td>提示词</td><td>无</td></tr>
+    <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词</td><td>无</td></tr>
+    <tr><td>标准输入</td><td>前两项都没给时，从标准输入读提示词；三处都没有内容时报用法错误</td><td></td></tr>
+    <tr><td><code>--model ID</code></td><td>模型。pi 写成 <code>服务商/模型</code></td><td>不传，用运行时自己的默认模型</td></tr>
+    <tr><td><code>--effort LEVEL</code></td><td>推理强度，原样传给运行时对应的参数</td><td>不传，用运行时自己的默认推理强度</td></tr>
+    <tr><td><code>--max-turns N</code></td><td>最多轮数。只有 claude-code 支持，其他运行时给出时报用法错误</td><td>不限</td></tr>
+    <tr><td><code>--timeout SECONDS</code></td><td>超时后终止整个进程组</td><td>不限</td></tr>
+    <tr><td><code>--profile native|cloud|docker</code></td><td>环境档位，见「各环境靠什么隔离」。高于环境变量 <code>AGENTRUN_PROFILE</code></td><td><code>native</code></td></tr>
+    <tr><td><code>--path DIR</code></td><td>放在会话 PATH 最前面的目录，可重复</td><td>无</td></tr>
+    <tr><td><code>--env KEY[=VALUE]</code></td><td>给会话设置一个环境变量，可重复。只写 <code>KEY</code> 时取调用方环境里的同名变量。见「会话环境」</td><td>无</td></tr>
+    <tr><td><code>--env-file FILE</code></td><td>从文件读取环境变量，可重复，按给出的顺序加载。见「会话环境」</td><td>无</td></tr>
+    <tr><td><code>--no-subagents</code></td><td>不允许 agent 启动 subagent。pi 没有 subagent，给出时不起作用</td><td>允许</td></tr>
+    <tr><td><code>--format rich|text|jsonl</code></td><td>标准输出的格式。<code>rich</code> 显示动态的进度界面，<code>text</code> 每个事件一行可读文字，<code>jsonl</code> 输出统一事件</td><td>标准输出是终端时 <code>rich</code>，否则 <code>jsonl</code></td></tr>
+    <tr><td><code>--raw FILE</code></td><td>把运行时的原始标准输出逐行写入这个文件</td><td>不写</td></tr>
+    <tr><td><code>--debug</code></td><td>在标准错误输出实际执行的命令、会话 PATH、被删除与被设置的环境变量名、临时目录的路径；保留本次运行的临时目录；没有给 <code>--raw</code> 时，原始输出写入临时目录里的 <code>raw.jsonl</code></td><td>不开</td></tr>
+    <tr><td><code>--dry-run</code></td><td>不启动会话，打印将执行的命令、会话 PATH、被删除与被设置的环境变量名后退出</td><td>不开</td></tr>
+  </tbody>
+</table>
+
+<h3>把参数原样传给运行时</h3>
+<p><code>--</code> 之后的所有参数原样传给运行时，用于工具没有提供选项的运行时功能。工具生成的参数在前，<code>--</code> 之后的参数接在后面。多数运行时遇到同一个选项出现两次时以后一次为准，所以调用方的参数可以覆盖工具的设置。</p>
+<p>claude-code 与 codex 的提示词从标准输入传入。pi 的提示词是命令行的最后一个参数，工具把它放在调用方参数之后：</p>
+<pre><code class="language-bash">pi &lt;工具的参数&gt; &lt;调用方的参数&gt; -- &lt;提示词&gt;</code></pre>
+<p>这样调用方的参数不会被当成提示词。</p>
+<p>可以覆盖的设置包括权限设置。工具不阻止，只在 start 事件的 <code>argv</code> 里如实记录，这时安全保证由调用方负责。理由：用户需要为没有预料到的用途保留完整的控制。</p>
+<p>调用方的参数可能让运行时输出工具不认识的事件，例如给 claude-code 传 <code>--include-partial-messages</code> 后，会多出逐字输出的流式事件。这类事件不进入统一事件流，只写入 <code>--raw</code> 文件。</p>
+
+<h3>一次运行的保证</h3>
+<ul>
+  <li>用法错误、<code>--env-file</code> 读取失败、找不到运行时、凭据写入失败、codex 登录文件不存在，都在启动会话之前报错，退出码 2。</li>
+  <li>工具在 <code>$TMPDIR</code>（未设时为 <code>/tmp</code>）下创建会话临时目录 <code>agentrun-&lt;随机后缀&gt;</code>，权限 0700。会话的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向它，沙箱把它加入可写路径。正常结束、失败、超时与被中断时都删除它；给了 <code>--debug</code> 时保留，路径输出到标准错误。理由：工作目录里不出现临时文件；只开放这一个目录，不把整个 <code>/tmp</code> 设为可写，因为 <code>/tmp</code> 由整台机器共用，里面有其他程序的文件与 socket。</li>
+  <li>收到 SIGINT 或 SIGTERM 时，工具把信号传给整个进程组，等待 5 秒后仍未退出的进程用 SIGKILL 终止，然后输出结束事件并退出。</li>
+</ul>
+
+<h2>权限与沙箱</h2>
+<p>档位有三种：<code>native</code>（默认）、<code>cloud</code>、<code>docker</code>。<code>cloud</code> 与 <code>docker</code> 只能显式打开：<code>--profile cloud|docker</code>，或由启动方设置环境变量 <code>AGENTRUN_PROFILE</code>。工具不自动探测所在的环境。理由：探测一旦误判，本机会话就会在没有沙箱的情况下运行，而且没有任何提示。</p>
+<p>一个档位里要用的沙箱无法启动时，工具直接失败，不退回到无沙箱运行。</p>
+<table>
+  <thead>
+    <tr><th>运行时</th><th>native（macOS）</th><th>native（Linux）</th><th>cloud</th><th>docker</th><th>失败判定</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>权限模式 auto；Seatbelt 沙箱打开，不允许沙箱外执行命令，沙箱内的命令自动放行，命令不能联网</td><td>同 macOS，沙箱使用 bubblewrap（需要 <code>bwrap</code> 与 <code>socat</code>）</td><td>权限模式 auto，没有沙箱，Bash 命令逐条由分类器判断</td><td>同 cloud</td><td>退出码非 0，或 result 事件的 <code>is_error</code> 为 true</td></tr>
+    <tr><td>codex</td><td>workspace-write；命令不能联网；<code>/tmp</code> 不可写</td><td>同 macOS，使用 codex 的 Linux 沙箱</td><td>同 native（Linux）</td><td>danger-full-access</td><td>退出码非 0，或 <code>turn.failed</code> 事件</td></tr>
+    <tr><td>pi</td><td>工具用 Seatbelt 包裹 pi 进程，可写工作目录、会话临时目录与 pi 的状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>），读不受限，网络开放</td><td>同 macOS，使用 bubblewrap</td><td>无沙箱</td><td>无沙箱</td><td><code>message_end</code> 的 <code>stopReason</code> 为 <code>error</code> 或 <code>aborted</code>（pi 的退出码恒为 0）</td></tr>
+  </tbody>
+</table>
+<p>pi 的状态目录必须可写：pi 刷新令牌时要改写其中的 <code>auth.json</code> 并加锁，否则刷新会失败。macOS 上 node 还可能需要其他可写路径（例如缓存目录、<code>/dev/tty</code>），实现时实测后补齐。</p>
+
+<h3>所有档位共用的设置</h3>
+<ul>
+  <li>claude-code：不加载用户与项目设置，不加载 MCP 服务器，不保存会话；放行的工具是 Read、Edit、Write、Glob、Grep 与启动 subagent 的工具（给出 <code>--no-subagents</code> 时不放行）。</li>
+  <li>codex：不读取用户的 codex 配置目录（只使用其中的登录信息）；忽略用户配置与规则文件，不读工作目录里的 <code>AGENTS.md</code>，不加载技能说明，会话不落盘；不请求批准，不用登录 shell，关闭网页搜索；允许启动 subagent（给出 <code>--no-subagents</code> 时关闭）；工作目录不是 git 仓库时也照常运行。</li>
+  <li>pi：不加载扩展、技能、提示模板、上下文文件与自动发现的资源，禁止联网下载资源，不保存会话；只开放 read、bash、edit、write、grep、find、ls。不传 <code>--model</code> 时，pi 使用它自己 <code>settings.json</code> 里的默认服务商。</li>
+</ul>
+
+<h3>档位选错时</h3>
+<p>在 docker 容器里用 <code>native</code>，沙箱无法启动，claude-code 与 pi 会直接失败；用 <code>native</code> 或 <code>cloud</code> 时，codex 可能以退出码 0 结束却没有执行任何命令。在本机用 <code>docker</code>，agent 在没有沙箱的情况下运行。<code>agentrun doctor</code> 会实际检查沙箱，并在失败时提示应使用的档位。</p>
+
+<h2>会话环境</h2>
+<p>会话的环境变量按以下顺序组装，后一步覆盖前一步：</p>
+<ol>
+  <li>调用方自己的环境。</li>
+  <li>按运行时删除会改变登录方式的变量，见下表。</li>
+  <li>按给出的顺序加载 <code>--env-file</code>。</li>
+  <li>按给出的顺序应用 <code>--env</code>。</li>
+  <li>读取 <code>AGENTRUN_</code> 开头的变量（档位与两个凭据变量），然后从会话环境删除它们。</li>
+  <li>设置 <code>PATH</code> 与 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>。</li>
+</ol>
+<p>删除规则只作用于调用方环境里继承来的变量，<code>--env</code> 与 <code>--env-file</code> 显式给出的变量不受影响。理由：删除规则防的是调用方环境里残留、调用方没有意识到的变量；显式给出的变量是调用方的意图，例如用 <code>--env ANTHROPIC_BASE_URL=...</code> 接入兼容 Anthropic 接口的其他服务。这种情况下登录方式由调用方负责，和 <code>--</code> 透传一样。</p>
+<table>
+  <thead>
+    <tr><th>运行时</th><th>删除的变量</th><th>效果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>以 <code>ANTHROPIC_</code> 或 <code>CLAUDE_CODE_USE_</code> 开头的变量</td><td>使用订阅登录，登录方式不受调用方环境里的 API key 或第三方端点影响</td></tr>
+    <tr><td>codex</td><td><code>CODEX_API_KEY</code>、<code>OPENAI_API_KEY</code>、<code>OPENAI_BASE_URL</code></td><td>使用 <code>auth.json</code> 里的登录</td></tr>
+    <tr><td>pi</td><td>不删除</td><td>pi 从环境变量或 <code>auth.json</code> 读取服务商 key</td></tr>
+  </tbody>
+</table>
+<p><code>AGENTRUN_</code> 变量从会话环境删除的理由：凭据变量里是登录文件的完整内容，留在会话环境里 agent 运行 <code>env</code> 就能读到。</p>
+
+<h3>env 文件格式</h3>
+<pre><code class="language-bash"># 注释行与空行忽略
+AGENTRUN_PROFILE=docker
+export CLAUDE_CODE_OAUTH_TOKEN="..."
+GREETING='hello world'</code></pre>
+<p>每行 <code>KEY=VALUE</code>；允许 <code>export</code> 前缀；值两端成对的单引号或双引号去掉；不做变量展开，不支持多行值。文件不存在或某一行格式错误时，启动前报错，退出码 2，错误信息写出文件名与行号，不写出值。</p>
+<p>工具不自动加载工作目录里的 <code>.env</code>。理由：工作目录 agent 可写，agent 可以写一个 <code>.env</code> 改变下一次运行的登录方式或 PATH；项目里的 <code>.env</code> 也常有调用方不打算交给 agent 的密钥。</p>
+
+<h3>PATH</h3>
+<p>会话的 PATH 是 <code>--path</code> 给出的目录（按给出的顺序）加上组装后的 PATH。运行时（<code>claude</code>、<code>codex</code>、<code>pi</code>）在这个 PATH 里查找，用绝对路径启动。</p>
+<p>这样运行时在调用方的终端里能启动，在会话里也能启动。运行时可能是一个 sh 脚本，里面再调用 node、python 或其他脚本，工具无法事先知道它会用到哪些命令。</p>
+<p>PATH 不限制 agent 能执行哪些程序，agent 可以用绝对路径执行任何程序。限制 agent 的是「权限与沙箱」一节里的写范围与联网限制。</p>
+
+<h2>凭据</h2>
+<p>本机沿用用户已有的登录。容器里由启动方把登录文件的内容放进环境变量，工具在运行与 doctor 开始时写到运行时读取的位置。这两个变量可以来自调用方环境，也可以来自 <code>--env</code> 与 <code>--env-file</code>。</p>
+<table>
+  <thead>
+    <tr><th>环境变量</th><th>写入位置</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>AGENTRUN_CODEX_AUTH</code></td><td><code>$CODEX_HOME/auth.json</code>，未设 <code>CODEX_HOME</code> 时为 <code>~/.codex/auth.json</code></td></tr>
+    <tr><td><code>AGENTRUN_PI_AUTH</code></td><td><code>$PI_CODING_AGENT_DIR/auth.json</code>，未设 <code>PI_CODING_AGENT_DIR</code> 时为 <code>~/.pi/agent/auth.json</code></td></tr>
+  </tbody>
+</table>
+<p>每次写入时，工具在同一目录记一个旁注文件（权限 0600），内容是这次环境变量值的 SHA-256。下次运行时：登录文件不存在就写入；环境变量的 SHA-256 与旁注相同就不动；不同或没有旁注就覆盖登录文件并更新旁注。理由：运行时会在使用中刷新令牌并改写登录文件，环境变量没变时保留刷新后的令牌；启动方轮换了凭据时，即使登录文件在持久卷上，会话也会改用新账号。</p>
+<ul>
+  <li>写入使用同目录的临时文件再重命名，并发启动的多次运行不会读到写了一半的文件；两次运行同时写入时，结果是其中一次写入的完整内容。多个并发运行共用同一登录文件时，令牌刷新的冲突由运行时自己处理。</li>
+  <li>目录权限 0700，文件权限 0600。变量未设或为空时不写。写入失败时退出码 2。</li>
+  <li>本机不设这两个变量，工具不会改动用户自己的登录文件。</li>
+  <li>凭据内容不出现在事件流与错误信息里，只显示变量名与文件路径。</li>
+</ul>
+<p>claude-code 在容器里使用它自己的令牌环境变量 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 登录，没有登录文件。工具不做转换，只保证它不被删除。</p>
+<p>codex 要求登录信息以文件形式保存。codex 的 <code>auth.json</code> 不存在时，工具在启动前报错，提示先运行 <code>codex login</code>。</p>
+
+<h2>统一事件流</h2>
+<p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，三个运行时使用同一套字段。每个事件都有 <code>schema</code>（事件格式的版本号，整数，当前为 1）、<code>type</code> 与 <code>time</code>（RFC 3339，UTC）。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>字段</th><th>何时出现</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>start</code></td><td><code>runtime</code>、<code>profile</code>、<code>model</code>（未指定时为 null）、<code>cwd</code>、<code>argv</code>（不含提示词）、<code>env</code>（<code>--env</code> 与 <code>--env-file</code> 设置的变量名，不含值）</td><td>运行时进程启动后</td></tr>
+    <tr><td><code>tool</code></td><td><code>id</code>（运行时给出的工具调用 id）、<code>parent</code>、<code>name</code>（运行时自己的工具名）、<code>summary</code>（一行，例如 <code>Bash: make all</code>、<code>Edit: src/main.rs</code>、<code>patch: a.rs b.rs</code>）</td><td>agent 调用一个工具时</td></tr>
+    <tr><td><code>text</code></td><td><code>parent</code>、<code>text</code></td><td>agent 输出一段完整的文字时</td></tr>
+    <tr><td><code>usage</code></td><td><code>parent</code>、<code>model</code>、<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>、<code>context_tokens</code>（这次调用的上下文占用）</td><td>一次模型调用结束时</td></tr>
+    <tr><td><code>subagent_start</code></td><td><code>id</code>、<code>parent</code>、<code>number</code>（agentrun 按启动顺序给的编号，从 1 开始）、<code>kind</code>（subagent 的类型，例如 <code>explore</code>）、<code>model</code>（运行时在启动时给出的模型，没给出时为 null）、<code>description</code>（一行任务描述）</td><td>agent 启动一个 subagent 时</td></tr>
+    <tr><td><code>subagent_end</code></td><td><code>id</code>、<code>status</code>（<code>finished</code> 或 <code>failed</code>）、<code>duration_ms</code>、<code>usage</code>（这个 subagent 及其内部 subagent 的用量，结构同 <code>end.usage</code>）</td><td>subagent 结束时</td></tr>
+    <tr><td><code>end</code></td><td><code>status</code>、<code>exit_code</code>（运行时的退出码，未启动时为 null）、<code>detail</code>、<code>duration_ms</code>、<code>usage</code>、<code>result</code></td><td>结束时</td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"schema":1,"type":"start","time":"2026-10-03T13:00:00Z","runtime":"claude-code","profile":"native","model":null,"cwd":"/work/repo","argv":["/usr/local/bin/claude","-p","--output-format","stream-json"],"env":["HTTPS_PROXY"]}
+{"schema":1,"type":"subagent_start","time":"2026-10-03T13:00:03Z","id":"toolu_01","parent":null,"number":1,"kind":"explore","model":"claude-haiku","description":"查找所有调用 parse_line 的位置"}
+{"schema":1,"type":"tool","time":"2026-10-03T13:00:04Z","id":"toolu_02","parent":"toolu_01","name":"Grep","summary":"Grep: parse_line"}
+{"schema":1,"type":"usage","time":"2026-10-03T13:00:05Z","parent":"toolu_01","model":"claude-haiku","input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"context_tokens":14120}
+{"schema":1,"type":"subagent_end","time":"2026-10-03T13:00:15Z","id":"toolu_01","status":"finished","duration_ms":12400,"usage":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"by_model":{"claude-haiku":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}}}
+{"schema":1,"type":"tool","time":"2026-10-03T13:00:16Z","id":"toolu_03","parent":null,"name":"Bash","summary":"Bash: cargo test"}
+{"schema":1,"type":"text","time":"2026-10-03T13:00:31Z","parent":null,"text":"测试全部通过。"}
+{"schema":1,"type":"end","time":"2026-10-03T13:00:31Z","status":"finished","exit_code":0,"detail":"","duration_ms":31250,"usage":{"input_tokens":18234,"output_tokens":912,"cache_read_tokens":42000,"cache_write_tokens":5100,"by_model":{"claude-sonnet":{"input_tokens":15114,"output_tokens":827,"cache_read_tokens":32200,"cache_write_tokens":3900},"claude-haiku":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}},"result":"测试全部通过。"}</code></pre>
+
+<h3>subagent 与 parent</h3>
+<p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code>，不再输出 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
+<p>主 agent 与多个 subagent 可以同时运行，它们的事件在流里交错出现。<code>id</code> 是运行时给出的工具调用 id，较长，用于关联事件；<code>number</code> 是 agentrun 在一次运行内按 <code>subagent_start</code> 的顺序分配的编号，用于显示。text 与 rich 格式用 <code>类型#编号</code>（例如 <code>explore#1</code>）称呼一个 subagent，主 agent 称为 <code>main</code>。</p>
+<p>subagent 可能使用与主 agent 不同的模型。显示时，一个 agent 的模型取它最近一次 <code>usage</code> 事件的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
+<p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭。pi 没有 subagent。claude-code 的输出用 <code>parent_tool_use_id</code> 标出 subagent 内部的消息，工具直接映射；codex 的对应方式在实测后确定。</p>
+
+<h3>用量</h3>
+<p>用量属于一次模型调用，一次调用会产生多个 <code>tool</code> 与 <code>text</code> 事件，所以用量单独成一个 <code>usage</code> 事件，不附在其他事件上。理由：调用方累加 <code>usage</code> 事件就得到总量，不会重复计算。</p>
+<ul>
+  <li>claude-code 与 pi 每次模型调用都报告用量与模型，每次调用输出一个 <code>usage</code> 事件。</li>
+  <li>codex 只在整轮结束时报告一次总量，没有 cache write，这时只有一个 <code>usage</code> 事件，<code>cache_write_tokens</code> 与 <code>context_tokens</code> 为 null。</li>
+  <li>运行时没报告的字段一律为 null。各运行时实际报告哪些字段，以实测为准。</li>
+</ul>
+
+<h3>end.status</h3>
+<p>按表中从上到下的顺序取第一个成立的状态。理由：超时或被中断时，运行时可能已经输出了失败事件（例如 pi 的 <code>stopReason</code> 为 <code>aborted</code>），这时调用方需要知道的是超时或中断。</p>
+<table>
+  <thead>
+    <tr><th>status</th><th>条件</th><th>agentrun 退出码</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>rejected</code></td><td>启动前失败：用法错误、<code>--env-file</code> 读取失败、找不到运行时、凭据写入失败、codex 登录文件不存在</td><td>2</td></tr>
+    <tr><td><code>interrupted</code></td><td>收到 SIGINT 或 SIGTERM</td><td>130 或 143</td></tr>
+    <tr><td><code>timeout</code></td><td>超过 <code>--timeout</code></td><td>3</td></tr>
+    <tr><td><code>failed</code></td><td>运行时退出码非 0，或出现「权限与沙箱」表中的失败事件</td><td>1</td></tr>
+    <tr><td><code>finished</code></td><td>以上都不成立</td><td>0</td></tr>
+  </tbody>
+</table>
+<ul>
+  <li><code>detail</code>：<code>failed</code> 时是最后一个失败事件的信息，没有失败事件时是标准错误的最后 500 个字符；<code>rejected</code> 时是原因与修正方法；其余为空字符串。</li>
+  <li><code>usage</code>：全部 <code>usage</code> 事件（包括 subagent 的）的合计，字段为 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>，另有 <code>by_model</code> 按模型给出同样的四个字段。所有 <code>usage</code> 事件都没报告的字段为 null。</li>
+  <li><code>result</code>：主 agent 最后一段文字，没有时为 null。调用方只需要答案时读这一项。</li>
+</ul>
+<p>subagent 失败不改变 <code>end.status</code>，是否失败由主 agent 与运行时的结果决定。理由：主 agent 可能已经处理了 subagent 的失败并完成任务。</p>
+<p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件。运行时的标准错误原样转到 agentrun 的标准错误。</p>
+
+<h3>text 格式</h3>
+<p><code>--format text</code> 每个事件一行，格式是 <code>[agent 标签] 事件类型 内容</code>。agent 标签是 <code>main</code> 或 <code>类型#编号</code>，没有出现 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部输出。</p>
+<ul>
+  <li><code>tool</code>：<code>summary</code>。</li>
+  <li><code>text</code>：文字的第一行。</li>
+  <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写出新 subagent 的标签、模型（已知时）与描述。</li>
+  <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写出状态、耗时、模型与 token 用量。</li>
+  <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
+  <li><code>end</code>：<code>[end]</code> 开头，写出状态、耗时、token 用量与 <code>detail</code>。</li>
+</ul>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"
+<span class="dim">[main]</span> tool Read: src/parse.rs
+<span class="dim">[main]</span> agent 启动 explore#1（claude-haiku）：查找所有调用 parse_line 的位置
+<span class="dim">[main]</span> agent 启动 general#2（claude-sonnet）：为 parse_line 写边界测试
+<span class="dim">[explore#1]</span> tool Grep: parse_line
+<span class="dim">[general#2]</span> tool Read: tests/parse.rs
+<span class="dim">[main]</span> tool Bash: cargo check
+<span class="dim">[explore#1]</span> text 共 3 处调用，都在 src/cli.rs。
+<span class="dim">[explore#1]</span> agent finished 12.4s claude-haiku in 3120 out 85
+<span class="dim">[general#2]</span> tool Edit: tests/parse.rs
+<span class="dim">[main]</span> tool Edit: src/parse.rs
+<span class="dim">[general#2]</span> agent finished 20.8s claude-sonnet in 9410 out 512
+<span class="dim">[main]</span> tool Bash: cargo test
+<span class="dim">[main]</span> text 修复了 parse_line 对空行的处理，测试全部通过。
+<span class="dim">[end]</span> finished 31.3s in 18234 out 912 cache read 42000 write 5100</div>
+
+<h3>rich 格式</h3>
+<p><code>--format rich</code> 在终端里显示动态界面，分三个区域。标准输出不是终端时，<code>rich</code> 按 <code>text</code> 输出。</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --prompt "给 parse 模块补测试并修复失败"
+<span class="dim">[main]</span> tool Read: src/parse.rs <span class="ref">1</span>
+<span class="dim">[main]</span> agent 启动 explore#1（claude-haiku）：查找所有调用 parse_line 的位置
+<span class="dim">[main]</span> agent 启动 general#2（claude-sonnet）：为 parse_line 写边界测试
+<span class="dim">[main]</span> agent 启动 explore#3（claude-haiku）：确认测试框架与运行方式
+<span class="dim">[explore#1]</span> tool Grep: parse_line
+<span class="dim">[general#2]</span> tool Read: tests/parse.rs
+<span class="dim">[explore#3]</span> agent finished 6.2s claude-haiku in 1830 out 40
+<span class="dim">[main]</span> tool Bash: cargo check
+<span class="dim">───────────────────────────────────────────────────────────────────────</span>
+subagent  2 个运行中 <span class="ref">2</span>
+  ⠙ explore#1  claude-haiku   查找所有调用 parse_line 的位置   Read: src/cli.rs       0:11  ctx 14.1k
+  ⠹ general#2  claude-sonnet  为 parse_line 写边界测试         Edit: tests/parse.rs   0:09  ctx 22.4k
+<span class="dim">───────────────────────────────────────────────────────────────────────</span>
+⠸ main  claude-sonnet  Bash: cargo check   0:24   in 18.2k out 0.9k cache 42.0k   ctx 61.3k <span class="ref">3</span></div>
+<ol class="callouts">
+  <li>滚动区。已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
+  <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签（<code>类型#编号</code>）、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 个运行中」。终端宽度不够时截断描述。</li>
+  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计 token 用量（包括 subagent）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
+</ol>
+
+<h2>doctor 检查</h2>
+<pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--profile P] [--env KEY[=VALUE]] [--env-file FILE] [--json] [--debug]</code></pre>
+<p>按当前环境与权限档位判断运行时能否使用。不写运行时时检查全部三个。<code>--env</code> 与 <code>--env-file</code> 的含义与运行时子命令相同，保证检查的环境与实际运行一致。</p>
+<table>
+  <thead>
+    <tr><th>检查项</th><th>通过条件</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>可执行文件</td><td>在组装后的 PATH 里找到</td></tr>
+    <tr><td>登录</td><td>运行时能用当前环境登录。会先按「凭据」一节写入环境变量给出的凭据。claude-code 设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时按令牌登录检查，不要求登录文件；pi 给了 <code>--model</code> 时按该模型的服务商检查，否则按 pi 设置里的默认服务商检查</td></tr>
+    <tr><td>沙箱</td><td>在一个临时目录里，用当前档位下每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了且文件写出；pi 还要在包裹下实际启动一次 pi 与 node。检查结束后删除该目录，给了 <code>--debug</code> 时保留。档位下没有沙箱的组合报告「无沙箱」</td></tr>
+  </tbody>
+</table>
+<p>每个外部命令最多等 30 秒。默认输出每项一行；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>。沙箱检查失败时，说明里写明可能的原因与应使用的档位。</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor codex
+[ok]   codex  可执行文件  /usr/local/bin/codex
+[ok]   codex  登录        ~/.codex/auth.json
+<span class="warn">[fail] codex  沙箱        沙箱无法启动：没有用户命名空间。如果这是 docker 容器，用 --profile docker</span></div>
+
+<h2>退出码</h2>
+<table>
+  <thead>
+    <tr><th>退出码</th><th>运行时子命令</th><th>doctor</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>0</td><td><code>finished</code></td><td>所有被检查的项都是 ok 或 skip</td></tr>
+    <tr><td>1</td><td><code>failed</code></td><td>有 fail 的检查项</td></tr>
+    <tr><td>2</td><td><code>rejected</code>：启动前失败</td><td>用法错误、<code>--env-file</code> 读取失败或凭据写入失败</td></tr>
+    <tr><td>3</td><td><code>timeout</code></td><td>不出现</td></tr>
+    <tr><td>130</td><td><code>interrupted</code>（SIGINT）</td><td>被中断</td></tr>
+    <tr><td>143</td><td><code>interrupted</code>（SIGTERM）</td><td>被终止</td></tr>
+  </tbody>
+</table>
+<p>调用方只看退出码就能区分「环境未配置好」（2）和「agent 没有完成任务」（1）。退出码为 2 时，调用方不改环境直接重试不会成功。</p>
+
+<h2>暂不做的功能</h2>
+<p>以下功能目前没有需求支撑，有需要时再加：</p>
+<table>
+  <thead>
+    <tr><th>功能</th><th>内容</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--skill DIR</code></td><td>把技能目录复制到各运行时的技能位置（<code>.claude/skills/</code>、<code>.codex/skills/</code>、<code>.pi/skills/</code>）。不做时，调用方自己把技能文件放进工作目录，并在提示词里写出路径</td></tr>
+    <tr><td>配置文件</td><td>固定的追加目录与运行时可执行文件路径。不做时，追加目录用 <code>--path</code>，运行时从 PATH 查找</td></tr>
+    <tr><td><code>agentrun exec -- &lt;命令&gt;</code></td><td>用同样的会话环境、凭据写入规则启动任意命令（例如工具尚未支持的运行时），只提供退出码与 start、end 事件。不做时，任意命令由调用方自己启动</td></tr>
+    <tr><td>命令与 Python 包的黑名单</td><td>放行大部分命令或包、只禁用少数。运行时的权限规则只匹配命令文字，容易绕过；沙箱拒绝指定路径只在有沙箱的组合里生效</td></tr>
+  </tbody>
+</table>
+</main>
+</body>
+</html>

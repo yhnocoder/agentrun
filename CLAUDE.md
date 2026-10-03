@@ -1,8 +1,14 @@
-# <Project>
+# agentrun
 
 ## 目标
 
-<Description>
+agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linux、云端容器和 docker 容器里安全地运行 claude-code、codex 和 pi。调用方在每种环境里的用法相同，工具在这些环境里能安装，出了问题能查出原因。
+
+- Safety：在每个环境能提供的范围内隔离 agent，限制它能写的文件、执行的命令能否联网、能读到的配置和账号。
+- Unified Experience：同一条命令在四种环境里都能运行，输出格式与成败判定相同。
+- Doctor：每个平台一个可执行文件，能在启动前检查环境，失败时能看出原因。
+
+设计见 `docs/design/pages/agentrun.html`，Task 计划与进度见 GitHub issue #1。
 
 ## 协作方式
 
@@ -52,7 +58,10 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 
 - 代码里不写注释和 docstring，代码的含义靠命名与结构表达。唯一例外是代码看起来可以删除或修改、实际上不能改的地方，写一行 `why(#N): 原因`，必须带 issue 编号，尽量少用。工具指令（如 `# noqa`、`#pragma`）不算注释。检查由 `scripts/check_comment.py` 执行，该脚本在项目确定语言后再写，现在是空文件。
 - commit message 的格式是 `<type>(<scope>): <中文一句话>`。
-- PR 标题用一句话说明改了什么。描述写该 Task 的输入输出（完善已有功能时分别列出旧的和新的）和截图，末尾写 `Closes #N`；其他内容写在 GitHub issue 中。
+- PR 标题用一句话说明改了什么。PR 描述分两节，末尾写 `Closes #N`：
+  - `## Summary`：每项一行，写改了哪个文件或模块、它做什么。设计文档只写增加或修改了哪个页面。
+  - `## Main Takeaway`：这个 PR 带来了什么、有什么变化，用读者能直接看到的形式给出。命令行行为贴命令与实际输出，界面改动贴截图。按 PR 内容选择写法，例如改动设计时给出设计中的预期输出，实现功能时给出当前能运行的命令与输出，完善已有功能时给出前后对比。
+  - 背景、决定、验证过程与环境问题写在 issue 中，不写进 PR。
 
 ## 文档规范
 
@@ -75,9 +84,8 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 文件组织：
 
 - `docs/design/index.html` 是索引页，列出所有文档。
-- `docs/design/style.css` 是所有页面共用的样式。组件的写法和效果见 `pages/_template.html`，完整文档的写法参考 `examples/`。新文档复制 `pages/_template.html` 开始，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用组件，删掉不用的内容。
+- `docs/design/style.css` 是所有页面共用的样式。新文档参考 `pages/agentrun.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
 - 项目的设计文档放在 `docs/design/pages/`。
-- `docs/design/examples/` 是示例，新项目开始时整个目录删除，并删除 index 里对应的卡片。
 - 改动 `docs/design/` 后运行 `uv run scripts/check_design.py`，它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
 
 ### Intro Doc
