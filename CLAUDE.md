@@ -81,9 +81,8 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 文件组织：
 
 - `docs/design/index.html` 是索引页，列出所有文档。
-- `docs/design/style.css` 是所有页面共用的样式。组件的写法和效果见 `pages/_template.html`，完整文档的写法参考 `examples/`。新文档复制 `pages/_template.html` 开始，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用组件，删掉不用的内容。
+- `docs/design/style.css` 是所有页面共用的样式。新文档参考 `pages/agentrun.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
 - 项目的设计文档放在 `docs/design/pages/`。
-- `docs/design/examples/` 是示例，新项目开始时整个目录删除，并删除 index 里对应的卡片。
 - 改动 `docs/design/` 后运行 `uv run scripts/check_design.py`，它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
 
 ### Intro Doc
