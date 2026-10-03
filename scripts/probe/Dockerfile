@@ -8,7 +8,7 @@ RUN apt-get update \
   && npm install -g @anthropic-ai/claude-code @openai/codex @earendil-works/pi-coding-agent \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY probe.sh seatbelt.sb /opt/probe/
+COPY . /opt/probe/
 RUN chmod +x /opt/probe/probe.sh
 WORKDIR /root
 ENTRYPOINT ["/opt/probe/probe.sh"]
