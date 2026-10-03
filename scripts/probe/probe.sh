@@ -521,7 +521,7 @@ run_rt() {
   run_capture stdout.jsonl "${CMD[@]}"
 }
 
-check_S1() {
+check_seatbelt_write_s1() {
   local id=S1 w marker
   begin_check $id
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
@@ -543,7 +543,7 @@ check_S1() {
   fi
 }
 
-check_S2() {
+check_bwrap_write_s2() {
   local id=S2 w marker
   begin_check $id
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
@@ -566,7 +566,7 @@ check_S2() {
   fi
 }
 
-check_S3() {
+check_bwrap_network_s3() {
   local id=S3 w proxy port sp blocked bridged
   begin_check $id
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
@@ -610,7 +610,7 @@ check_S3() {
   fi
 }
 
-check_S4() {
+check_private_tmpdir_s4() {
   local id=S4 w priv marker tmp_other
   begin_check $id
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
@@ -634,7 +634,7 @@ check_S4() {
   fi
 }
 
-check_S5() {
+check_child_process_s5() {
   local id=S5 w marker
   begin_check $id
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
@@ -656,7 +656,7 @@ check_S5() {
   fi
 }
 
-check_R1() {
+check_basic_task_r1() {
   local rt=$1 id="R1-$1"
   begin_check "$id"
   run_rt "$rt" "Create a file named probe-r1.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents."
@@ -667,7 +667,7 @@ check_R1() {
   fi
 }
 
-check_R2() {
+check_outside_write_r2() {
   local rt=$1 id="R2-$1" target verdict
   begin_check "$id"
   target="$HOME/agentrun-probe-outside-$(rand_hex)"
@@ -687,7 +687,7 @@ check_R2() {
   fi
 }
 
-check_R3() {
+check_network_r3() {
   local rt=$1 id="R3-$1" text verdict state
   begin_check "$id"
   run_rt "$rt" "Run this shell command and reply with only the HTTP status code it prints, or the error message if it fails: curl -sS -m 20 -o /dev/null -w '%{http_code}' $NET_URL"
@@ -710,7 +710,7 @@ check_R3() {
   record "$id" "$rt" "$verdict" "network $state; model said: $(printf '%s' "$text" | head -c 160); $(rt_summary "$rt")"
 }
 
-check_R4() {
+check_tmp_dirs_r4() {
   local rt=$1 id="R4-$1" marker f1 f2 s1 s2
   begin_check "$id"
   marker=$(rand_hex)
@@ -739,7 +739,7 @@ workdir_files() {
 
 SUBAGENT_PROMPT="Start two subagents in parallel. The first subagent must create a file sub1.txt in the current working directory containing the text: one. The second subagent must create sub2.txt containing the text: two. Wait for both to finish, then reply with the word done. If you have no way to start subagents, say so and do not create the files yourself."
 
-check_R5() {
+check_subagents_r5() {
   local rt=$1 id="R5-$1" sub spawned
   if [ "$rt" = pi ]; then
     skip_check "$id" "$rt" "pi has no built-in subagent tool; not run"
@@ -767,7 +767,7 @@ check_R5() {
   esac
 }
 
-check_R6() {
+check_failure_samples_r6() {
   local rt=$1 base="R6-$1" id
   for sub in model cred arg; do
     id="$base/$sub"
@@ -804,7 +804,7 @@ check_R6() {
   done
 }
 
-check_R7() {
+check_sigint_r7() {
   local rt=$1 id="R7-$1" last
   begin_check "$id"
   INT_AFTER=$INTERRUPT_AFTER
@@ -821,7 +821,7 @@ check_R7() {
   fi
 }
 
-check_R8() {
+check_no_subagents_r8() {
   local rt=$1 id="R8-$1" spawned uses
   case "$rt" in
     pi) skip_check "$id" "$rt" "pi has no built-in subagent tool; not run"; return ;;
@@ -838,7 +838,7 @@ check_R8() {
   fi
 }
 
-check_R9() {
+check_config_isolation_r9() {
   local rt=$1 id="R9-$1" marker text
   begin_check "$id"
   marker="ZEBRA$(rand_hex | tr 'a-f' 'A-F')"
@@ -860,7 +860,7 @@ check_R9() {
   esac
 }
 
-check_D1() {
+check_codex_sandbox_in_docker_d1() {
   local id="D1-codex"
   begin_check "$id"
   run_rt codex "Run the shell command: echo probe > d1.txt . Then reply with the word done." own-sandbox
@@ -871,7 +871,7 @@ check_D1() {
   fi
 }
 
-check_D2() {
+check_claude_sandbox_in_container_d2() {
   local id="D2-claude-code" marker
   begin_check "$id"
   marker=$(rand_hex)
@@ -886,7 +886,7 @@ check_D2() {
   fi
 }
 
-check_D3() {
+check_bwrap_pi_in_docker_d3() {
   local id="D3-pi"
   begin_check "$id"
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
@@ -907,13 +907,13 @@ printf '# probe %s %s\n\n| 编号 | 运行时 | 判定 | 说明 |\n|---|---|---|
 write_env_txt
 
 if [ "$PLATFORM" = macos ]; then
-  selected S1 && check_S1
+  selected S1 && check_seatbelt_write_s1
 else
-  selected S2 && check_S2
-  selected S3 && check_S3
+  selected S2 && check_bwrap_write_s2
+  selected S3 && check_bwrap_network_s3
 fi
-selected S4 && check_S4
-selected S5 && check_S5
+selected S4 && check_private_tmpdir_s4
+selected S5 && check_child_process_s5
 
 if [ "$SKIP_MODEL" = 0 ]; then
   for rt in $RUNTIME_LIST; do
@@ -923,25 +923,27 @@ if [ "$SKIP_MODEL" = 0 ]; then
       done
       continue
     fi
-    for n in 1 2 3 4 5 6 7 8 9; do
-      selected "R$n-$rt" && "check_R$n" "$rt"
+    for entry in R1:check_basic_task_r1 R2:check_outside_write_r2 R3:check_network_r3 \
+      R4:check_tmp_dirs_r4 R5:check_subagents_r5 R6:check_failure_samples_r6 \
+      R7:check_sigint_r7 R8:check_no_subagents_r8 R9:check_config_isolation_r9; do
+      selected "${entry%%:*}-$rt" && "${entry#*:}" "$rt"
     done
   done
   if [ "$PLATFORM" = docker ]; then
     case ",$RUNTIMES," in
-      *,codex,*) if have codex; then selected D1-codex && check_D1; else selected D1-codex && skip_check D1-codex codex "codex not installed"; fi ;;
+      *,codex,*) if have codex; then selected D1-codex && check_codex_sandbox_in_docker_d1; else selected D1-codex && skip_check D1-codex codex "codex not installed"; fi ;;
       *) selected D1-codex && skip_check D1-codex codex "codex not in --runtimes" ;;
     esac
   fi
   if [ "$PLATFORM" = docker ] || [ "$PLATFORM" = claude-cloud ]; then
     case ",$RUNTIMES," in
-      *,claude-code,*) if have claude; then selected D2-claude-code && check_D2; else selected D2-claude-code && skip_check D2-claude-code claude-code "claude not installed"; fi ;;
+      *,claude-code,*) if have claude; then selected D2-claude-code && check_claude_sandbox_in_container_d2; else selected D2-claude-code && skip_check D2-claude-code claude-code "claude not installed"; fi ;;
       *) selected D2-claude-code && skip_check D2-claude-code claude-code "claude-code not in --runtimes" ;;
     esac
   fi
   if [ "$PLATFORM" = docker ]; then
     case ",$RUNTIMES," in
-      *,pi,*) if have pi; then selected D3-pi && check_D3; else selected D3-pi && skip_check D3-pi pi "pi not installed"; fi ;;
+      *,pi,*) if have pi; then selected D3-pi && check_bwrap_pi_in_docker_d3; else selected D3-pi && skip_check D3-pi pi "pi not installed"; fi ;;
       *) selected D3-pi && skip_check D3-pi pi "pi not in --runtimes" ;;
     esac
   fi
