@@ -69,6 +69,10 @@ fn main() {
             "adapter_can_terminate_the_process_group",
             adapter_can_terminate_the_process_group,
         ),
+        (
+            "signal_during_sandbox_check_kills_the_check",
+            signal_during_sandbox_check_kills_the_check,
+        ),
     ];
     let selected: Vec<(&str, fn())> = tests
         .into_iter()
@@ -150,12 +154,11 @@ impl Env {
 
     fn start(&self, extra: &[&str], prompt: bool, stdin: Stdio) -> Agentrun {
         let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .arg("claude-code")
-            .arg("--sandbox")
-            .arg("off")
-            .arg("--cwd")
-            .arg(self.work());
+        command.arg("claude-code");
+        if !extra.contains(&"--sandbox") {
+            command.arg("--sandbox").arg("off");
+        }
+        command.arg("--cwd").arg(self.work());
         if prompt {
             command.arg("--prompt").arg("hi");
         }
@@ -412,6 +415,45 @@ fn signal_before_launch_ends_without_start() {
         end["usage"],
         serde_json::json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "by_model": {}})
     );
+}
+
+fn signal_during_sandbox_check_kills_the_check() {
+    let env = Env::new("exit 0\n");
+    let bwrap = env.bin().join("bwrap");
+    std::fs::write(
+        &bwrap,
+        "#!/bin/sh\necho $$ > \"$PIDFILE\"\nexec /bin/sleep 30\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let socat = env.bin().join("socat");
+    std::fs::write(&socat, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&socat, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let agentrun = env.start(&["--sandbox", "on"], true, Stdio::null());
+    let pidfile = env.root.path().join("pid");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::fs::read_to_string(&pidfile).map_or(true, |text| text.trim().is_empty())
+        && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pid: i32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let sent = Instant::now();
+    agentrun.signal(libc::SIGTERM);
+    let outcome = agentrun.finish(&env);
+    assert_between(sent.elapsed(), 0.0, 2.0);
+    assert_eq!(outcome.code, 143);
+    assert_eq!(outcome.events.len(), 1, "{:?}", outcome.events);
+    assert_eq!(outcome.end()["status"], "interrupted");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !process_is_gone(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(process_is_gone(pid), "sandbox check {pid} is still running");
 }
 
 fn adapter_can_terminate_the_process_group() {

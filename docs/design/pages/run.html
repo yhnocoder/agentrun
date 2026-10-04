@@ -232,7 +232,7 @@ removed: (none)</div>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
   <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
-  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; --bind &lt;临时目录&gt; --bind &lt;状态目录&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。状态目录在 cwd 之下时不再单独绑定。</li>
+  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt; --bind &lt;状态目录&gt; &lt;状态目录&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。状态目录在 cwd 之下时不再单独绑定。</li>
 </ul>
 
 <h3>模型检查</h3>

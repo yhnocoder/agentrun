@@ -95,8 +95,12 @@ pub struct RunArgs {
         help = "Terminate the runtime after this many seconds"
     )]
     pub timeout: Option<u64>,
-    #[arg(long, value_enum, default_value_t = SandboxMode::On, help = "What to do when the sandbox is not available")]
-    pub sandbox: SandboxMode,
+    #[arg(
+        long,
+        value_enum,
+        help = "What to do when the sandbox is not available (default: AGENTRUN_SANDBOX, or on)"
+    )]
+    pub sandbox: Option<SandboxMode>,
     #[arg(long, value_enum, default_value_t = NetworkMode::None, help = "Which hosts commands may reach")]
     pub network: NetworkMode,
     #[arg(long, value_name = "HOST[:PORT]", help = "Allowed host, repeatable")]
@@ -167,6 +171,16 @@ pub enum NetworkMode {
     None,
     Full,
     Custom,
+}
+
+impl NetworkMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            NetworkMode::None => "none",
+            NetworkMode::Full => "full",
+            NetworkMode::Custom => "custom",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
