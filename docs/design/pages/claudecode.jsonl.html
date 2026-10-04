@@ -188,8 +188,8 @@ interface EventBase {
   | SystemInit | SystemStatus | SystemTaskSummary | SystemPostTurnSummary
   | SystemThinkingTokens | SystemApiRetry | SystemPermissionDenied
   | SystemHookStarted | SystemHookResponse | SystemBackgroundTasksChanged
-  // 后四种见「subagent 与后台任务」</code></pre>
-  | SystemTaskStarted | SystemTaskProgress | SystemTaskUpdated | SystemTaskNotification;
+  // 后四种见「subagent 与后台任务」
+  | SystemTaskStarted | SystemTaskProgress | SystemTaskUpdated | SystemTaskNotification;</code></pre>
 
 <h3>init</h3>
 <p>运行开始时输出一次，描述这次会话的配置。字段多，解析器一般只需要 <code>model</code>、<code>tools</code>、<code>permissionMode</code>、<code>claude_code_version</code>、<code>cwd</code>。</p>
@@ -487,8 +487,8 @@ type ToolInput =
   | { skill: string }
   // Workflow
   | { script: string }
-  // StructuredOutput，由 --json-schema 决定</code></pre>
-  | { [key: string]: unknown };
+  // StructuredOutput，由 --json-schema 决定
+  | { [key: string]: unknown };</code></pre>
 <pre><code class="language-json">{
   "type": "assistant",
   "message": {
@@ -742,8 +742,8 @@ type BlockDelta =
   // 观测到 thinking 为空字符串
   | { type: "thinking_delta"; thinking: string; estimated_tokens: number | null }
   | { type: "signature_delta"; signature: string }
-  // 工具参数 JSON 的片段，拼接后是 tool_use.input；第一个片段可能是空字符串</code></pre>
-  | { type: "input_json_delta"; partial_json: string };
+  // 工具参数 JSON 的片段，拼接后是 tool_use.input；第一个片段可能是空字符串
+  | { type: "input_json_delta"; partial_json: string };</code></pre>
 <p>解析器可以只用 <code>assistant</code> 事件得到完整的块，用 <code>stream_event</code> 做实时显示。中断时流可能停在任意一个 <code>content_block_delta</code> 之后，没有对应的 <code>assistant</code> 事件。</p>
 <pre><code class="language-json">{
   "type": "stream_event",
