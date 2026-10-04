@@ -15,7 +15,7 @@ impl TokenCounts {
         Some(self.input_tokens? + self.cache_read_tokens? + self.cache_write_tokens?)
     }
 
-    fn add(&mut self, other: &TokenCounts) {
+    pub fn add(&mut self, other: &TokenCounts) {
         self.input_tokens = add(self.input_tokens, other.input_tokens);
         self.output_tokens = add(self.output_tokens, other.output_tokens);
         self.cache_read_tokens = add(self.cache_read_tokens, other.cache_read_tokens);

@@ -111,6 +111,7 @@ impl Sandbox {
             stdout: stdout.clone(),
             stdout_is_terminal: false,
             stderr: stderr.clone(),
+            stderr_is_terminal: false,
             signals: Signals::install(),
         };
         let code = run(caller, &move |_| {
@@ -579,6 +580,44 @@ fn text_format_shows_note_and_lines() {
     assert!(lines[6].starts_with("[end] finished "));
     assert!(lines[6].ends_with("s in 30 out 4"));
     assert_eq!(lines.len(), 7);
+}
+
+#[test]
+fn rich_format_without_terminal_matches_text() {
+    let sandbox = Sandbox::with_output(concat!(
+        r#"{"record":"subagent_start","id":"s1","parent":null,"kind":"Explore","model":"haiku","description":"look around"}"#,
+        "\n",
+        r#"{"record":"tool_start","id":"t1","parent":"s1","name":"Grep","summary":"Grep: foo"}"#,
+        "\n",
+        r#"{"record":"tool_end","id":"t1","denied":false}"#,
+        "\n",
+        r#"{"record":"subagent_end","id":"s1","status":"finished"}"#,
+        "\n",
+        r#"{"record":"text","parent":null,"text":"done"}"#
+    ));
+    let text = sandbox.run(&["--format", "text"], false);
+    let rich = sandbox.run(&["--format", "rich"], false);
+    let without_durations = |output: &str| {
+        output
+            .split_whitespace()
+            .map(|word| {
+                let seconds = word.strip_suffix('s').unwrap_or("x");
+                if seconds.parse::<f64>().is_ok() {
+                    "_"
+                } else {
+                    word
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(rich.code, text.code);
+    assert_eq!(
+        without_durations(&rich.stdout),
+        without_durations(&text.stdout)
+    );
+    assert!(!rich.stdout.contains('\x1b'));
+    assert_eq!(rich.stdout.lines().count(), 7);
 }
 
 #[test]

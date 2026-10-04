@@ -3,11 +3,13 @@ use std::io::Write;
 
 use crate::cli::{Format, SandboxMode};
 use crate::event::{Body, EndStatus, Event, SandboxKind};
+use crate::rich::{OpenTool, Rich};
 use crate::usage::TokenCounts;
 
 pub enum Output {
     Jsonl,
     Text(TextFormatter),
+    Rich(Box<Rich>),
 }
 
 impl Output {
@@ -20,15 +22,32 @@ impl Output {
         }
     }
 
-    pub fn write(&mut self, out: &mut dyn Write, event: &Event) {
+    pub fn write(&mut self, out: &mut dyn Write, event: &Event, open_tool: OpenTool) {
         let lines = match self {
             Output::Jsonl => vec![event.to_json()],
             Output::Text(formatter) => formatter.lines(event),
+            Output::Rich(rich) => return rich.event(out, event, open_tool),
         };
         for line in lines {
             let _ = writeln!(out, "{line}");
         }
         let _ = out.flush();
+    }
+
+    pub fn refresh(&mut self, out: &mut dyn Write, open_tool: OpenTool) {
+        if let Output::Rich(rich) = self {
+            rich.refresh(out, open_tool);
+        }
+    }
+
+    pub fn stderr(&mut self, out: &mut dyn Write, bytes: &[u8], open_tool: OpenTool) {
+        if let Output::Rich(rich) = self {
+            rich.stderr(out, bytes, open_tool);
+        }
+    }
+
+    pub fn is_rich(&self) -> bool {
+        matches!(self, Output::Rich(_))
     }
 }
 
@@ -74,7 +93,7 @@ impl TextFormatter {
                 Vec::new()
             }
             Body::SubagentStart(start) => {
-                let label = format!("{}#{}", start.kind.to_lowercase(), start.number);
+                let label = subagent_label(&start.kind, start.number);
                 self.labels.insert(start.id.clone(), label.clone());
                 if let Some(model) = &start.model {
                     self.subagent_models
@@ -163,8 +182,12 @@ impl TextFormatter {
     }
 }
 
-fn first_line(text: &str) -> &str {
+pub fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
+}
+
+pub fn subagent_label(kind: &str, number: u64) -> String {
+    format!("{}#{}", kind.to_lowercase(), number)
 }
 
 fn seconds(duration_ms: u64) -> String {

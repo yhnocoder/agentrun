@@ -186,6 +186,14 @@ impl Aggregator {
         (events, Summary { usage, result })
     }
 
+    pub fn open_tool(&self, agent: Option<&str>) -> Option<String> {
+        self.open_tools
+            .iter()
+            .rev()
+            .find(|tool| self.known_parent(tool.parent.clone()).as_deref() == agent)
+            .map(|tool| truncate_summary(&tool.summary))
+    }
+
     fn known_parent(&self, parent: Option<String>) -> Option<String> {
         parent.filter(|id| self.subagent_parents.contains_key(id))
     }
@@ -195,7 +203,7 @@ impl Aggregator {
             id: tool.id,
             parent: self.known_parent(tool.parent),
             name: tool.name,
-            summary: truncate_summary(tool.summary),
+            summary: truncate_summary(&tool.summary),
             denied,
         }))
     }
@@ -235,9 +243,9 @@ fn prompt_event(text: &str) -> Event {
     }))
 }
 
-fn truncate_summary(summary: String) -> String {
+fn truncate_summary(summary: &str) -> String {
     if summary.chars().count() <= SUMMARY_MAX_CHARS {
-        return summary;
+        return summary.to_string();
     }
     let mut truncated: String = summary.chars().take(SUMMARY_MAX_CHARS - 1).collect();
     truncated.push('…');
@@ -251,9 +259,9 @@ mod tests {
     #[test]
     fn summary_longer_than_limit_is_truncated_with_ellipsis() {
         let long = "a".repeat(130);
-        let truncated = truncate_summary(long);
+        let truncated = truncate_summary(&long);
         assert_eq!(truncated.chars().count(), SUMMARY_MAX_CHARS);
         assert!(truncated.ends_with('…'));
-        assert_eq!(truncate_summary("b".repeat(120)), "b".repeat(120));
+        assert_eq!(truncate_summary(&"b".repeat(120)), "b".repeat(120));
     }
 }

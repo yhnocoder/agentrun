@@ -5,6 +5,7 @@ pub mod cli;
 pub mod credential;
 pub mod event;
 pub mod output;
+pub mod rich;
 pub mod run;
 pub mod sandbox;
 pub mod session;
