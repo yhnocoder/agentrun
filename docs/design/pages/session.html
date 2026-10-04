@@ -93,7 +93,7 @@ GREETING='hello world'</code></pre>
 <p>无论运行以哪种方式结束，都满足三条：事件流以 <code>end</code> 结尾；会话临时目录被删除（<code>--debug</code> 除外）；运行时及其子进程不再运行。</p>
 <ul>
   <li>运行时启动在新的进程组里，终端的 Ctrl-C 只发给 agentrun，由 agentrun 转发。pi 被包裹时，包裹命令是进程组的首进程，退出码透传 pi 的退出码。</li>
-  <li>提示词写入标准输入后关闭（pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
+  <li>提示词写入标准输入后关闭（claude-code 写成一行 JSON 消息，见<a href="runtimes.html#claude-code">运行时适配</a>；pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
   <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再最多等 1 秒读完剩余的输出，然后输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 waitpid 判断主进程退出，不用标准输出的 EOF 判断。</li>
   <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
   <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>

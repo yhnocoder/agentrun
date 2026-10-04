@@ -53,65 +53,76 @@
 <p>读取方必须持续消费标准输出。文档说明管道缓冲区满时 pi 会阻塞。</p>
 
 <h2>有哪些事件</h2>
-<p>「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述；「0.73.1 观测」表示在 0.73.1 的样本中出现过、1.0.1 的样本里没有遇到触发条件。</p>
+<p>按用途分为五类，越靠前越需要处理。「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述；「0.73.1 观测」表示在 0.73.1 的样本中出现过、1.0.1 的样本里没有遇到触发条件。</p>
+<h3>消息与结果</h3>
+<p>解析器必须处理的事件。<code>message_end</code> 给出每条消息的完整内容，最后一个 assistant 消息的 <code>stopReason</code> 决定成败。</p>
 <table>
   <thead>
     <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
   </thead>
   <tbody>
     <tr><td><code>session</code></td><td>第一行，一次</td><td>观测</td></tr>
-    <tr><td><code>agent_start</code></td><td>一次 agent 运行开始。正常运行一次；自动重试时每次尝试一次</td><td>观测</td></tr>
-    <tr><td><code>turn_start</code></td><td>每次模型调用之前</td><td>观测</td></tr>
+    <tr><td><code>message_end</code></td><td>每条消息完成，<code>message</code> 为最终内容</td><td>观测</td></tr>
     <tr><td><code>message_start</code></td><td>每条消息开始：system、user、assistant、toolResult</td><td>观测</td></tr>
     <tr><td><code>message_update</code></td><td>assistant 消息流式输出中的每个片段</td><td>观测</td></tr>
-    <tr><td><code>message_end</code></td><td>每条消息完成，<code>message</code> 为最终内容</td><td>观测</td></tr>
+  </tbody>
+</table>
+<h3>工具执行</h3>
+<p>每次工具调用的开始、部分输出与结束，用 <code>toolCallId</code> 关联。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
     <tr><td><code>tool_execution_start</code></td><td>每次工具执行开始</td><td>观测</td></tr>
     <tr><td><code>tool_execution_update</code></td><td>工具报告部分结果。样本中只有 <code>bash</code> 工具产生</td><td>观测</td></tr>
     <tr><td><code>tool_execution_end</code></td><td>每次工具执行结束</td><td>观测</td></tr>
+  </tbody>
+</table>
+<h3>运行与轮次的边界</h3>
+<p>标出一次运行与每次模型调用的开始和结束，本身不带新内容。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>agent_start</code></td><td>一次 agent 运行开始。正常运行一次；自动重试时每次尝试一次</td><td>观测</td></tr>
+    <tr><td><code>turn_start</code></td><td>每次模型调用之前</td><td>观测</td></tr>
     <tr><td><code>turn_end</code></td><td>一次模型调用及其工具结果全部完成</td><td>观测</td></tr>
     <tr><td><code>agent_end</code></td><td>一次 agent 运行结束</td><td>观测</td></tr>
     <tr><td><code>agent_settled</code></td><td>没有剩余的自动工作（重试、压缩恢复、排队消息），正常运行的最后一行</td><td>观测</td></tr>
+  </tbody>
+</table>
+<h3>重试与压缩</h3>
+<p>模型调用失败或上下文过长时出现。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
     <tr><td><code>auto_retry_start</code>、<code>auto_retry_end</code></td><td>模型调用失败后自动重试前后</td><td>0.73.1 观测</td></tr>
+    <tr><td><code>compaction_start</code>、<code>compaction_end</code></td><td>上下文压缩开始与结束</td><td>文档</td></tr>
+    <tr><td><code>summarization_retry_scheduled</code>、<code>summarization_retry_attempt_start</code>、<code>summarization_retry_finished</code></td><td>压缩或分支摘要失败后的重试</td><td>文档</td></tr>
+  </tbody>
+</table>
+<h3>JSON 模式下通常不出现</h3>
+<p>依赖输入通道、扩展或 RPC 模式，解析器跳过即可。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
     <tr><td><code>queue_update</code></td><td>steering 或 follow-up 队列变化。JSON 模式没有输入通道，正常情况不会出现</td><td>文档</td></tr>
     <tr><td><code>entry_appended</code></td><td>扩展通过 <code>pi.appendEntry()</code> 追加自定义条目</td><td>文档</td></tr>
     <tr><td><code>session_info_changed</code></td><td>会话显示名变化</td><td>文档</td></tr>
     <tr><td><code>thinking_level_changed</code></td><td>thinking 级别变化</td><td>文档</td></tr>
-    <tr><td><code>compaction_start</code>、<code>compaction_end</code></td><td>上下文压缩开始与结束</td><td>文档</td></tr>
-    <tr><td><code>summarization_retry_scheduled</code>、<code>summarization_retry_attempt_start</code>、<code>summarization_retry_finished</code></td><td>压缩或分支摘要失败后的重试</td><td>文档</td></tr>
     <tr><td><code>bash_execution_update</code>、<code>extension_error</code></td><td>只在 RPC 模式出现，JSON 模式没有</td><td>文档</td></tr>
   </tbody>
 </table>
 
 <h2>一次运行的顺序</h2>
-<p>下面是一次「运行一条命令、回答结果」的运行。流里每行一个事件，缩进只为阅读。</p>
-<div class="term">session
-agent_start
-turn_start
-message_start            <span class="dim">role system（系统提示与工具定义）</span>
-message_end              <span class="dim">role system</span>
-message_start            <span class="dim">role user（提示词）</span>
-message_end              <span class="dim">role user</span>
-<span class="dim">第 1 次模型调用：thinking 之后一个 bash 工具调用</span>
-message_start            <span class="dim">role assistant，content []，stopReason pending</span>
-message_update  ×N       <span class="dim">thinking_start、thinking_delta…、toolcall_start、toolcall_delta…</span>
-message_update           <span class="dim">thinking_end（usage 从这里开始非零）</span>
-message_update           <span class="dim">toolcall_end</span>
-message_end              <span class="dim">role assistant，stopReason toolUse</span>
-tool_execution_start     <span class="dim">bash</span>
-tool_execution_update    <span class="dim">partialResult.content []</span>
-tool_execution_update    <span class="dim">partialResult.content 含输出</span>
-tool_execution_end       <span class="dim">result，isError false</span>
-message_start            <span class="dim">role toolResult</span>
-message_end              <span class="dim">role toolResult</span>
-turn_end                 <span class="dim">message 为 assistant 消息，toolResults 含 1 项</span>
-<span class="dim">第 2 次模型调用：文字回答</span>
-turn_start
-message_start            <span class="dim">role assistant</span>
-message_update  ×N       <span class="dim">thinking_*、text_start、text_delta…、text_end</span>
-message_end              <span class="dim">role assistant，stopReason stop</span>
-turn_end                 <span class="dim">toolResults []</span>
-agent_end                <span class="dim">messages 含以上全部消息，willRetry false</span>
-agent_settled</div>
+<p>下面是一次「运行一条命令、回答结果」的运行。图中每个方框是流里的一行，从上到下按出现顺序排列，按产生它的一方分为四列。提示词作为 role user 的消息出现在流里。写成 <code>message_start/end</code> 的方框表示紧挨着的两行。工具调用与工具结果用同一个 <code>toolCallId</code> 对应（图中的 C）。</p>
+<figure style="overflow-x:auto"><svg viewBox="0 0 922 802" style="width:100%;max-width:1014px;min-width:640px" role="img" aria-label="pi 一次运行的事件顺序"><style>.sq-box{fill:var(--surface);stroke-width:1.4}.sq-ghost{fill:var(--bg);stroke-dasharray:5 3}.sq-lanebg{fill:none;stroke:var(--line);stroke-dasharray:4 4}.sq-guide{stroke:var(--line);stroke-width:1}.sq-axis{stroke:var(--line);stroke-width:2}.sq-name{font-family:var(--mono);font-size:12px;fill:var(--fg)}.sq-note{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}.sq-phase{font-family:var(--font);font-size:13px;font-weight:600;fill:var(--fg)}.sq-lane{font-family:var(--font);font-size:12.5px;font-weight:600;fill:var(--muted)}.sq-legend{font-family:var(--font);font-size:12px;fill:var(--muted)}</style><text class="sq-lane" x="103.9" y="56" text-anchor="middle">调用方</text><text class="sq-lane" x="265.70000000000005" y="56" text-anchor="middle">模型</text><text class="sq-lane" x="442.3" y="56" text-anchor="middle">工具</text><text class="sq-lane" x="618.9" y="56" text-anchor="middle">pi 状态</text><rect x="26" y="68" width="155.8" height="728" rx="8" class="sq-lanebg"/><rect x="187.8" y="68" width="155.8" height="728" rx="8" class="sq-lanebg"/><rect x="349.6" y="68" width="185.4" height="728" rx="8" class="sq-lanebg"/><rect x="541.0" y="68" width="155.8" height="728" rx="8" class="sq-lanebg"/><line x1="12" y1="117.0" x2="12" y2="777.0" class="sq-axis"/><text class="sq-phase" x="30" y="94">启动</text><line x1="16" y1="117.0" x2="30" y2="117.0" class="sq-guide"/><circle cx="12" cy="117.0" r="4" style="fill:var(--fg)"/><rect x="30" y="105" width="147.8" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="121.0">session</text><text class="sq-note" x="187.8" y="121.0">会话头</text><line x1="16" y1="147.0" x2="545.0" y2="147.0" class="sq-guide"/><circle cx="12" cy="147.0" r="4" style="fill:var(--muted)"/><rect x="545.0" y="135" width="147.8" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="555.0" y="151.0">agent_start</text><line x1="16" y1="177.0" x2="545.0" y2="177.0" class="sq-guide"/><circle cx="12" cy="177.0" r="4" style="fill:var(--muted)"/><rect x="545.0" y="165" width="147.8" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="555.0" y="181.0">turn_start</text><line x1="16" y1="207.0" x2="545.0" y2="207.0" class="sq-guide"/><circle cx="12" cy="207.0" r="4" style="fill:var(--muted)"/><rect x="545.0" y="195" width="147.8" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="555.0" y="211.0">message_start/end</text><text class="sq-note" x="702.8" y="211.0">role system：系统提示与工具定义</text><line x1="16" y1="237.0" x2="30" y2="237.0" class="sq-guide"/><circle cx="12" cy="237.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="225" width="147.8" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="241.0">message_start/end</text><text class="sq-note" x="187.8" y="241.0">role user：提示词</text><text class="sq-phase" x="30" y="274">第 1 次模型调用：运行一条命令</text><line x1="16" y1="297.0" x2="191.8" y2="297.0" class="sq-guide"/><circle cx="12" cy="297.0" r="4" style="fill:var(--accent)"/><rect x="191.8" y="285" width="147.8" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="201.8" y="301.0">message_start</text><text class="sq-note" x="349.6" y="301.0">role assistant</text><line x1="16" y1="327.0" x2="191.8" y2="327.0" class="sq-guide"/><circle cx="12" cy="327.0" r="4" style="fill:var(--accent)"/><rect x="191.8" y="315" width="147.8" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="201.8" y="331.0">message_update ×N</text><text class="sq-note" x="349.6" y="331.0">thinking、toolcall 片段</text><line x1="16" y1="357.0" x2="191.8" y2="357.0" class="sq-guide"/><circle cx="12" cy="357.0" r="4" style="fill:var(--accent)"/><rect x="191.8" y="345" width="147.8" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="201.8" y="361.0">message_end</text><text class="sq-note" x="349.6" y="361.0">stopReason toolUse</text><line x1="16" y1="387.0" x2="353.6" y2="387.0" class="sq-guide"/><circle cx="12" cy="387.0" r="4" style="fill:var(--code-str)"/><rect x="353.6" y="375" width="177.4" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="363.6" y="391.0">tool_execution_start</text><text class="sq-note" x="541.0" y="391.0">bash，toolCallId C</text><line x1="16" y1="417.0" x2="353.6" y2="417.0" class="sq-guide"/><circle cx="12" cy="417.0" r="4" style="fill:var(--code-str)"/><rect x="353.6" y="405" width="177.4" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="363.6" y="421.0">tool_execution_update</text><text class="sq-note" x="541.0" y="421.0">部分输出</text><line x1="16" y1="447.0" x2="353.6" y2="447.0" class="sq-guide"/><circle cx="12" cy="447.0" r="4" style="fill:var(--code-str)"/><rect x="353.6" y="435" width="177.4" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="363.6" y="451.0">tool_execution_end</text><text class="sq-note" x="541.0" y="451.0">result，isError false</text><line x1="16" y1="477.0" x2="353.6" y2="477.0" class="sq-guide"/><circle cx="12" cy="477.0" r="4" style="fill:var(--code-str)"/><rect x="353.6" y="465" width="177.4" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="363.6" y="481.0">message_start/end</text><text class="sq-note" x="541.0" y="481.0">role toolResult，toolCallId C</text><line x1="16" y1="507.0" x2="545.0" y2="507.0" class="sq-guide"/><circle cx="12" cy="507.0" r="4" style="fill:var(--muted)"/><rect x="545.0" y="495" width="147.8" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="555.0" y="511.0">turn_end</text><text class="sq-phase" x="30" y="544">第 2 次模型调用：回答</text><line x1="16" y1="567.0" x2="545.0" y2="567.0" class="sq-guide"/><circle cx="12" cy="567.0" r="4" style="fill:var(--muted)"/><rect x="545.0" y="555" width="147.8" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="555.0" y="571.0">turn_start</text><line x1="16" y1="597.0" x2="191.8" y2="597.0" class="sq-guide"/><circle cx="12" cy="597.0" r="4" style="fill:var(--accent)"/><rect x="191.8" y="585" width="147.8" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="201.8" y="601.0">message_start</text><text class="sq-note" x="349.6" y="601.0">role assistant</text><line x1="16" y1="627.0" x2="191.8" y2="627.0" class="sq-guide"/><circle cx="12" cy="627.0" r="4" style="fill:var(--accent)"/><rect x="191.8" y="615" width="147.8" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="201.8" y="631.0">message_update ×N</text><text class="sq-note" x="349.6" y="631.0">thinking、text 片段</text><line x1="16" y1="657.0" x2="191.8" y2="657.0" class="sq-guide"/><circle cx="12" cy="657.0" r="4" style="fill:var(--accent)"/><rect x="191.8" y="645" width="147.8" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="201.8" y="661.0">message_end</text><text class="sq-note" x="349.6" y="661.0">stopReason stop：给调用方的回答</text><line x1="16" y1="687.0" x2="545.0" y2="687.0" class="sq-guide"/><circle cx="12" cy="687.0" r="4" style="fill:var(--muted)"/><rect x="545.0" y="675" width="147.8" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="555.0" y="691.0">turn_end</text><text class="sq-phase" x="30" y="724">结束</text><line x1="16" y1="747.0" x2="30" y2="747.0" class="sq-guide"/><circle cx="12" cy="747.0" r="4" style="fill:var(--fg)"/><rect x="30" y="735" width="147.8" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="751.0">agent_end</text><text class="sq-note" x="187.8" y="751.0">messages 含全部消息</text><line x1="16" y1="777.0" x2="30" y2="777.0" class="sq-guide"/><circle cx="12" cy="777.0" r="4" style="fill:var(--fg)"/><rect x="30" y="765" width="147.8" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="781.0">agent_settled</text><text class="sq-note" x="187.8" y="781.0">最后一行</text><rect x="30" y="10" width="14" height="14" rx="3" style="stroke:var(--fg)" class="sq-box"/><text class="sq-legend" x="50" y="21">会话头与结果</text><rect x="153.6" y="10" width="14" height="14" rx="3" style="stroke:var(--accent)" class="sq-box"/><text class="sq-legend" x="173.6" y="21">模型输出</text><rect x="250.0" y="10" width="14" height="14" rx="3" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-legend" x="270.0" y="21">输入与工具结果</text><rect x="387.2" y="10" width="14" height="14" rx="3" style="stroke:var(--muted)" class="sq-box"/><text class="sq-legend" x="407.2" y="21">状态与流程</text></svg></figure>
 <p>要点：</p>
 <ul>
   <li>system 与 user 消息的 <code>message_start</code> 与 <code>message_end</code> 内容相同，紧挨着出现。system 消息只在第一次 <code>turn_start</code> 之后出现一次。</li>
@@ -132,8 +143,8 @@ type PiEvent =
   | CompactionStart | CompactionEnd                                 // 文档
   // 文档
   | SummarizationRetryScheduled | SummarizationRetryAttemptStart | SummarizationRetryFinished
-  // 文档</code></pre>
-  | QueueUpdate | EntryAppended | SessionInfoChanged | ThinkingLevelChanged;
+  // 文档
+  | QueueUpdate | EntryAppended | SessionInfoChanged | ThinkingLevelChanged;</code></pre>
 
 <h2>session 头</h2>
 <p>与会话文件的第一行相同。</p>

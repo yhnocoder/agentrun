@@ -25,11 +25,13 @@
 </blockquote>
 
 <h2>怎样产生这条流</h2>
-<pre><code class="language-bash">claude -p "提示词" \
+<pre><code class="language-bash">echo '{"type":"user","message":{"role":"user","content":"提示词"}}' | claude -p \
+  --input-format stream-json --replay-user-messages \
   --output-format stream-json --verbose \
   --model sonnet --session-id "$(uuidgen)" --no-session-persistence \
   --permission-mode auto --setting-sources "" --strict-mcp-config</code></pre>
-<p><code>-p</code>（<code>--print</code>）让 claude 处理一个提示词后退出；<code>--output-format stream-json</code> 选择逐行 JSON 输出；<code>--verbose</code> 是必需的，缺少它时进程不输出任何事件，在标准错误打印 <code>Error: When using --print, --output-format=stream-json requires --verbose</code>，退出码 1。提示词也可以从标准输入传入。</p>
+<p><code>-p</code>（<code>--print</code>）让 claude 处理一个提示词后退出；<code>--output-format stream-json</code> 选择逐行 JSON 输出；<code>--verbose</code> 是必需的，缺少它时进程不输出任何事件，在标准错误打印 <code>Error: When using --print, --output-format=stream-json requires --verbose</code>，退出码 1。</p>
+<p><code>--input-format stream-json</code> 让 claude 从标准输入读取 JSON 行形式的用户消息，<code>--replay-user-messages</code> 把读到的用户消息回显到输出流里。这样提示词会作为一个 <code>user</code> 事件出现在 <code>system/init</code> 之后、第一个 <code>assistant</code> 之前，带 <code>isReplay: true</code>，事件流本身就是这次运行的完整记录。提示词也可以作为命令行参数传入（<code>claude -p "提示词"</code>）或以纯文本从标准输入传入，这两种方式下输出流里没有提示词，其余事件相同。实测只用过一条提示词，写完后关闭标准输入，进程正常结束。</p>
 <p>事件流写到标准输出，标准输出里只有 JSON 行。诊断信息写到标准错误，例如模型名不存在时的 <code>[claude-code:unrecognized_model] {"model":"...","query_source":"sdk"}</code>。</p>
 <p>以下选项与环境变量改变流里出现的事件：</p>
 <table>
@@ -44,7 +46,7 @@
     <tr><td><code>--max-budget-usd AMOUNT</code></td><td>花费超过上限时结束，<code>result.subtype</code> 为 <code>error_max_budget_usd</code>，退出码 1</td></tr>
     <tr><td><code>--permission-mode MODE</code>、<code>--permission-prompts none</code></td><td>需要确认而无人确认的工具调用被拒绝，出现 <code>system</code> 的 <code>permission_denied</code> 子类型，<code>result.permission_denials</code> 非空。<code>--permission-prompts</code> 可选值为 <code>host</code> 与 <code>none</code>，<code>-p</code> 模式下没有确认界面时效果与 <code>none</code> 相同</td></tr>
     <tr><td><code>--forward-subagent-text</code></td><td>帮助文本说明它把 subagent 的文字与 thinking 以 <code>parent_tool_use_id</code> 标记后转发到流里。未实测</td></tr>
-    <tr><td><code>--input-format stream-json</code>、<code>--replay-user-messages</code></td><td>从标准输入读取 JSON 消息并回显用户消息。本文只写输入为文本的情况</td></tr>
+    <tr><td><code>--input-format stream-json</code>、<code>--replay-user-messages</code></td><td>从标准输入读取 JSON 消息，并把用户消息回显为 <code>isReplay: true</code> 的 <code>user</code> 事件。见上一段</td></tr>
     <tr><td><code>--model</code>、<code>--setting-sources</code>、<code>--strict-mcp-config</code>、<code>--settings</code>、<code>--tools</code></td><td>改变 <code>system/init</code> 里的 <code>model</code>、<code>tools</code>、<code>mcp_servers</code>、<code>skills</code>、<code>slash_commands</code> 等列表，不改变事件类型</td></tr>
   </tbody>
 </table>
@@ -67,55 +69,81 @@
 <p>字符串里可能有换行（<code>\n</code>）与 Unicode 行分隔符，按 LF 切行后再解析 JSON，不能按通用的行分隔符切行。</p>
 
 <h2>有哪些事件</h2>
-<p>「来源」一列：「观测」表示在样本中出现过；「帮助文本」表示只在 <code>claude --help</code> 中有描述。</p>
+<p>按用途分为六类，越靠前越需要处理。下表的事件都在样本中观测到。</p>
+<h3>结果与对话内容</h3>
+<p>解析器必须处理的四种事件：运行开始时的配置、模型输出、工具结果与最终结果。成败只看最后一个 <code>result</code>。</p>
 <table>
   <thead>
-    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th><th>来源</th></tr>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>active_goal</code></td><td>启动时，在 <code>system/init</code> 之前</td><td>只在 Claude 云端容器里观测到，见「版本与环境说明」</td><td>观测</td></tr>
-    <tr><td><code>autocompact_state</code></td><td>启动时，在 <code>system/init</code> 之前</td><td>同上</td><td>观测</td></tr>
-    <tr><td><code>rate_limit_event</code></td><td>启动时，在 <code>system/init</code> 前后都可能</td><td>同上</td><td>观测</td></tr>
-    <tr><td><code>system/init</code></td><td>每次运行的开头一次；后台任务完成触发新一轮时再次出现</td><td>总是</td><td>观测</td></tr>
-    <tr><td><code>system/status</code></td><td>每次向模型发请求之前</td><td>总是</td><td>观测</td></tr>
-    <tr><td><code>system/task_summary</code></td><td>工具调用前后，给出一句当前动作的描述</td><td>总是</td><td>观测</td></tr>
-    <tr><td><code>system/post_turn_summary</code></td><td>一轮结束、<code>result</code> 之前</td><td>总是</td><td>观测</td></tr>
-    <tr><td><code>system/thinking_tokens</code></td><td>模型输出 thinking 块的过程中</td><td>模型使用了 thinking</td><td>观测</td></tr>
-    <tr><td><code>system/api_retry</code></td><td>API 请求失败后重试之前</td><td>API 返回错误</td><td>观测</td></tr>
-    <tr><td><code>system/permission_denied</code></td><td>一次工具调用被权限规则拒绝时</td><td>见上一节的权限选项</td><td>观测</td></tr>
-    <tr><td><code>system/hook_started</code>、<code>system/hook_response</code></td><td>每个 hook 命令开始与结束</td><td><code>--include-hook-events</code> 且配置了 hook</td><td>观测</td></tr>
-    <tr><td><code>system/task_started</code>、<code>task_progress</code>、<code>task_updated</code>、<code>task_notification</code></td><td>subagent、Workflow 与后台 Bash 命令的生命周期</td><td>agent 启动了这类任务</td><td>观测</td></tr>
-    <tr><td><code>system/background_tasks_changed</code></td><td>后台任务列表变化时</td><td>agent 启动了后台任务</td><td>观测</td></tr>
-    <tr><td><code>assistant</code></td><td>模型每输出一个内容块（文字、thinking、工具调用）</td><td>总是</td><td>观测</td></tr>
-    <tr><td><code>user</code></td><td>每个工具结果；subagent 收到的提示词；中断提示；注入的技能说明</td><td>总是</td><td>观测</td></tr>
-    <tr><td><code>stream_event</code></td><td>模型调用的逐字输出</td><td><code>--include-partial-messages</code> 或对应环境变量</td><td>观测</td></tr>
-    <tr><td><code>result</code></td><td>一轮对话结束时；可能多次</td><td>总是，除非进程被 SIGTERM 终止或在启动前失败</td><td>观测</td></tr>
+    <tr><td><code>system/init</code></td><td>每次运行的开头一次；后台任务完成触发新一轮时再次出现</td><td>总是</td></tr>
+    <tr><td><code>assistant</code></td><td>模型每输出一个内容块（文字、thinking、工具调用）</td><td>总是</td></tr>
+    <tr><td><code>user</code></td><td>每个工具结果；subagent 收到的提示词；中断提示；注入的技能说明</td><td>总是</td></tr>
+    <tr><td><code>result</code></td><td>一轮对话结束时；可能多次</td><td>总是，除非进程被 SIGTERM 终止或在启动前失败</td></tr>
+  </tbody>
+</table>
+<h3>subagent 与后台任务</h3>
+<p>agent 启动 subagent、Workflow 或后台 Bash 命令时出现，用来跟踪这些任务的开始、进度与结束。</p>
+<table>
+  <thead>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>system/task_started</code>、<code>task_progress</code>、<code>task_updated</code>、<code>task_notification</code></td><td>subagent、Workflow 与后台 Bash 命令的生命周期</td><td>agent 启动了这类任务</td></tr>
+    <tr><td><code>system/background_tasks_changed</code></td><td>后台任务列表变化时</td><td>agent 启动了后台任务</td></tr>
+  </tbody>
+</table>
+<h3>错误与权限</h3>
+<p>请求失败重试与工具调用被拒绝。</p>
+<table>
+  <thead>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>system/api_retry</code></td><td>API 请求失败后重试之前</td><td>API 返回错误</td></tr>
+    <tr><td><code>system/permission_denied</code></td><td>一次工具调用被权限规则拒绝时</td><td>见上一节的权限选项</td></tr>
+  </tbody>
+</table>
+<h3>进度与摘要</h3>
+<p>给界面显示进度用，解析结果时可以忽略。</p>
+<table>
+  <thead>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>system/status</code></td><td>每次向模型发请求之前</td><td>总是</td></tr>
+    <tr><td><code>system/task_summary</code></td><td>工具调用前后，给出一句当前动作的描述</td><td>总是</td></tr>
+    <tr><td><code>system/post_turn_summary</code></td><td>一轮结束、<code>result</code> 之前</td><td>总是</td></tr>
+    <tr><td><code>system/thinking_tokens</code></td><td>模型输出 thinking 块的过程中</td><td>模型使用了 thinking</td></tr>
+  </tbody>
+</table>
+<h3>需要选项才出现</h3>
+<table>
+  <thead>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>stream_event</code></td><td>模型调用的逐字输出</td><td><code>--include-partial-messages</code> 或对应环境变量</td></tr>
+    <tr><td><code>system/hook_started</code>、<code>system/hook_response</code></td><td>每个 hook 命令开始与结束</td><td><code>--include-hook-events</code> 且配置了 hook</td></tr>
+  </tbody>
+</table>
+<h3>只在部分环境出现</h3>
+<p>在 Claude 云端容器里观测到，本机运行时没有。解析器跳过即可。</p>
+<table>
+  <thead>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>active_goal</code></td><td>启动时，在 <code>system/init</code> 之前</td><td>见「版本与环境说明」</td></tr>
+    <tr><td><code>autocompact_state</code></td><td>启动时，在 <code>system/init</code> 之前</td><td>见「版本与环境说明」</td></tr>
+    <tr><td><code>rate_limit_event</code></td><td>启动时，在 <code>system/init</code> 前后都可能</td><td>见「版本与环境说明」</td></tr>
   </tbody>
 </table>
 
 <h2>一次运行的顺序</h2>
-<p>下面是一次「写文件、读回、回答」的运行，没有开启逐字输出。缩进只为阅读，流里每行一个事件。</p>
-<div class="term"><span class="dim">启动</span>
-active_goal
-autocompact_state
-rate_limit_event
-system/init
-<span class="dim">第 1 次模型调用：一个 Write 工具调用</span>
-system/status
-assistant            <span class="dim">content: tool_use Write</span>
-system/task_summary
-user                 <span class="dim">content: tool_result</span>
-<span class="dim">第 2 次模型调用：thinking 之后一个 Read 工具调用</span>
-system/status
-assistant            <span class="dim">content: thinking</span>
-assistant            <span class="dim">content: tool_use Read</span>
-user                 <span class="dim">content: tool_result</span>
-<span class="dim">第 3 次模型调用：文字回答</span>
-system/status
-assistant            <span class="dim">content: text</span>
-system/post_turn_summary
-result               <span class="dim">subtype success, num_turns 3</span>
-system/task_summary</div>
+<p>下面是一次「写文件、读回、回答」的运行，没有开启逐字输出。图中每个方框是流里的一行，从上到下按出现顺序排列，按产生它的一方分为四列。调用方的提示词由 <code>--replay-user-messages</code> 回显为 <code>system/init</code> 之后的 <code>user</code> 事件，调用方从最后的 <code>result</code> 得到回答与用量。<code>assistant</code> 里的 <code>tool_use</code> 与随后 <code>user</code> 里的 <code>tool_result</code> 用同一个 id 对应（图中的 W、R）。</p>
+<figure style="overflow-x:auto"><svg viewBox="0 0 757 742" style="width:100%;max-width:833px;min-width:640px" role="img" aria-label="claude-code 一次运行的事件顺序"><style>.sq-box{fill:var(--surface);stroke-width:1.4}.sq-ghost{fill:var(--bg);stroke-dasharray:5 3}.sq-lanebg{fill:none;stroke:var(--line);stroke-dasharray:4 4}.sq-guide{stroke:var(--line);stroke-width:1}.sq-axis{stroke:var(--line);stroke-width:2}.sq-name{font-family:var(--mono);font-size:12px;fill:var(--fg)}.sq-note{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}.sq-phase{font-family:var(--font);font-size:13px;font-weight:600;fill:var(--fg)}.sq-lane{font-family:var(--font);font-size:12.5px;font-weight:600;fill:var(--muted)}.sq-legend{font-family:var(--font);font-size:12px;fill:var(--muted)}</style><text class="sq-lane" x="85.0" y="56" text-anchor="middle">调用方</text><text class="sq-lane" x="209.0" y="56" text-anchor="middle">模型</text><text class="sq-lane" x="333.0" y="56" text-anchor="middle">工具</text><text class="sq-lane" x="501.8" y="56" text-anchor="middle">claude-code 状态</text><rect x="26" y="68" width="118" height="668" rx="8" class="sq-lanebg"/><rect x="150" y="68" width="118" height="668" rx="8" class="sq-lanebg"/><rect x="274" y="68" width="118" height="668" rx="8" class="sq-lanebg"/><rect x="398" y="68" width="207.60000000000002" height="668" rx="8" class="sq-lanebg"/><line x1="12" y1="117.0" x2="12" y2="717.0" class="sq-axis"/><text class="sq-phase" x="30" y="94">启动</text><line x1="16" y1="117.0" x2="402" y2="117.0" class="sq-guide"/><circle cx="12" cy="117.0" r="4" style="fill:var(--muted)"/><rect x="402" y="105" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="121.0">active_goal</text><text class="sq-note" x="611.6" y="121.0">只在云端容器里出现</text><line x1="16" y1="147.0" x2="402" y2="147.0" class="sq-guide"/><circle cx="12" cy="147.0" r="4" style="fill:var(--muted)"/><rect x="402" y="135" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="151.0">autocompact_state</text><text class="sq-note" x="611.6" y="151.0">同上</text><line x1="16" y1="177.0" x2="402" y2="177.0" class="sq-guide"/><circle cx="12" cy="177.0" r="4" style="fill:var(--muted)"/><rect x="402" y="165" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="181.0">rate_limit_event</text><text class="sq-note" x="611.6" y="181.0">同上</text><line x1="16" y1="207.0" x2="402" y2="207.0" class="sq-guide"/><circle cx="12" cy="207.0" r="4" style="fill:var(--muted)"/><rect x="402" y="195" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="211.0">system/init</text><text class="sq-note" x="611.6" y="211.0">模型、工具、权限模式</text><line x1="16" y1="237.0" x2="30" y2="237.0" class="sq-guide"/><circle cx="12" cy="237.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="225" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="241.0">user</text><text class="sq-note" x="150" y="241.0">提示词回显，isReplay: true</text><text class="sq-phase" x="30" y="274">第 1 次模型调用：写文件</text><line x1="16" y1="297.0" x2="402" y2="297.0" class="sq-guide"/><circle cx="12" cy="297.0" r="4" style="fill:var(--muted)"/><rect x="402" y="285" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="301.0">system/status</text><text class="sq-note" x="611.6" y="301.0">开始请求模型</text><line x1="16" y1="327.0" x2="154" y2="327.0" class="sq-guide"/><circle cx="12" cy="327.0" r="4" style="fill:var(--accent)"/><rect x="154" y="315" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="164" y="331.0">assistant</text><text class="sq-note" x="274" y="331.0">tool_use Write，id W</text><line x1="16" y1="357.0" x2="402" y2="357.0" class="sq-guide"/><circle cx="12" cy="357.0" r="4" style="fill:var(--muted)"/><rect x="402" y="345" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="361.0">system/task_summary</text><text class="sq-note" x="611.6" y="361.0">一句当前动作的描述</text><line x1="16" y1="387.0" x2="278" y2="387.0" class="sq-guide"/><circle cx="12" cy="387.0" r="4" style="fill:var(--code-str)"/><rect x="278" y="375" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="288" y="391.0">user</text><text class="sq-note" x="398" y="391.0">tool_result，tool_use_id W</text><text class="sq-phase" x="30" y="424">第 2 次模型调用：读回</text><line x1="16" y1="447.0" x2="402" y2="447.0" class="sq-guide"/><circle cx="12" cy="447.0" r="4" style="fill:var(--muted)"/><rect x="402" y="435" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="451.0">system/status</text><line x1="16" y1="477.0" x2="154" y2="477.0" class="sq-guide"/><circle cx="12" cy="477.0" r="4" style="fill:var(--accent)"/><rect x="154" y="465" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="164" y="481.0">assistant</text><text class="sq-note" x="274" y="481.0">thinking</text><line x1="16" y1="507.0" x2="154" y2="507.0" class="sq-guide"/><circle cx="12" cy="507.0" r="4" style="fill:var(--accent)"/><rect x="154" y="495" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="164" y="511.0">assistant</text><text class="sq-note" x="274" y="511.0">tool_use Read，id R</text><line x1="16" y1="537.0" x2="278" y2="537.0" class="sq-guide"/><circle cx="12" cy="537.0" r="4" style="fill:var(--code-str)"/><rect x="278" y="525" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="288" y="541.0">user</text><text class="sq-note" x="398" y="541.0">tool_result，tool_use_id R</text><text class="sq-phase" x="30" y="574">第 3 次模型调用：回答</text><line x1="16" y1="597.0" x2="402" y2="597.0" class="sq-guide"/><circle cx="12" cy="597.0" r="4" style="fill:var(--muted)"/><rect x="402" y="585" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="601.0">system/status</text><line x1="16" y1="627.0" x2="154" y2="627.0" class="sq-guide"/><circle cx="12" cy="627.0" r="4" style="fill:var(--accent)"/><rect x="154" y="615" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="164" y="631.0">assistant</text><text class="sq-note" x="274" y="631.0">text：给调用方的回答</text><line x1="16" y1="657.0" x2="402" y2="657.0" class="sq-guide"/><circle cx="12" cy="657.0" r="4" style="fill:var(--muted)"/><rect x="402" y="645" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="661.0">system/post_turn_summary</text><line x1="16" y1="687.0" x2="30" y2="687.0" class="sq-guide"/><circle cx="12" cy="687.0" r="4" style="fill:var(--fg)"/><rect x="30" y="675" width="110" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="691.0">result</text><text class="sq-note" x="150" y="691.0">最终回答与用量，num_turns 3</text><line x1="16" y1="717.0" x2="402" y2="717.0" class="sq-guide"/><circle cx="12" cy="717.0" r="4" style="fill:var(--muted)"/><rect x="402" y="705" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="412" y="721.0">system/task_summary</text><text class="sq-note" x="611.6" y="721.0">result 之后还可能有</text><rect x="30" y="10" width="14" height="14" rx="3" style="stroke:var(--fg)" class="sq-box"/><text class="sq-legend" x="50" y="21">会话头与结果</text><rect x="153.6" y="10" width="14" height="14" rx="3" style="stroke:var(--accent)" class="sq-box"/><text class="sq-legend" x="173.6" y="21">模型输出</text><rect x="250.0" y="10" width="14" height="14" rx="3" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-legend" x="270.0" y="21">输入与工具结果</text><rect x="387.2" y="10" width="14" height="14" rx="3" style="stroke:var(--muted)" class="sq-box"/><text class="sq-legend" x="407.2" y="21">状态与流程</text></svg></figure>
 <p>要点：</p>
 <ul>
   <li>一次模型调用返回几个内容块，就有几个 <code>assistant</code> 事件，它们的 <code>message.id</code> 相同。每个事件的 <code>message.content</code> 只含当前这一个块。</li>
@@ -123,6 +151,8 @@ system/task_summary</div>
   <li><code>result</code> 之后还可能有 <code>system/task_summary</code>，所以 <code>result</code> 不一定是最后一行。</li>
   <li>后台任务（后台 Bash 命令、Workflow）完成时，进程继续运行，再输出一次 <code>system/init</code>、新一轮的 <code>assistant</code> 与一个新的 <code>result</code>。两个 <code>result</code> 用 <code>result_index</code>（0、1）区分，第二个带 <code>origin</code>。进程在所有后台任务结束后退出。</li>
 </ul>
+<p>下面是一次带两个 subagent 的运行：主 agent 在一次模型调用里启动两个 subagent，一个写文件，一个运行命令，各自交回报告后主 agent 汇总回答。中间两列是 subagent 内部的事件，它们带 <code>parent_tool_use_id</code>，值为启动它的 Agent 调用的 id（图中的 A、B）。<code>task_*</code> 事件在主 agent 一列，用 <code>tool_use_id</code> 或 <code>task_id</code> 指向对应的 subagent。各字段见「subagent 与后台任务」。</p>
+<figure style="overflow-x:auto"><svg viewBox="0 0 667 1252" style="width:100%;max-width:734px;min-width:640px" role="img" aria-label="claude-code 带两个 subagent 的事件顺序"><style>.sq-box{fill:var(--surface);stroke-width:1.4}.sq-ghost{fill:var(--bg);stroke-dasharray:5 3}.sq-lanebg{fill:none;stroke:var(--line);stroke-dasharray:4 4}.sq-guide{stroke:var(--line);stroke-width:1}.sq-axis{stroke:var(--line);stroke-width:2}.sq-name{font-family:var(--mono);font-size:12px;fill:var(--fg)}.sq-note{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}.sq-phase{font-family:var(--font);font-size:13px;font-weight:600;fill:var(--fg)}.sq-lane{font-family:var(--font);font-size:12.5px;font-weight:600;fill:var(--muted)}.sq-legend{font-family:var(--font);font-size:12px;fill:var(--muted)}</style><text class="sq-lane" x="129.8" y="56" text-anchor="middle">主 agent</text><text class="sq-lane" x="298.6" y="56" text-anchor="middle">subagent A</text><text class="sq-lane" x="422.6" y="56" text-anchor="middle">subagent B</text><rect x="26" y="68" width="207.60000000000002" height="1178" rx="8" class="sq-lanebg"/><rect x="239.60000000000002" y="68" width="118" height="1178" rx="8" class="sq-lanebg"/><rect x="363.6" y="68" width="118" height="1178" rx="8" class="sq-lanebg"/><line x1="12" y1="117.0" x2="12" y2="1227.0" class="sq-axis"/><text class="sq-phase" x="30" y="94">启动（与上图相同，只画出 system/init 与提示词）</text><line x1="16" y1="117.0" x2="30" y2="117.0" class="sq-guide"/><circle cx="12" cy="117.0" r="4" style="fill:var(--muted)"/><rect x="30" y="105" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="121.0">system/init</text><line x1="16" y1="147.0" x2="30" y2="147.0" class="sq-guide"/><circle cx="12" cy="147.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="135" width="199.60000000000002" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="151.0">user</text><text class="sq-note" x="239.60000000000002" y="151.0">提示词回显，isReplay: true</text><text class="sq-phase" x="30" y="184">主 agent 在一次模型调用里启动两个 subagent</text><line x1="16" y1="207.0" x2="30" y2="207.0" class="sq-guide"/><circle cx="12" cy="207.0" r="4" style="fill:var(--muted)"/><rect x="30" y="195" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="211.0">system/status</text><line x1="16" y1="237.0" x2="30" y2="237.0" class="sq-guide"/><circle cx="12" cy="237.0" r="4" style="fill:var(--accent)"/><rect x="30" y="225" width="199.60000000000002" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="241.0">assistant</text><text class="sq-note" x="239.60000000000002" y="241.0">tool_use Agent，id A</text><line x1="16" y1="267.0" x2="30" y2="267.0" class="sq-guide"/><circle cx="12" cy="267.0" r="4" style="fill:var(--accent)"/><rect x="30" y="255" width="199.60000000000002" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="271.0">assistant</text><text class="sq-note" x="239.60000000000002" y="271.0">tool_use Agent，id B（message.id 同上一行）</text><line x1="16" y1="297.0" x2="30" y2="297.0" class="sq-guide"/><circle cx="12" cy="297.0" r="4" style="fill:var(--muted)"/><rect x="30" y="285" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="301.0">system/task_summary</text><line x1="16" y1="327.0" x2="30" y2="327.0" class="sq-guide"/><circle cx="12" cy="327.0" r="4" style="fill:var(--muted)"/><rect x="30" y="315" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="331.0">system/task_started</text><text class="sq-note" x="239.60000000000002" y="331.0">tool_use_id A，task_type local_agent</text><line x1="16" y1="357.0" x2="243.60000000000002" y2="357.0" class="sq-guide"/><circle cx="12" cy="357.0" r="4" style="fill:var(--code-str)"/><rect x="243.60000000000002" y="345" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="253.60000000000002" y="361.0">user</text><text class="sq-note" x="363.6" y="361.0">subagent A 收到的提示词</text><line x1="16" y1="387.0" x2="30" y2="387.0" class="sq-guide"/><circle cx="12" cy="387.0" r="4" style="fill:var(--muted)"/><rect x="30" y="375" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="391.0">system/task_started</text><text class="sq-note" x="239.60000000000002" y="391.0">tool_use_id B</text><line x1="16" y1="417.0" x2="367.6" y2="417.0" class="sq-guide"/><circle cx="12" cy="417.0" r="4" style="fill:var(--code-str)"/><rect x="367.6" y="405" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="377.6" y="421.0">user</text><text class="sq-note" x="487.6" y="421.0">subagent B 收到的提示词</text><text class="sq-phase" x="30" y="454">两个 subagent 并行工作，事件交错出现</text><line x1="16" y1="477.0" x2="30" y2="477.0" class="sq-guide"/><circle cx="12" cy="477.0" r="4" style="fill:var(--muted)"/><rect x="30" y="465" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="481.0">system/task_progress</text><text class="sq-note" x="239.60000000000002" y="481.0">A 的累计用量</text><line x1="16" y1="507.0" x2="243.60000000000002" y2="507.0" class="sq-guide"/><circle cx="12" cy="507.0" r="4" style="fill:var(--accent)"/><rect x="243.60000000000002" y="495" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="253.60000000000002" y="511.0">assistant</text><text class="sq-note" x="363.6" y="511.0">tool_use Write</text><line x1="16" y1="537.0" x2="243.60000000000002" y2="537.0" class="sq-guide"/><circle cx="12" cy="537.0" r="4" style="fill:var(--code-str)"/><rect x="243.60000000000002" y="525" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="253.60000000000002" y="541.0">user</text><text class="sq-note" x="363.6" y="541.0">tool_result</text><line x1="16" y1="567.0" x2="30" y2="567.0" class="sq-guide"/><circle cx="12" cy="567.0" r="4" style="fill:var(--muted)"/><rect x="30" y="555" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="571.0">system/task_progress</text><text class="sq-note" x="239.60000000000002" y="571.0">B 的累计用量</text><line x1="16" y1="597.0" x2="367.6" y2="597.0" class="sq-guide"/><circle cx="12" cy="597.0" r="4" style="fill:var(--accent)"/><rect x="367.6" y="585" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="377.6" y="601.0">assistant</text><text class="sq-note" x="487.6" y="601.0">tool_use Bash</text><line x1="16" y1="627.0" x2="367.6" y2="627.0" class="sq-guide"/><circle cx="12" cy="627.0" r="4" style="fill:var(--code-str)"/><rect x="367.6" y="615" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="377.6" y="631.0">user</text><text class="sq-note" x="487.6" y="631.0">tool_result</text><text class="sq-phase" x="30" y="664">subagent A 交回报告并结束</text><line x1="16" y1="687.0" x2="30" y2="687.0" class="sq-guide"/><circle cx="12" cy="687.0" r="4" style="fill:var(--muted)"/><rect x="30" y="675" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="691.0">system/task_progress</text><line x1="16" y1="717.0" x2="243.60000000000002" y2="717.0" class="sq-guide"/><circle cx="12" cy="717.0" r="4" style="fill:var(--accent)"/><rect x="243.60000000000002" y="705" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="253.60000000000002" y="721.0">assistant</text><text class="sq-note" x="363.6" y="721.0">tool_use SubagentHandback</text><line x1="16" y1="747.0" x2="243.60000000000002" y2="747.0" class="sq-guide"/><circle cx="12" cy="747.0" r="4" style="fill:var(--code-str)"/><rect x="243.60000000000002" y="735" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="253.60000000000002" y="751.0">user</text><text class="sq-note" x="363.6" y="751.0">tool_result</text><line x1="16" y1="777.0" x2="30" y2="777.0" class="sq-guide"/><circle cx="12" cy="777.0" r="4" style="fill:var(--muted)"/><rect x="30" y="765" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="781.0">system/task_updated</text><text class="sq-note" x="239.60000000000002" y="781.0">A：status completed</text><line x1="16" y1="807.0" x2="30" y2="807.0" class="sq-guide"/><circle cx="12" cy="807.0" r="4" style="fill:var(--muted)"/><rect x="30" y="795" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="811.0">system/task_notification</text><text class="sq-note" x="239.60000000000002" y="811.0">A：completed，最终用量</text><line x1="16" y1="837.0" x2="30" y2="837.0" class="sq-guide"/><circle cx="12" cy="837.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="825" width="199.60000000000002" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="841.0">user</text><text class="sq-note" x="239.60000000000002" y="841.0">主 agent 收到 A 的结果，tool_use_id A</text><text class="sq-phase" x="30" y="874">subagent B 交回报告并结束</text><line x1="16" y1="897.0" x2="30" y2="897.0" class="sq-guide"/><circle cx="12" cy="897.0" r="4" style="fill:var(--muted)"/><rect x="30" y="885" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="901.0">system/task_progress</text><line x1="16" y1="927.0" x2="367.6" y2="927.0" class="sq-guide"/><circle cx="12" cy="927.0" r="4" style="fill:var(--accent)"/><rect x="367.6" y="915" width="110" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="377.6" y="931.0">assistant</text><text class="sq-note" x="487.6" y="931.0">tool_use SubagentHandback</text><line x1="16" y1="957.0" x2="367.6" y2="957.0" class="sq-guide"/><circle cx="12" cy="957.0" r="4" style="fill:var(--code-str)"/><rect x="367.6" y="945" width="110" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="377.6" y="961.0">user</text><text class="sq-note" x="487.6" y="961.0">tool_result</text><line x1="16" y1="987.0" x2="30" y2="987.0" class="sq-guide"/><circle cx="12" cy="987.0" r="4" style="fill:var(--muted)"/><rect x="30" y="975" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="991.0">system/task_updated</text><text class="sq-note" x="239.60000000000002" y="991.0">B：status completed</text><line x1="16" y1="1017.0" x2="30" y2="1017.0" class="sq-guide"/><circle cx="12" cy="1017.0" r="4" style="fill:var(--muted)"/><rect x="30" y="1005" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="1021.0">system/task_notification</text><text class="sq-note" x="239.60000000000002" y="1021.0">B：completed，最终用量</text><line x1="16" y1="1047.0" x2="30" y2="1047.0" class="sq-guide"/><circle cx="12" cy="1047.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="1035" width="199.60000000000002" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="1051.0">user</text><text class="sq-note" x="239.60000000000002" y="1051.0">主 agent 收到 B 的结果，tool_use_id B</text><text class="sq-phase" x="30" y="1084">主 agent 汇总回答</text><line x1="16" y1="1107.0" x2="30" y2="1107.0" class="sq-guide"/><circle cx="12" cy="1107.0" r="4" style="fill:var(--muted)"/><rect x="30" y="1095" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="1111.0">system/status</text><line x1="16" y1="1137.0" x2="30" y2="1137.0" class="sq-guide"/><circle cx="12" cy="1137.0" r="4" style="fill:var(--accent)"/><rect x="30" y="1125" width="199.60000000000002" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="1141.0">assistant</text><text class="sq-note" x="239.60000000000002" y="1141.0">content: text</text><line x1="16" y1="1167.0" x2="30" y2="1167.0" class="sq-guide"/><circle cx="12" cy="1167.0" r="4" style="fill:var(--muted)"/><rect x="30" y="1155" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="1171.0">system/post_turn_summary</text><line x1="16" y1="1197.0" x2="30" y2="1197.0" class="sq-guide"/><circle cx="12" cy="1197.0" r="4" style="fill:var(--fg)"/><rect x="30" y="1185" width="199.60000000000002" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="1201.0">result</text><text class="sq-note" x="239.60000000000002" y="1201.0">num_turns 3，subagent_stats.spawned 2</text><line x1="16" y1="1227.0" x2="30" y2="1227.0" class="sq-guide"/><circle cx="12" cy="1227.0" r="4" style="fill:var(--muted)"/><rect x="30" y="1215" width="199.60000000000002" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="1231.0">system/task_summary</text><rect x="30" y="10" width="14" height="14" rx="3" style="stroke:var(--fg)" class="sq-box"/><text class="sq-legend" x="50" y="21">会话头与结果</text><rect x="153.6" y="10" width="14" height="14" rx="3" style="stroke:var(--accent)" class="sq-box"/><text class="sq-legend" x="173.6" y="21">模型输出</text><rect x="250.0" y="10" width="14" height="14" rx="3" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-legend" x="270.0" y="21">输入与工具结果</text><rect x="387.2" y="10" width="14" height="14" rx="3" style="stroke:var(--muted)" class="sq-box"/><text class="sq-legend" x="407.2" y="21">状态与流程</text></svg></figure>
 <p>开启逐字输出后，每次模型调用周围多出 <code>stream_event</code>，<code>assistant</code> 事件出现在对应内容块的 <code>content_block_stop</code> 之前：</p>
 <div class="term">system/status
 stream_event   message_start
@@ -162,8 +192,8 @@ interface EventBase {
   | SystemInit | SystemStatus | SystemTaskSummary | SystemPostTurnSummary
   | SystemThinkingTokens | SystemApiRetry | SystemPermissionDenied
   | SystemHookStarted | SystemHookResponse | SystemBackgroundTasksChanged
-  // 后四种见「subagent 与后台任务」</code></pre>
-  | SystemTaskStarted | SystemTaskProgress | SystemTaskUpdated | SystemTaskNotification;
+  // 后四种见「subagent 与后台任务」
+  | SystemTaskStarted | SystemTaskProgress | SystemTaskUpdated | SystemTaskNotification;</code></pre>
 
 <h3>init</h3>
 <p>运行开始时输出一次，描述这次会话的配置。字段多，解析器一般只需要 <code>model</code>、<code>tools</code>、<code>permissionMode</code>、<code>claude_code_version</code>、<code>cwd</code>。</p>
@@ -461,8 +491,8 @@ type ToolInput =
   | { skill: string }
   // Workflow
   | { script: string }
-  // StructuredOutput，由 --json-schema 决定</code></pre>
-  | { [key: string]: unknown };
+  // StructuredOutput，由 --json-schema 决定
+  | { [key: string]: unknown };</code></pre>
 <pre><code class="language-json">{
   "type": "assistant",
   "message": {
@@ -552,7 +582,8 @@ type ToolInput =
   type: "user";
   message: {
     role: "user";
-    content: [ToolResultBlock] | [TextBlock];   // 只含一个块
+    // 只含一个块；回显的提示词是字符串
+    content: [ToolResultBlock] | [TextBlock] | string;
   };
   parent_tool_use_id: string | null;
   timestamp: string;                    // ISO 8601
@@ -564,6 +595,8 @@ type ToolInput =
   task_description?: string;            // 同上
   // true 表示这条消息由 claude-code 注入，例如 Skill 工具加载的技能说明
   isSynthetic?: boolean;
+  // true 表示这是 --replay-user-messages 回显的用户消息
+  isReplay?: true;
 }
 
 interface ToolResultBlock {
@@ -679,7 +712,7 @@ interface WorkflowResult {
   "tool_use_result": "Error: Exit code 1\n/bin/bash: line 1: /root/x: Read-only file system"
 }</code></pre>
 <h3>文字类的 user 消息</h3>
-<p><code>message.content[0].type</code> 为 <code>text</code> 的 <code>user</code> 事件有三种：subagent 收到的提示词（带 <code>parent_tool_use_id</code>，文字等于 Agent 调用的 <code>prompt</code>）；SIGINT 中断时的 <code>[Request interrupted by user]</code>；<code>isSynthetic: true</code> 的注入内容。这些事件没有 <code>tool_use_result</code>。</p>
+<p><code>--replay-user-messages</code> 回显的提示词是一个 <code>message.content</code> 为字符串、带 <code>isReplay: true</code> 的 <code>user</code> 事件，<code>parent_tool_use_id</code> 为 null。<code>message.content[0].type</code> 为 <code>text</code> 的 <code>user</code> 事件有三种：subagent 收到的提示词（带 <code>parent_tool_use_id</code>，文字等于 Agent 调用的 <code>prompt</code>）；SIGINT 中断时的 <code>[Request interrupted by user]</code>；<code>isSynthetic: true</code> 的注入内容。这些事件没有 <code>tool_use_result</code>。</p>
 
 <h2>stream_event 事件</h2>
 <p>需要 <code>--include-partial-messages</code>，或把环境变量 <code>CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES</code> 设为 <code>true</code>。每个事件包一个 Anthropic Messages API 的流式事件。</p>
@@ -716,8 +749,8 @@ type BlockDelta =
   // 观测到 thinking 为空字符串
   | { type: "thinking_delta"; thinking: string; estimated_tokens: number | null }
   | { type: "signature_delta"; signature: string }
-  // 工具参数 JSON 的片段，拼接后是 tool_use.input；第一个片段可能是空字符串</code></pre>
-  | { type: "input_json_delta"; partial_json: string };
+  // 工具参数 JSON 的片段，拼接后是 tool_use.input；第一个片段可能是空字符串
+  | { type: "input_json_delta"; partial_json: string };</code></pre>
 <p>解析器可以只用 <code>assistant</code> 事件得到完整的块，用 <code>stream_event</code> 做实时显示。中断时流可能停在任意一个 <code>content_block_delta</code> 之后，没有对应的 <code>assistant</code> 事件。</p>
 <pre><code class="language-json">{
   "type": "stream_event",

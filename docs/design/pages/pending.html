@@ -40,6 +40,8 @@
     <tr><td>codex 的 Linux 沙箱是什么实现，在 docker 里启动失败时怎么表现</td><td>旧样本显示它可能以退出码 0 结束却没有执行任何命令。<code>--sandbox on</code> 需要在启动前或运行中发现这种情况</td><td>本机 Linux 与 docker 实测；有可靠特征时加一条失败条件</td></tr>
     <tr><td>codex 能否把沙箱流量交给外部代理，打开网页搜索的参数名</td><td><code>--network custom</code> 与 <code>full</code> 对 codex 是否可用</td><td>本机实测</td></tr>
     <tr><td>codex 收到 SIGINT 与 SIGTERM 后的退出码与最后的事件</td><td>只影响 <code>detail</code>，状态由 agentrun 自己的信号记录决定</td><td>本机实测</td></tr>
+    <tr><td>claude-code 用 <code>--input-format stream-json</code> 传入多行或很长的提示词时是否正常；收到 SIGINT 时与有 subagent 时回显与退出是否照常</td><td><code>prompt</code> 事件与 claude-code 的启动方式</td><td>云端实测</td></tr>
+    <tr><td>codex 的输出里是否有提示词</td><td><code>prompt</code> 事件的来源</td><td>macOS 与本机 Linux 实测</td></tr>
     <tr><td>claude-code 的沙箱设置 <code>failIfUnavailable</code>、<code>filesystem.allowWrite</code>、空的 <code>allowedDomains</code> 是否生效</td><td>沙箱失败能否被发现；写范围</td><td>云端实测</td></tr>
     <tr><td>claude-code 的沙箱允许写 <code>/tmp</code>（云端实测），能否用设置收紧</td><td>写范围比设计宽</td><td>云端实测 <code>filesystem</code> 相关设置</td></tr>
     <tr><td>claude-code 的 Edit 与 Write 工具能否写到工作目录以外</td><td>剩余风险表</td><td>云端实测，沙箱打开时让 Write 写 <code>$HOME</code></td></tr>

@@ -23,7 +23,7 @@
 <h2>统一事件流</h2>
 <p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
 <pre id="event-types"><code class="language-typescript">type Event =
-  | StartEvent | ToolEvent | TextEvent | UsageEvent
+  | StartEvent | PromptEvent | ToolEvent | TextEvent | UsageEvent
   | SubagentStartEvent | SubagentEndEvent | NetworkEvent | EndEvent
 
 interface EventBase {
@@ -46,6 +46,12 @@ interface StartEvent extends EventBase {
   cwd: string                // 绝对路径
   argv: string[]             // 实际执行的完整命令，不含提示词
   env: string[]              // --env 与 --env-file 设置的变量名，不含值
+}
+
+// start 之后输出一次，内容是传给运行时的提示词
+interface PromptEvent extends EventBase {
+  type: "prompt"
+  text: string
 }
 
 // 一次工具调用结束时输出
@@ -154,6 +160,12 @@ interface Usage extends TokenCounts {
 }
 {
   "schema": 1,
+  "type": "prompt",
+  "time": "2026-10-04T13:00:00.850Z",
+  "text": "给 parse 模块补测试并修复失败"
+}
+{
+  "schema": 1,
   "type": "subagent_start",
   "time": "2026-10-04T13:00:03.120Z",
   "id": "toolu_01",
@@ -254,6 +266,9 @@ interface Usage extends TokenCounts {
   },
   "result": "测试全部通过。"
 }</code></pre>
+<h3>提示词</h3>
+<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。运行时不回显时（codex，待实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。</p>
+
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
 <h3>tool 事件在调用结束时输出</h3>
@@ -301,6 +316,7 @@ interface Usage extends TokenCounts {
 <p><code>--format text</code> 每个事件一行，格式是 <code>[agent 标签] 事件类型 内容</code>。主 agent 的标签是 <code>main</code>，subagent 的标签是小写的类型加编号，例如 <code>explore#1</code>、<code>general-purpose#2</code>。没有 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部输出。</p>
 <ul>
   <li><code>tool</code>：<code>tool</code> 加 <code>summary</code>。被拒绝时在 <code>summary</code> 后紧接 <code>（被拒绝）</code>。</li>
+  <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。</li>
   <li><code>text</code>：文字的第一行。</li>
   <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写 <code>agent 启动 标签（模型）：描述</code>，模型未知时省去括号。</li>
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写状态、耗时、模型与 token 用量。</li>
@@ -311,6 +327,7 @@ interface Usage extends TokenCounts {
 </ul>
 <p>一个 agent 显示的模型取它最近一次 <code>usage</code> 的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"
+<span class="dim">[main]</span> prompt 给 parse 模块补测试并修复失败
 <span class="dim">[main]</span> tool Read: src/parse.rs
 <span class="dim">[main]</span> agent 启动 explore#1（haiku）：查找所有调用 parse_line 的位置
 <span class="dim">[main]</span> agent 启动 general-purpose#2：为 parse_line 写边界测试
@@ -329,7 +346,8 @@ interface Usage extends TokenCounts {
 <h2>rich 格式</h2>
 <p><code>--format rich</code> 在终端里显示动态界面，分三个区域。标准输出不是终端时，<code>rich</code> 按 <code>text</code> 输出。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --prompt "给 parse 模块补测试并修复失败"
-<span class="dim">[main]</span> tool Read: src/parse.rs <span class="ref">1</span>
+<span class="dim">[main]</span> prompt 给 parse 模块补测试并修复失败 <span class="ref">1</span>
+<span class="dim">[main]</span> tool Read: src/parse.rs
 <span class="dim">[main]</span> agent 启动 explore#1（haiku）：查找所有调用 parse_line 的位置
 <span class="dim">[main]</span> agent 启动 general-purpose#2：为 parse_line 写边界测试
 <span class="dim">[main]</span> agent 启动 explore#3（haiku）：确认测试框架与运行方式
@@ -343,7 +361,7 @@ subagent  2 个运行中 <span class="ref">2</span>
 <span class="dim">───────────────────────────────────────────────────────────────────────────</span>
 ⠸ main  claude-sonnet-5-5  Bash: cargo check   0:24   in 18.2k out 0.9k cache 42.0k   ctx 61.3k <span class="ref">3</span></div>
 <ol class="callouts">
-  <li>滚动区。已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
+  <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
   <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 个运行中」。终端宽度不够时截断描述。</li>
   <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计 token 用量（包括 subagent）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
