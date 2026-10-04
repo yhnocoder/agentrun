@@ -1,27 +1,16 @@
 use std::ffi::OsStr;
 use std::fs::DirBuilder;
-use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::cli::{Runtime, SandboxMode};
 use crate::event::SandboxKind;
-use crate::session::{Session, find_executable};
+use crate::session::Session;
 use crate::signal::Signals;
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-const CHECK_POLL: Duration = Duration::from_millis(10);
 const BWRAP_PREFIX: &str = "bwrap: ";
-#[cfg(target_os = "linux")]
-const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
-#[cfg(target_os = "linux")]
-const CANNOT_START_HINT: &str =
-    "bwrap cannot create a sandbox here. In a docker container use --sandbox off";
-#[cfg(not(target_os = "linux"))]
-const NOT_IMPLEMENTED_HINT: &str = "Use --sandbox relax or --sandbox off";
 const PI_STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
 const PI_STATE_HOME_SUBDIR: &str = ".pi/agent";
 
@@ -109,41 +98,7 @@ pub fn check(
 }
 
 #[cfg(target_os = "linux")]
-fn probe(
-    runtime: Runtime,
-    session: &Session,
-    cwd: &Path,
-    signals: &Signals,
-) -> Result<Available, Unavailable> {
-    if runtime == Runtime::Codex {
-        return Ok(Available {
-            kind: SandboxKind::Codex,
-            bwrap: None,
-            description: "codex".to_string(),
-        });
-    }
-    let missing = |name: &str| Unavailable {
-        reason: format!("{name} not found in PATH"),
-        hint: INSTALL_HINT,
-    };
-    let bwrap = find_executable("bwrap", &session.path, cwd).ok_or_else(|| missing("bwrap"))?;
-    let socat = find_executable("socat", &session.path, cwd).ok_or_else(|| missing("socat"))?;
-    let started = Instant::now();
-    start_bwrap(&bwrap, session, cwd, signals).map_err(|reason| Unavailable {
-        reason: format!("bwrap cannot start: {reason}"),
-        hint: CANNOT_START_HINT,
-    })?;
-    Ok(Available {
-        kind: SandboxKind::Bubblewrap,
-        description: format!(
-            "bubblewrap ({}, socat {}, check {}ms)",
-            bwrap.display(),
-            socat.display(),
-            started.elapsed().as_millis()
-        ),
-        bwrap: Some(bwrap),
-    })
-}
+use bubblewrap::probe;
 
 #[cfg(not(target_os = "linux"))]
 fn probe(
@@ -153,72 +108,128 @@ fn probe(
     _signals: &Signals,
 ) -> Result<Available, Unavailable> {
     Err(Unavailable {
-        reason: "not implemented in this build".to_string(),
-        hint: NOT_IMPLEMENTED_HINT,
+        reason: "the macOS sandbox is not implemented in this build".to_string(),
+        hint: "Use --sandbox relax or --sandbox off",
     })
 }
 
-fn start_bwrap(
-    bwrap: &Path,
-    session: &Session,
-    cwd: &Path,
-    signals: &Signals,
-) -> Result<(), String> {
-    let mut child = Command::new(bwrap)
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--die-with-parent",
-            "--",
-            "/bin/true",
-        ])
-        .current_dir(cwd)
-        .env_clear()
-        .envs(&session.env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    signals.checking(Some(child.id() as i32));
-    let outcome = wait_for_check(&mut child);
-    signals.checking(None);
-    outcome
-}
+#[cfg(target_os = "linux")]
+mod bubblewrap {
+    use std::io::Read;
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
-fn wait_for_check(child: &mut Child) -> Result<(), String> {
-    let mut stderr = child.stderr.take().expect("stderr is piped");
-    let reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stderr.read_to_end(&mut bytes);
-        bytes
-    });
-    let deadline = Instant::now() + CHECK_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                let bytes = reader.join().unwrap_or_default();
-                return Err(failure_reason(
-                    status.code(),
-                    &String::from_utf8_lossy(&bytes),
-                ));
+    use super::{Available, CHECK_TIMEOUT, Unavailable, failure_reason};
+    use crate::cli::Runtime;
+    use crate::event::SandboxKind;
+    use crate::session::{Session, find_executable};
+    use crate::signal::Signals;
+
+    const CHECK_POLL: Duration = Duration::from_millis(10);
+    const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+    const CANNOT_START_HINT: &str =
+        "bwrap cannot create a sandbox here. In a docker container use --sandbox off";
+
+    pub(super) fn probe(
+        runtime: Runtime,
+        session: &Session,
+        cwd: &Path,
+        signals: &Signals,
+    ) -> Result<Available, Unavailable> {
+        if runtime == Runtime::Codex {
+            return Ok(Available {
+                kind: SandboxKind::Codex,
+                bwrap: None,
+                description: "codex".to_string(),
+            });
+        }
+        let missing = |name: &str| Unavailable {
+            reason: format!("{name} not found in PATH"),
+            hint: INSTALL_HINT,
+        };
+        let bwrap = find_executable("bwrap", &session.path, cwd).ok_or_else(|| missing("bwrap"))?;
+        let socat = find_executable("socat", &session.path, cwd).ok_or_else(|| missing("socat"))?;
+        let started = Instant::now();
+        start_bwrap(&bwrap, session, cwd, signals).map_err(|reason| Unavailable {
+            reason: format!("bwrap cannot start: {reason}"),
+            hint: CANNOT_START_HINT,
+        })?;
+        Ok(Available {
+            kind: SandboxKind::Bubblewrap,
+            description: format!(
+                "bubblewrap ({}, socat {}, check {}ms)",
+                bwrap.display(),
+                socat.display(),
+                started.elapsed().as_millis()
+            ),
+            bwrap: Some(bwrap),
+        })
+    }
+
+    fn start_bwrap(
+        bwrap: &Path,
+        session: &Session,
+        cwd: &Path,
+        signals: &Signals,
+    ) -> Result<(), String> {
+        let mut child = Command::new(bwrap)
+            .args([
+                "--ro-bind",
+                "/",
+                "/",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--die-with-parent",
+                "--",
+                "/bin/true",
+            ])
+            .current_dir(cwd)
+            .env_clear()
+            .envs(&session.env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        signals.checking(Some(child.id() as i32));
+        let outcome = wait_for_check(&mut child);
+        signals.checking(None);
+        outcome
+    }
+
+    fn wait_for_check(child: &mut Child) -> Result<(), String> {
+        let mut stderr = child.stderr.take().expect("stderr is piped");
+        let reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stderr.read_to_end(&mut bytes);
+            bytes
+        });
+        let deadline = Instant::now() + CHECK_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) => {
+                    let bytes = reader.join().unwrap_or_default();
+                    return Err(failure_reason(
+                        status.code(),
+                        &String::from_utf8_lossy(&bytes),
+                    ));
+                }
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "timed out after {} seconds",
+                        CHECK_TIMEOUT.as_secs()
+                    ));
+                }
+                Ok(None) => thread::sleep(CHECK_POLL),
+                Err(error) => return Err(error.to_string()),
             }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "timed out after {} seconds",
-                    CHECK_TIMEOUT.as_secs()
-                ));
-            }
-            Ok(None) => thread::sleep(CHECK_POLL),
-            Err(error) => return Err(error.to_string()),
         }
     }
 }
@@ -431,9 +442,10 @@ mod tests {
                 Path::new("/"),
                 &signals
             ),
-            Err(format!(
-                "sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}"
-            ))
+            Err(
+                "sandbox is not available: bwrap not found in PATH. Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off"
+                    .to_string()
+            )
         );
         let relaxed = check(
             SandboxMode::Relax,
