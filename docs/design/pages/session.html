@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="isolation.html">隔离</a> · 会话环境 · <a href="events.html">事件与输出</a> · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · 会话环境 · <a href="isolation.html">隔离</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
 <h1>会话环境 <span class="tag">草稿</span></h1>
 <p class="lead">运行时进程启动时拿到什么：环境变量、PATH、临时目录与登录凭据；以及它怎么结束：进程组、信号与超时。目标是<mark>调用方能完整控制会话环境</mark>，同时调用方环境里残留的变量不会悄悄改变登录方式。</p>
 
@@ -93,11 +93,11 @@ GREETING='hello world'</code></pre>
 <p>无论运行以哪种方式结束，都满足三条：事件流以 <code>end</code> 结尾；会话临时目录被删除（<code>--debug</code> 除外）；运行时及其子进程不再运行。</p>
 <ul>
   <li>运行时启动在新的进程组里，终端的 Ctrl-C 只发给 agentrun，由 agentrun 转发。pi 被包裹时，包裹命令是进程组的首进程，退出码透传 pi 的退出码。</li>
-  <li>提示词写入标准输入后关闭（claude-code 写成一行 JSON 消息，见<a href="runtimes.html#claude-code">运行时适配</a>；pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
+  <li>提示词写入标准输入后关闭（claude-code 写成一行 JSON 消息，见<a href="run.html#claude-code">运行</a>页的 claude-code 一节；pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
   <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再最多等 1 秒读完剩余的输出，然后输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 waitpid 判断主进程退出，不用标准输出的 EOF 判断。</li>
   <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
   <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>
-  <li>结束顺序：输出 <code>end</code>，删除临时目录，按<a href="../index.html#exit-codes">退出码</a>表退出。agentrun 不重新给自己发信号。</li>
+  <li>结束顺序：输出 <code>end</code>，删除临时目录，按<a href="run.html#exit-codes">退出码</a>表退出。agentrun 不重新给自己发信号。</li>
 </ul>
 <figure>
 <svg class="diagram" viewBox="0 0 600 470" style="max-width:600px" role="img" aria-label="运行结束时的进程清理顺序"><defs><marker id="arr-sig" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="30" y="10" width="250" height="40" rx="8"/><text x="155.0" y="35.0" text-anchor="middle">收到 SIGINT 或 SIGTERM</text><rect x="320" y="10" width="250" height="40" rx="8"/><text x="445.0" y="35.0" text-anchor="middle">--timeout 到时</text><path d="M155,50 L155,78" marker-end="url(#arr-sig)"/><path d="M445,50 L445,78" marker-end="url(#arr-sig)"/><rect x="30" y="80" width="250" height="40" rx="8"/><text x="155.0" y="105.0" text-anchor="middle">把同一个信号转发给进程组</text><rect x="320" y="80" width="250" height="40" rx="8"/><text x="445.0" y="105.0" text-anchor="middle">向进程组发 SIGTERM</text><path d="M155,120 C155,140 330,135 330,158" marker-end="url(#arr-sig)"/><path d="M445,120 C445,140 330,135 330,158" marker-end="url(#arr-sig)"/><rect x="180" y="160" width="300" height="56" rx="8"/><text x="330.0" y="184.0" text-anchor="middle">最多等 5 秒，输出照常解析</text><text x="330.0" y="202.0" text-anchor="middle">等待中再收到信号时不再等待</text><rect x="10" y="160" width="140" height="56" rx="8"/><text x="80.0" y="184.0" text-anchor="middle">运行时主进程</text><text x="80.0" y="202.0" text-anchor="middle">自行退出</text><path d="M330,216 L330,268" marker-end="url(#arr-sig)"/><text class="note" x="340" y="246" text-anchor="start">主进程退出，或等待结束</text><path d="M80,216 L80,290 L178,290" marker-end="url(#arr-sig)"/><rect x="180" y="270" width="300" height="40" rx="8"/><text x="330.0" y="295.0" text-anchor="middle">向整个进程组发 SIGKILL</text><path d="M330,310 L330,338" marker-end="url(#arr-sig)"/><rect x="180" y="340" width="300" height="40" rx="8"/><text x="330.0" y="365.0" text-anchor="middle">最多再等 1 秒，读完剩余输出</text><path d="M330,380 L330,408" marker-end="url(#arr-sig)"/><rect x="180" y="410" width="300" height="40" rx="8"/><text x="330.0" y="435.0" text-anchor="middle">输出 end，删除临时目录，退出</text></svg>

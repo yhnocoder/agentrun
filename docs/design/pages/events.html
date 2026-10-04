@@ -16,9 +16,9 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="isolation.html">隔离</a> · <a href="session.html">会话环境</a> · 事件与输出 · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">隔离</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
 <h1>事件与输出 <span class="tag">草稿</span></h1>
-<p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="runtimes.html">运行时适配</a>。</p>
+<p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
 
 <h2>统一事件流</h2>
 <p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
@@ -299,10 +299,10 @@ interface Usage extends TokenCounts {
     <tr><th>status</th><th>条件</th><th>agentrun 退出码</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>rejected</code></td><td>启动前失败，情形见总览的<a href="../index.html#preflight">启动前检查</a></td><td>2</td></tr>
+    <tr><td><code>rejected</code></td><td>启动前失败，情形见<a href="run.html#preflight">启动前检查</a></td><td>2</td></tr>
     <tr><td><code>interrupted</code></td><td>agentrun 收到 SIGINT 或 SIGTERM，以第一个信号为准</td><td>130 或 143</td></tr>
     <tr><td><code>timeout</code></td><td>超过 <code>--timeout</code></td><td>3</td></tr>
-    <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="runtimes.html">运行时适配</a>。三个运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>
+    <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="run.html">运行</a>。三个运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>
     <tr><td><code>finished</code></td><td>以上都不成立</td><td>0</td></tr>
   </tbody>
 </table>

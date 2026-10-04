@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · 隔离 · <a href="session.html">会话环境</a> · <a href="events.html">事件与输出</a> · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · 隔离 · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
 <h1>隔离：沙箱与网络 <span class="tag">草稿</span></h1>
 <p class="lead">agentrun 用沙箱限制 agent 能写的文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code> 与 <code>--network</code> 两个选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
 
@@ -63,7 +63,7 @@
     <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。可写目录另加 pi 的状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>）。网络见下一节</td><td>不包裹</td></tr>
   </tbody>
 </table>
-<p>各运行时的完整参数见<a href="runtimes.html">运行时适配</a>。几个容易被改坏的决定：</p>
+<p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
   <li>pi 的状态目录必须可写：pi 刷新令牌时要改写其中的 <code>auth.json</code> 并加锁，否则刷新会失败。目录不存在时 agentrun 先创建它（新建的每一级权限 0700），因为 <code>bwrap</code> 绑定不存在的路径会失败。</li>
   <li>pi 的包裹不加 <code>--unshare-pid</code> 与 <code>--new-session</code>，以保持<a href="session.html#signals">进程组与信号</a>的规则。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
@@ -132,7 +132,7 @@
 <p>服务商不在表里时，agentrun 不知道该放行哪个主机。<code>none</code> 下启动前报错（退出码 2），提示改用 <code>--network custom --allow-host &lt;服务商主机&gt;</code>；<code>custom</code> 下只放行 <code>--allow-host</code> 列出的主机；<code>full</code> 不受影响。</p>
 
 <h2>配置与账号</h2>
-<p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="runtimes.html">运行时适配</a>：</p>
+<p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
   <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，不保存会话，每次传一个新生成的会话 id。</li>
   <li>codex：不读用户的 codex 配置与规则文件，只使用其中的登录信息；不读工作目录里的 <code>AGENTS.md</code>，不加载技能说明，会话不落盘。具体做法待实测，见<a href="pending.html">待定</a>。</li>
