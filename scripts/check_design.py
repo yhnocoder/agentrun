@@ -142,7 +142,7 @@ def launch(p, browser):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("root", nargs="?", default="docs/design", type=Path)
+    parser.add_argument("root", nargs="?", default="docs", type=Path)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--browser", choices=["chrome", "chromium"], default="chrome")
     args = parser.parse_args()
