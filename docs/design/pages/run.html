@@ -21,7 +21,7 @@
 <p class="lead">前半页写调用方怎么运行 agentrun：命令行选项、一次运行的顺序、启动前检查、doctor 与退出码。后半页每个运行时一节：agentrun 用什么参数启动它、它的原始输出怎么映射到统一事件、什么情况算失败。运行时的参数与行为来自实测，写明了实测的版本；<mark>运行时升级后要重新核对</mark>。原始输出的完整字段见 <a href="claudecode.jsonl.html">claude-code 事件流</a>与 <a href="pi.jsonl.html">pi 事件流</a>两页字段参考。</p>
 
 <h2>命令行界面</h2>
-<p>运行时名就是子命令：<code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。另外有 <code>agentrun doctor</code>。三个运行时子命令接受同一组选项。</p>
+<p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>
 <pre><code class="language-bash">agentrun claude-code --prompt "给 parse 模块补测试并修复失败"
 agentrun pi --model deepseek/deepseek-flash --network custom --allow-host pypi.org --prompt-file task.md
 agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></pre>
@@ -53,8 +53,10 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 </table>
 <p>任何输出都只写变量名，不写变量的值，PATH 除外。提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里；<code>--dry-run</code> 与 <code>--debug</code> 把它写成 <code>&lt;提示词 N 字节&gt;</code>。</p>
 
-<h3>把参数原样传给运行时</h3>
-<p><code>--</code> 之后的所有参数原样传给运行时，用于工具没有提供选项的运行时功能。工具生成的参数在前，<code>--</code> 之后的参数接在后面。多数运行时遇到同一个选项出现两次时以后一次为准，所以调用方的参数可以覆盖工具的设置。</p>
+<p>另外有 <code>agentrun doctor</code>。在 <a href="#doctor_check">后文</a> 详细描述。</p>
+
+<h3>额外传递参数给运行时</h3>
+<p><code>--</code> 之后的所有参数原样传给运行时，用于工具没有提供选项的运行时功能。调用方的参数可以覆盖工具的设置。</p>
 <p>可以覆盖的设置包括权限与沙箱设置。工具不阻止，只在 <code>start</code> 事件的 <code>argv</code> 里如实记录，这时安全保证由调用方负责。理由：用户需要为没有预料到的用途保留完整的控制。</p>
 <p>调用方的参数可能让运行时输出工具不认识的事件，例如给 claude-code 传 <code>--include-partial-messages</code> 后，会多出逐字输出的 <code>stream_event</code>。这类事件不进入统一事件流，只写入 <code>--raw</code> 文件。</p>
 
@@ -77,7 +79,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 </ul>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 
-<h2>doctor 检查</h2>
+<h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
 <p>按当前环境检查运行时能否使用。不写运行时时检查全部三个。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致。</p>
 <table>
@@ -117,16 +119,12 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 <p>调用方只看退出码就能区分「环境未配置好」（2）和「agent 没有完成任务」（1）。退出码为 2 时，调用方不改环境直接重试不会成功。状态的判定顺序见<a href="events.html#status">end.status</a>。</p>
 
 <h2>运行时版本</h2>
-<table>
-  <thead>
-    <tr><th>运行时</th><th>实测版本</th><th>实测环境</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>claude-code</td><td>2.1.288（设置名另据 2.1.289 的说明）</td><td>Claude 云端，打开与不打开自带沙箱</td></tr>
-    <tr><td>pi</td><td>1.0.1，npm 包 <code>@earendil-works/pi-coding-agent</code>（旧包名 <code>@mariozechner/pi-coding-agent</code> 停在 0.73.1）</td><td>Claude 云端，bwrap 包裹与不包裹，模型 <code>deepseek/deepseek-flash</code></td></tr>
-    <tr><td>codex</td><td>未实测</td><td>待 macOS 与本机 Linux 实测</td></tr>
-  </tbody>
-</table>
+
+<ul>
+  <li>claude-code: >= 2.1.288</li>
+  <li>pi: >= 1.0.1</li>
+  <li>codex: unknown</li>
+</ul>
 
 <h2 id="claude-code">claude-code</h2>
 <h3>参数</h3>
@@ -167,9 +165,6 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   }
 }</code></pre>
 <p>前三项以外的设置（<code>failIfUnavailable</code>、<code>allowWrite</code>、空的 <code>allowedDomains</code>）取自 claude 的设置说明，还没有实测是否生效。<code>--network full|custom</code> 时另加 <code>network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。</p>
-
-<h3>auto 模式没有生效时终止</h3>
-<p>claude-code 在某些模型下不支持 auto 模式，这时它不报错，而是改用 default 权限模式：<code>system/init</code> 的 <code>permissionMode</code> 为 <code>default</code>，Bash 命令全部被拒绝，退出码仍为 0。实测 haiku 作主模型时如此，sonnet 正常。agentrun 读到 init 的 <code>permissionMode</code> 不是 <code>auto</code> 时，立即向进程组发 SIGKILL，判为 <code>failed</code>，<code>detail</code> 写明实际的权限模式、当前模型与「换一个支持 auto 模式的模型」。理由：否则一次什么命令都没执行的运行会被报告为成功；agentrun 不替调用方选模型，默认配置可能落到任何模型上。</p>
 
 <h3>输出映射</h3>
 <p>stream-json 每行一个 JSON 对象。用到的对象与字段：</p>

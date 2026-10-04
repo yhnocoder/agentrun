@@ -17,21 +17,16 @@
 <body>
 <main>
 <h1>agentrun 设计 <span class="tag">草稿</span></h1>
-<p class="lead">agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linux、云端容器和 docker 容器里用<mark>同一条命令</mark>运行 claude-code、codex 和 pi。本页写它要做到什么、在四种环境里怎么调用，并按主题列出其他设计页面。</p>
-
-<blockquote>
-  <p>配置只由两样东西决定：操作系统决定用哪种沙箱，<code>--sandbox on|relax|off</code> 决定沙箱做不到时怎么办。默认 <code>on</code>，沙箱或网络限制做不到就报错退出，不在没有隔离的情况下静默运行。</p>
-</blockquote>
+<p class="lead">agentrun 是一个独立的 Rust 命令行工具，在 macOS、Linux、Cloud Managed 容器和 docker 容器里用<mark>同一种</mark>运行 claude-code、codex 和 pi。</p>
 
 <h2>Motivation</h2>
-<p>工具要做到什么，以及不做什么。</p>
-<p>调用方在每种环境里的用法相同，工具在这些环境里能安装，出了问题能查出原因。具体分三项：</p>
+<p>具体分三点：</p>
 <ul>
   <li>Safety：在每个环境能提供的范围内隔离 agent。限制它能写的文件和命令能否联网；不读取用户自己的运行时配置、插件、规则与会话记录；运行中不弹出确认。做法见<a href="pages/isolation.html">隔离</a>。</li>
   <li>Unified Experience：同一条命令在四种环境里都能运行，三个运行时的输出统一成一种带版本号的事件流，成败由工具统一判定。见<a href="pages/events.html">事件与输出</a>。</li>
   <li>Doctor：<code>agentrun doctor</code> 在启动前检查运行时能否使用，失败时说明原因和修正方法。</li>
 </ul>
-<p>任何语言都能调用 agentrun，接口只有命令行参数、环境变量、标准输入输出与退出码。每个平台一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64，不支持 Windows。</p>
+<p>由于是命令行工具，任何语言都能调用 agentrun，接口只有命令行参数、环境变量、标准输入输出与退出码。每个平台一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64，不支持 Windows。</p>
 <p>工具不做的事：</p>
 <ul>
   <li>不决定用哪个模型做哪件事。调用方没给 <code>--model</code> 时不传模型参数，用运行时自己的默认配置。角色、模型路由与业务流程由调用方负责。</li>
@@ -44,26 +39,25 @@
 <ul class="cards">
   <li><a class="card" href="pages/session.html">
     <div class="pv">
-      <div class="pv-line pv-cmd"><span class="pv-a">--env-file prod.env</span></div>
-      <div class="pv-line pv-a pv-s2">AGENTRUN_PI_AUTH</div>
-      <div class="pv-line pv-a pv-s3">SIGINT → 5s → SIGKILL</div>
+      <div class="pv-line pv-cmd"><span class="pv-a">Session</span></div>
+      <div class="pv-line pv-a pv-s2">auth</div>
+      <div class="pv-line pv-a pv-s3">--env-file prod.env</div>
     </div>
     <div class="card-body"><strong>会话环境</strong><span>环境变量、PATH、会话临时目录、凭据、进程组、信号与超时。</span>
     <div class="card-tags"><i>env</i><i>process</i><i>草稿</i></div></div>
   </a></li>
   <li><a class="card" href="pages/isolation.html">
     <div class="pv">
-      <div class="pv-line pv-cmd"><span class="pv-a">--sandbox on|relax|off</span></div>
-      <div class="pv-line pv-a pv-s2">--network custom</div>
-      <div class="pv-line pv-a pv-s3">net 拒绝 github.com:22</div>
+      <div class="pv-line pv-cmd"><span class="pv-a">Isolation</span></div>
+      <div class="pv-line pv-a pv-s2">--sandbox on|relax|off</div>
+      <div class="pv-line pv-a pv-s3">--network none|full|custom</div>
     </div>
-    <div class="card-body"><strong>隔离：沙箱与网络</strong><span>--sandbox on|relax|off、--network、三个运行时怎么关进沙箱、剩余风险。</span>
+    <div class="card-body"><strong>沙箱与网络</strong><span>--sandbox on|relax|off、--network、三个运行时怎么关进沙箱、剩余风险。</span>
     <div class="card-tags"><i>sandbox</i><i>network</i><i>草稿</i></div></div>
   </a></li>
 </ul>
 
 <h3>在四种环境里怎么调用</h3>
-<p>工具不探测自己运行在哪种环境里。它只看操作系统，并在启动前实际启动一次沙箱来判断沙箱能不能用。理由：按环境探测一旦误判，本机会话就会在没有沙箱的情况下运行；实际启动一次沙箱则能直接回答「能不能隔离」这个问题。</p>
 <table>
   <thead>
     <tr><th>环境</th><th>沙箱</th><th>调用方的写法</th></tr>
@@ -78,7 +72,7 @@
 <p>云端容器有两种：Claude 云端只运行 claude-code 与 pi，Codex 云端只运行 codex 与 pi。工具不区分这两种容器，由启动方选择运行时。</p>
 
 <h2>Event and Output</h2>
-<p>agentrun 输出的统一事件流与三种输出格式。后两页是运行时原始输出的字段参考，写给为这些输出写解析器的人，不依赖其他页面。</p>
+<p>agentrun 输出的统一事件流与三种输出格式。后两页是运行时原始输出的字段参考。</p>
 <ul class="cards">
   <li><a class="card" href="pages/events.html">
     <div class="pv">
@@ -104,7 +98,7 @@
       <div class="pv-line pv-a pv-s2">{"type":"session","version":3}</div>
       <div class="pv-line pv-a pv-s3">{"type":"agent_settled"}</div>
     </div>
-    <div class="card-body"><strong>pi 事件流</strong><span>--mode json 输出的每种事件、消息角色、内容块、usage、错误与退出码、与 0.73.1 的差异。</span>
+    <div class="card-body"><strong>pi 事件流</strong><span>--mode json 输出的每种事件、消息角色、内容块、usage、错误与退出码。</span>
     <div class="card-tags"><i>pi</i><i>jsonl</i><i>字段参考</i></div></div>
   </a></li>
 </ul>
@@ -114,9 +108,9 @@
 <ul class="cards">
   <li><a class="card" href="pages/run.html">
     <div class="pv">
-      <div class="pv-line pv-cmd"><b>$</b><span class="pv-a">agentrun claude-code</span></div>
-      <div class="pv-line pv-a pv-s2">agentrun doctor</div>
-      <div class="pv-line pv-a pv-s3">exit 0 · 1 · 2 · 3</div>
+      <div class="pv-line pv-a pv-s1"><b>$</b> agentrun claude-code</div>
+      <div class="pv-line pv-a pv-s2"><b>$</b> agentrun pi</div>
+      <div class="pv-line pv-a pv-s3"><b>$</b> agentrun codex</div>
     </div>
     <div class="card-body"><strong>运行：命令行与运行时</strong><span>命令行选项、启动前检查、doctor、退出码，以及 claude-code、pi、codex 的参数、输出映射与失败判定。</span>
     <div class="card-tags"><i>claude-code</i><i>pi</i><i>codex</i><i>草稿</i></div></div>
