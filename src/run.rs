@@ -18,8 +18,10 @@ use crate::aggregate::Aggregator;
 use crate::cli::{
     Cli, Format, RunArgs, Runtime, SandboxMode, default_format, prescan_format, usage_error_detail,
 };
+use crate::credential::write_session_credential;
 use crate::event::{Body, End, EndStatus, Event, NetworkInfo, SandboxKind, Start};
 use crate::output::Output;
+use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::usage::Usage;
 
 const STDERR_TAIL_CHARS: usize = 500;
@@ -69,6 +71,7 @@ struct Ready {
     adapter: Box<dyn Adapter>,
     launch: Launch,
     raw: Option<(PathBuf, File)>,
+    session: Session,
 }
 
 pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
@@ -95,7 +98,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         Ok(ready) => ready,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
-    let plan = plan_lines(&caller, &ready);
+    let mut plan = plan_lines(&ready);
     if ready.invocation.args.dry_run {
         for line in &plan {
             let _ = writeln!(caller.stdout, "{line}");
@@ -103,6 +106,23 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         let _ = caller.stdout.flush();
         return 0;
     }
+    let credential = match write_session_credential(
+        ready.invocation.runtime,
+        &ready.session,
+        &ready.invocation.cwd,
+    ) {
+        Ok(credential) => credential,
+        Err(detail) => return reject(&mut caller, format, &detail, started),
+    };
+    plan.push(match credential {
+        Some(report) => format!(
+            "credentials: {} -> {} ({})",
+            report.variable,
+            report.path.display(),
+            report.status.name()
+        ),
+        None => "credentials: (none)".to_string(),
+    });
     let tempdir = match create_tempdir(&caller) {
         Ok(tempdir) => tempdir,
         Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -136,11 +156,19 @@ fn prepare(
     }
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let prompt = read_prompt(caller, &args)?;
+    let env_args = parse_env_args(&args.env, &caller.env)?;
+    let path_dirs = resolve_path_dirs(&args.path)?;
     let raw = match &args.raw {
         Some(path) => Some((path.clone(), create_raw(path)?)),
         None => None,
     };
-    let executable = find_executable(runtime.executable(), caller.var("PATH"))
+    let env_files = args
+        .env_file
+        .iter()
+        .map(|path| read_env_file(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let session = Session::assemble(runtime, &caller.env, &path_dirs, &env_files, &env_args);
+    let executable = find_executable(runtime.executable(), &session.path, &cwd)
         .ok_or_else(|| format!("{} not found in PATH", runtime.executable()))?;
     if args.sandbox == SandboxMode::On {
         return Err(format!(
@@ -166,6 +194,7 @@ fn prepare(
         adapter,
         launch,
         raw,
+        session,
     })
 }
 
@@ -217,20 +246,6 @@ fn create_raw(path: &Path) -> Result<File, String> {
         .map_err(|error| format!("cannot create raw file {}: {error}", path.display()))
 }
 
-fn find_executable(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
-    std::env::split_paths(path?)
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .map(|dir| dir.join(name))
-        .find(|candidate| is_executable(candidate))
-        .and_then(|candidate| std::path::absolute(candidate).ok())
-}
-
-fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
 fn create_tempdir(caller: &Caller) -> Result<TempDir, String> {
     let base = match caller.var("TMPDIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
@@ -248,7 +263,7 @@ fn create_tempdir(caller: &Caller) -> Result<TempDir, String> {
         })
 }
 
-fn plan_lines(caller: &Caller, ready: &Ready) -> Vec<String> {
+fn plan_lines(ready: &Ready) -> Vec<String> {
     let prompt = &ready.invocation.prompt;
     let command = ready
         .launch
@@ -263,11 +278,25 @@ fn plan_lines(caller: &Caller, ready: &Ready) -> Vec<String> {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    let path = caller
-        .var("PATH")
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    vec![format!("command: {command}"), format!("PATH: {path}")]
+    let session = &ready.session;
+    vec![
+        format!("command: {command}"),
+        format!("PATH: {}", session.path.to_string_lossy()),
+        format!("set: {}", name_list(&session.set)),
+        format!("removed: {}", name_list(&session.removed)),
+        format!(
+            "agentrun variables: {}",
+            name_list(&session.agentrun_variables)
+        ),
+    ]
+}
+
+fn name_list(names: &[String]) -> String {
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.join(", ")
+    }
 }
 
 pub fn shell_quote(arg: &str) -> String {
@@ -294,6 +323,7 @@ fn execute(
         mut adapter,
         launch,
         raw,
+        session,
     } = ready;
     let debug = invocation.args.debug;
     let raw = match raw {
@@ -332,7 +362,7 @@ fn execute(
         .args(program_args)
         .current_dir(&invocation.cwd)
         .env_clear()
-        .envs(caller.env.iter().map(|(key, value)| (key, value)))
+        .envs(&session.env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -372,7 +402,7 @@ fn execute(
             .filter(|arg| **arg != invocation.prompt)
             .cloned()
             .collect(),
-        env: Vec::new(),
+        env: session.set.clone(),
     }));
     output.write(&mut caller.stdout, &start);
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());

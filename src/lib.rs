@@ -1,7 +1,9 @@
 pub mod adapter;
 pub mod aggregate;
 pub mod cli;
+pub mod credential;
 pub mod event;
 pub mod output;
 pub mod run;
+pub mod session;
 pub mod usage;

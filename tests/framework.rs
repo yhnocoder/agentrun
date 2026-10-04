@@ -167,10 +167,14 @@ impl Sandbox {
         std::fs::create_dir(sandbox.bin()).unwrap();
         std::fs::create_dir(sandbox.tmp()).unwrap();
         std::fs::create_dir(sandbox.work()).unwrap();
-        let path = sandbox.bin().join("claude");
+        sandbox.install("claude", script);
+        sandbox
+    }
+
+    fn install(&self, name: &str, script: &str) {
+        let path = self.bin().join(name);
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        sandbox
     }
 
     fn with_output(lines: &str) -> Sandbox {
@@ -207,9 +211,19 @@ impl Sandbox {
     }
 
     fn run(&self, extra: &[&str], echoes: bool) -> Outcome {
+        self.run_as("claude-code", &[], extra, echoes)
+    }
+
+    fn run_as(
+        &self,
+        runtime: &str,
+        caller_env: &[(&str, &str)],
+        extra: &[&str],
+        echoes: bool,
+    ) -> Outcome {
         let mut args: Vec<OsString> = vec![
             "agentrun".into(),
-            "claude-code".into(),
+            runtime.into(),
             "--cwd".into(),
             self.work().into(),
             "--prompt".into(),
@@ -219,10 +233,15 @@ impl Sandbox {
         if !extra.contains(&"--sandbox") {
             args.splice(2..2, ["--sandbox".into(), "off".into()]);
         }
-        let env = vec![
+        let mut env = vec![
             (OsString::from("PATH"), OsString::from(self.path_var())),
             (OsString::from("TMPDIR"), self.tmp().into_os_string()),
         ];
+        env.extend(
+            caller_env
+                .iter()
+                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
         let stdout = Shared::default();
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let caller = Caller {
@@ -623,7 +642,7 @@ fn debug_keeps_tempdir_and_writes_raw_jsonl() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] tempdir: {}\n[debug] raw: {}\n",
+            "[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
             executable.display(),
             sandbox.path_var(),
             dir.display(),
@@ -664,7 +683,7 @@ fn dry_run_prints_quoted_command_and_path() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "command: {} --flag 'it'\\''s' 'two words' '<prompt 2 bytes>'\nPATH: {}\n",
+            "command: {} --flag 'it'\\''s' 'two words' '<prompt 2 bytes>'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\n",
             sandbox.bin().join("claude").display(),
             sandbox.path_var()
         )
@@ -717,6 +736,221 @@ fn text_format_note_for_sandbox_off() {
         outcome.stdout.lines().next().unwrap(),
         "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches"
     );
+}
+
+fn read_env_dump(path: &Path) -> BTreeMap<String, String> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+#[test]
+fn child_environment_follows_assembly_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let dump = root.path().join("env.txt");
+    let sandbox = Sandbox::new(&format!("#!/bin/sh\n/usr/bin/env > '{}'\n", dump.display()));
+    let env_file = sandbox.root.path().join("session.env");
+    std::fs::write(
+        &env_file,
+        "FILE_VAR=from-file\nKEEP=file\nAGENTRUN_PI_AUTH=file-auth\n",
+    )
+    .unwrap();
+    let bin = sandbox.bin().to_string_lossy().into_owned();
+    let outcome = sandbox.run_as(
+        "claude-code",
+        &[
+            ("ANTHROPIC_API_KEY", "caller-key"),
+            ("CLAUDE_CODE_USE_VERTEX", "1"),
+            ("CLAUDE_CODE_OAUTH_TOKEN", "oauth"),
+            ("KEEP", "caller"),
+            ("INHERITED", "yes"),
+            ("AGENTRUN_SANDBOX", "off"),
+            ("AGENTRUN_UNKNOWN", "x"),
+        ],
+        &[
+            "--env-file",
+            env_file.to_str().unwrap(),
+            "--env",
+            "KEEP=arg",
+            "--env",
+            "ANTHROPIC_BASE_URL=https://example.test",
+            "--env",
+            "PATH=/usr/bin:/bin",
+            "--env",
+            "TMPDIR=/ignored",
+            "--path",
+            &bin,
+        ],
+        false,
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let child = read_env_dump(&dump);
+    assert!(
+        child.keys().all(|key| !key.starts_with("AGENTRUN_")),
+        "{child:?}"
+    );
+    let session_path = format!("{bin}:/usr/bin:/bin");
+    assert_eq!(child["PATH"], session_path);
+    assert!(!child.contains_key("ANTHROPIC_API_KEY"));
+    assert!(!child.contains_key("CLAUDE_CODE_USE_VERTEX"));
+    assert_eq!(child["CLAUDE_CODE_OAUTH_TOKEN"], "oauth");
+    assert_eq!(child["ANTHROPIC_BASE_URL"], "https://example.test");
+    assert_eq!(child["KEEP"], "arg");
+    assert_eq!(child["FILE_VAR"], "from-file");
+    assert_eq!(child["INHERITED"], "yes");
+    let tempdir = Path::new(&child["TMPDIR"]);
+    assert_eq!(tempdir.parent().unwrap(), sandbox.tmp());
+    assert_eq!(child["TMP"], child["TMPDIR"]);
+    assert_eq!(child["TEMP"], child["TMPDIR"]);
+    let start = &outcome.events()[0];
+    assert_eq!(start["type"], "start");
+    assert_eq!(
+        start["env"],
+        json!(["FILE_VAR", "KEEP", "ANTHROPIC_BASE_URL", "PATH", "TMPDIR"])
+    );
+}
+
+#[test]
+fn pi_credential_is_written_and_never_printed() {
+    let secret = "pi-credential-value-7f3a9c";
+    let sandbox = Sandbox::new("#!/bin/sh\nexit 0\n");
+    sandbox.install(
+        "pi",
+        "#!/bin/sh\n/usr/bin/env\n/usr/bin/env >&2\nprintf '{\"record\":\"text\",\"parent\":null,\"text\":\"done\"}\\n'\n",
+    );
+    let home = sandbox.root.path().join("home");
+    let home_str = home.to_string_lossy().into_owned();
+    let raw = sandbox.root.path().join("raw.jsonl");
+    let caller_env = [("HOME", home_str.as_str()), ("AGENTRUN_PI_AUTH", secret)];
+    let args = ["--debug", "--raw", raw.to_str().unwrap()];
+    let outcome = sandbox.run_as("pi", &caller_env, &args, false);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let login = home.join(".pi/agent/auth.json");
+    assert_eq!(std::fs::read_to_string(&login).unwrap(), secret);
+    assert!(home.join(".pi/agent/auth.json.agentrun-sha256").exists());
+    assert!(outcome.stderr.contains(&format!(
+        "[debug] credentials: AGENTRUN_PI_AUTH -> {} (written)\n",
+        login.display()
+    )));
+    assert!(
+        outcome
+            .stderr
+            .contains("[debug] agentrun variables: AGENTRUN_PI_AUTH\n")
+    );
+    assert!(outcome.stderr.contains(&format!("HOME={home_str}\n")));
+    let raw_text = std::fs::read_to_string(&raw).unwrap();
+    assert!(raw_text.contains(&format!("HOME={home_str}\n")));
+    for text in [&outcome.stdout, &outcome.stderr, &raw_text] {
+        assert!(!text.contains(secret));
+    }
+    std::fs::write(&login, "refreshed").unwrap();
+    let again = sandbox.run_as("pi", &caller_env, &args, false);
+    assert!(again.stderr.contains(&format!(
+        "[debug] credentials: AGENTRUN_PI_AUTH -> {} (unchanged)\n",
+        login.display()
+    )));
+    assert_eq!(std::fs::read_to_string(&login).unwrap(), "refreshed");
+}
+
+#[test]
+fn dry_run_lists_variable_names_and_skips_credentials() {
+    let sandbox = Sandbox::new("#!/bin/sh\nexit 0\n");
+    sandbox.install("pi", "#!/bin/sh\ntouch \"$0.ran\"\n");
+    let home = sandbox.root.path().join("home");
+    let home_str = home.to_string_lossy().into_owned();
+    let env_file = sandbox.root.path().join("a.env");
+    std::fs::write(&env_file, "AGENTRUN_SANDBOX=relax\nZED=1\nALPHA=2\n").unwrap();
+    let outcome = sandbox.run_as(
+        "pi",
+        &[
+            ("HOME", home_str.as_str()),
+            ("AGENTRUN_PI_AUTH", "secret"),
+            ("GH_TOKEN", "token"),
+        ],
+        &[
+            "--dry-run",
+            "--env-file",
+            env_file.to_str().unwrap(),
+            "--env",
+            "GH_TOKEN",
+            "--env",
+            "ZED=3",
+        ],
+        false,
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "command: {} '<prompt 2 bytes>'\nPATH: {}\nset: ZED, ALPHA, GH_TOKEN\nremoved: (none)\nagentrun variables: AGENTRUN_PI_AUTH, AGENTRUN_SANDBOX\n",
+            sandbox.bin().join("pi").display(),
+            sandbox.path_var()
+        )
+    );
+    assert!(outcome.stderr.is_empty());
+    assert!(!home.exists());
+    assert!(!sandbox.bin().join("pi.ran").exists());
+    assert!(sandbox.leftover_tempdirs().is_empty());
+}
+
+#[test]
+fn debug_lists_removed_variables_for_claude_code() {
+    let sandbox = Sandbox::with_output("");
+    let outcome = sandbox.run_as(
+        "claude-code",
+        &[
+            ("CLAUDE_CODE_USE_BEDROCK", "1"),
+            ("ANTHROPIC_API_KEY", "key"),
+            ("AGENTRUN_CODEX_AUTH", "codex"),
+        ],
+        &["--debug", "--env", "ANTHROPIC_API_KEY"],
+        false,
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let lines: Vec<&str> = outcome.stderr.lines().collect();
+    assert_eq!(
+        lines[2..6],
+        [
+            "[debug] set: ANTHROPIC_API_KEY",
+            "[debug] removed: ANTHROPIC_API_KEY, CLAUDE_CODE_USE_BEDROCK",
+            "[debug] agentrun variables: AGENTRUN_CODEX_AUTH",
+            "[debug] credentials: (none)",
+        ]
+    );
+}
+
+#[test]
+fn credential_write_failure_is_rejected_before_tempdir() {
+    let sandbox = Sandbox::new("#!/bin/sh\nexit 0\n");
+    sandbox.install("pi", "#!/bin/sh\ntouch \"$0.ran\"\n");
+    let blocker = sandbox.root.path().join("blocker");
+    std::fs::write(&blocker, "").unwrap();
+    let agent_dir = blocker.join("agent");
+    let outcome = sandbox.run_as(
+        "pi",
+        &[
+            ("PI_CODING_AGENT_DIR", agent_dir.to_str().unwrap()),
+            ("AGENTRUN_PI_AUTH", "secret-value"),
+        ],
+        &[],
+        false,
+    );
+    assert_eq!(outcome.code, 2);
+    let detail = outcome.end()["detail"].as_str().unwrap().to_string();
+    assert!(
+        detail.starts_with(&format!(
+            "cannot write AGENTRUN_PI_AUTH to {}: ",
+            agent_dir.join("auth.json").display()
+        )),
+        "{detail}"
+    );
+    assert!(!outcome.stdout.contains("secret-value"));
+    assert!(!outcome.stderr.contains("secret-value"));
+    assert!(!sandbox.bin().join("pi.ran").exists());
+    assert!(sandbox.leftover_tempdirs().is_empty());
 }
 
 #[test]
