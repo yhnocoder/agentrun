@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentrun 事件与输出</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
+<h1>事件与输出 <span class="tag">草稿</span></h1>
+<p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
+
+<h2>统一事件流</h2>
+<p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
+<pre id="event-types"><code class="language-typescript">type Event =
+  | StartEvent | PromptEvent | ToolEvent | TextEvent | UsageEvent
+  | SubagentStartEvent | SubagentEndEvent | NetworkEvent | EndEvent
+
+interface EventBase {
+  schema: 1                  // 事件格式的版本号
+  type: string
+  time: string               // RFC 3339，UTC，精确到毫秒
+}
+
+// 运行时进程启动后输出一次
+interface StartEvent extends EventBase {
+  type: "start"
+  runtime: "claude-code" | "codex" | "pi"
+  sandbox: "seatbelt" | "bubblewrap" | "codex" | "none"
+  network: {
+    mode: "none" | "full" | "custom"
+    allow: string[]          // --allow-host 的值
+    enforced: boolean        // 网络限制是否由沙箱执行
+  }
+  model: string | null       // --model 的值，未给时为 null
+  cwd: string                // 绝对路径
+  argv: string[]             // 实际执行的完整命令，不含提示词
+  env: string[]              // --env 与 --env-file 设置的变量名，不含值
+}
+
+// start 之后输出一次，内容是传给运行时的提示词
+interface PromptEvent extends EventBase {
+  type: "prompt"
+  text: string
+}
+
+// 一次工具调用结束时输出
+interface ToolEvent extends EventBase {
+  type: "tool"
+  id: string                 // 运行时给出的工具调用 id
+  parent: string | null      // 主 agent 为 null，subagent 内为 subagent_start.id
+  name: string               // 运行时自己的工具名
+  summary: string            // 一行，最长 120 个字符，超出时截断并加省略号
+  denied: boolean            // 这次调用被运行时的权限机制拒绝
+}
+
+// agent 输出一段完整的文字时输出
+interface TextEvent extends EventBase {
+  type: "text"
+  parent: string | null
+  text: string
+}
+
+// 一次模型调用结束时输出；运行时没报告的字段为 null
+interface UsageEvent extends EventBase {
+  type: "usage"
+  parent: string | null
+  model: string | null
+  input_tokens: number | null        // 不含缓存命中的部分
+  output_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  context_tokens: number | null      // 前三项之和，即送进模型的全部上下文
+}
+
+// agent 启动一个 subagent 时输出
+interface SubagentStartEvent extends EventBase {
+  type: "subagent_start"
+  id: string                 // 启动它的工具调用 id
+  parent: string | null
+  number: number             // agentrun 按启动顺序给的编号，从 1 开始
+  kind: string               // subagent 的类型，例如 "Explore"
+  model: string | null       // 启动时给出的模型
+  description: string        // 一行任务描述
+}
+
+// subagent 结束时输出
+interface SubagentEndEvent extends EventBase {
+  type: "subagent_end"
+  id: string
+  status: "finished" | "failed"
+  duration_ms: number
+  usage: Usage               // 这个 subagent 及其内部 subagent 的用量
+}
+
+// 经过过滤代理的连接，每组 host、port、allowed 第一次出现时输出
+interface NetworkEvent extends EventBase {
+  type: "network"
+  host: string
+  port: number
+  allowed: boolean
+  reason: "not_allowed" | "private_address" | null   // 放行时为 null
+}
+
+// 运行结束时输出
+interface EndEvent extends EventBase {
+  type: "end"
+  status: "finished" | "failed" | "interrupted" | "timeout" | "rejected"
+  exit_code: number | null   // 运行时的退出码，未启动或被信号终止时为 null
+  detail: string
+  duration_ms: number        // 从 agentrun 开始解析命令行到输出 end
+  usage: Usage
+  result: string | null      // 主 agent 最后一段文字
+}
+
+interface TokenCounts {
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+}
+
+interface Usage extends TokenCounts {
+  by_model: Record&lt;string, TokenCounts&gt;   // 模型未知时键为 "unknown"
+}</code></pre>
+<p>下面是一次运行的事件流，为了阅读把每行格式化成了多行，实际输出中每个事件占一行。</p>
+<pre><code class="language-json">{
+  "schema": 1,
+  "type": "start",
+  "time": "2026-10-04T13:00:00.000Z",
+  "runtime": "claude-code",
+  "sandbox": "bubblewrap",
+  "network": {
+    "mode": "none",
+    "allow": [],
+    "enforced": true
+  },
+  "model": null,
+  "cwd": "/work/repo",
+  "argv": [
+    "/usr/local/bin/claude",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "..."
+  ],
+  "env": [
+    "GH_TOKEN"
+  ]
+}
+{
+  "schema": 1,
+  "type": "prompt",
+  "time": "2026-10-04T13:00:00.850Z",
+  "text": "给 parse 模块补测试并修复失败"
+}
+{
+  "schema": 1,
+  "type": "subagent_start",
+  "time": "2026-10-04T13:00:03.120Z",
+  "id": "toolu_01",
+  "parent": null,
+  "number": 1,
+  "kind": "Explore",
+  "model": "haiku",
+  "description": "查找所有调用 parse_line 的位置"
+}
+{
+  "schema": 1,
+  "type": "tool",
+  "time": "2026-10-04T13:00:04.410Z",
+  "id": "toolu_02",
+  "parent": "toolu_01",
+  "name": "Grep",
+  "summary": "Grep: parse_line",
+  "denied": false
+}
+{
+  "schema": 1,
+  "type": "usage",
+  "time": "2026-10-04T13:00:05.002Z",
+  "parent": "toolu_01",
+  "model": "claude-haiku-4-5",
+  "input_tokens": 3120,
+  "output_tokens": 85,
+  "cache_read_tokens": 9800,
+  "cache_write_tokens": 1200,
+  "context_tokens": 14120
+}
+{
+  "schema": 1,
+  "type": "subagent_end",
+  "time": "2026-10-04T13:00:15.530Z",
+  "id": "toolu_01",
+  "status": "finished",
+  "duration_ms": 12400,
+  "usage": {
+    "input_tokens": 3120,
+    "output_tokens": 85,
+    "cache_read_tokens": 9800,
+    "cache_write_tokens": 1200,
+    "by_model": {
+      "claude-haiku-4-5": {
+        "input_tokens": 3120,
+        "output_tokens": 85,
+        "cache_read_tokens": 9800,
+        "cache_write_tokens": 1200
+      }
+    }
+  }
+}
+{
+  "schema": 1,
+  "type": "tool",
+  "time": "2026-10-04T13:00:16.880Z",
+  "id": "toolu_03",
+  "parent": null,
+  "name": "Bash",
+  "summary": "Bash: cargo test",
+  "denied": false
+}
+{
+  "schema": 1,
+  "type": "text",
+  "time": "2026-10-04T13:00:31.100Z",
+  "parent": null,
+  "text": "测试全部通过。"
+}
+{
+  "schema": 1,
+  "type": "end",
+  "time": "2026-10-04T13:00:31.250Z",
+  "status": "finished",
+  "exit_code": 0,
+  "detail": "",
+  "duration_ms": 31250,
+  "usage": {
+    "input_tokens": 18234,
+    "output_tokens": 912,
+    "cache_read_tokens": 42000,
+    "cache_write_tokens": 5100,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "input_tokens": 15114,
+        "output_tokens": 827,
+        "cache_read_tokens": 32200,
+        "cache_write_tokens": 3900
+      },
+      "claude-haiku-4-5": {
+        "input_tokens": 3120,
+        "output_tokens": 85,
+        "cache_read_tokens": 9800,
+        "cache_write_tokens": 1200
+      }
+    }
+  },
+  "result": "测试全部通过。"
+}</code></pre>
+<h3>提示词</h3>
+<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。运行时不回显时（codex，待实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。</p>
+
+<p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
+
+<h3>tool 事件在调用结束时输出</h3>
+<p><code>tool</code> 在收到这次调用的结果时输出，因为调用是否被拒绝要在调用之后才知道。运行时结束时还没有结果的调用，在 <code>end</code> 之前补发。被拒绝的调用不改变 <code>end.status</code>：运行时会把拒绝结果交还模型，由模型决定下一步，是否算失败由调用方根据 <code>denied</code> 判断。不提供「被拒绝即停止」的选项。</p>
+<p><code>denied</code> 只表示运行时权限机制的拒绝，例如 claude-code 的 auto 模式分类器拒绝一条命令。被沙箱拦下的命令表现为命令出错，<code>denied</code> 为 false。pi 没有权限机制，<code>denied</code> 恒为 false。</p>
+
+<h3>subagent 与 parent</h3>
+<p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code> 与 <code>subagent_end</code>，不输出 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
+<p>主 agent 与多个 subagent 可以同时运行，它们的事件在流里交错出现。<code>id</code> 是运行时给出的工具调用 id，较长，用于关联事件；<code>number</code> 用于显示。</p>
+<p>运行结束时还没结束的 subagent，在 <code>end</code> 之前补发 <code>status</code> 为 <code>failed</code> 的 <code>subagent_end</code>，<code>duration_ms</code> 记到运行结束时。subagent 失败不改变 <code>end.status</code>，理由是主 agent 可能已经处理了它的失败并完成任务。</p>
+<p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭；pi 没有 subagent。</p>
+
+<h3>用量</h3>
+<p>用量属于一次模型调用，一次调用会产生多个 <code>tool</code> 与 <code>text</code> 事件，所以用量单独成一个 <code>usage</code> 事件，不附在其他事件上。</p>
+<ul>
+  <li>claude-code 与 pi 每次模型调用都报告用量与模型，每次调用输出一个 <code>usage</code> 事件。codex 每轮结束时报告一次，每轮一个 <code>usage</code> 事件。</li>
+  <li><code>input_tokens</code> 不含缓存命中的部分，三个运行时含义一致；<code>context_tokens</code> 是 <code>input_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和。</li>
+  <li>运行时没报告的字段为 null。codex 没有 <code>cache_write_tokens</code> 与 <code>context_tokens</code>。</li>
+  <li>运行时自己生成、没有调用模型的消息（claude-code 里 model 为 <code>&lt;synthetic&gt;</code> 的错误文字）不输出 <code>usage</code>。</li>
+</ul>
+<p><code>end.usage</code> 取运行时自己报告的整次运行总量；运行时没有总量时（pi、codex）取全部 <code>usage</code> 事件的合计。claude-code 的总量里有它内部的一笔 haiku 调用（auto 模式的分类器），这笔调用没有对应的 <code>usage</code> 事件，所以 <code>end.usage</code> 可能大于 <code>usage</code> 事件之和。理由：与实际计费一致。<code>subagent_end.usage</code> 是 parent 链上属于这个 subagent 的 <code>usage</code> 事件之和，只用于展示，已经包含在 <code>end.usage</code> 里。</p>
+<p><code>end.usage</code> 的字段为 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>，另有 <code>by_model</code> 按模型给出同样的四个字段，模型未知时键为 <code>unknown</code>。所有来源都没报告的字段为 null；一次运行没有任何用量时四个总量为 null，<code>by_model</code> 为 <code>{}</code>。</p>
+
+<h2 id="status">end.status</h2>
+<p>按表中从上到下的顺序取第一个成立的状态。理由：超时或被中断时，运行时可能已经输出了失败事件（例如 claude-code 收到 SIGINT 后的 result 为错误），这时调用方需要知道的是超时或中断。</p>
+<table>
+  <thead>
+    <tr><th>status</th><th>条件</th><th>agentrun 退出码</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>rejected</code></td><td>启动前失败，情形见<a href="run.html#preflight">启动前检查</a></td><td>2</td></tr>
+    <tr><td><code>interrupted</code></td><td>agentrun 收到 SIGINT 或 SIGTERM，以第一个信号为准</td><td>130 或 143</td></tr>
+    <tr><td><code>timeout</code></td><td>超过 <code>--timeout</code></td><td>3</td></tr>
+    <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="run.html">运行</a>。三个运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>
+    <tr><td><code>finished</code></td><td>以上都不成立</td><td>0</td></tr>
+  </tbody>
+</table>
+<ul>
+  <li><code>detail</code>：<code>failed</code> 时是运行时给出的错误信息，没有时是标准错误的最后 500 个字符，再没有时是一句固定说明；<code>rejected</code> 时是原因与修正方法；其余为空字符串。</li>
+  <li><code>result</code>：主 agent 最后一段文字，没有时为 null。调用方只需要答案时读这一项。</li>
+  <li><code>interrupted</code> 与 <code>timeout</code> 时，<code>result</code> 与 <code>usage</code> 照常取已经收到的内容。</li>
+</ul>
+
+<h2>text 格式</h2>
+<p><code>--format text</code> 每个事件一行，格式是 <code>[agent 标签] 事件类型 内容</code>。主 agent 的标签是 <code>main</code>，subagent 的标签是小写的类型加编号，例如 <code>explore#1</code>、<code>general-purpose#2</code>。没有 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部输出。</p>
+<ul>
+  <li><code>tool</code>：<code>tool</code> 加 <code>summary</code>。被拒绝时在 <code>summary</code> 后紧接 <code>（被拒绝）</code>。</li>
+  <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。</li>
+  <li><code>text</code>：文字的第一行。</li>
+  <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写 <code>agent 启动 标签（模型）：描述</code>，模型未知时省去括号。</li>
+  <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写状态、耗时、模型与 token 用量。</li>
+  <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net 拒绝 主机:端口（原因）</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
+  <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s in X out Y cache read Z write W</code>，后接 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。</li>
+  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
+</ul>
+<p>一个 agent 显示的模型取它最近一次 <code>usage</code> 的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"
+<span class="dim">[main]</span> prompt 给 parse 模块补测试并修复失败
+<span class="dim">[main]</span> tool Read: src/parse.rs
+<span class="dim">[main]</span> agent 启动 explore#1（haiku）：查找所有调用 parse_line 的位置
+<span class="dim">[main]</span> agent 启动 general-purpose#2：为 parse_line 写边界测试
+<span class="dim">[explore#1]</span> tool Grep: parse_line
+<span class="dim">[general-purpose#2]</span> tool Read: tests/parse.rs
+<span class="dim">[main]</span> tool Bash: cat ~/.ssh/id_rsa（被拒绝）
+<span class="dim">[explore#1]</span> text 共 3 处调用，都在 src/cli.rs。
+<span class="dim">[explore#1]</span> agent finished 12.4s claude-haiku-4-5 in 3120 out 85
+<span class="dim">[general-purpose#2]</span> tool Edit: tests/parse.rs
+<span class="dim">[main]</span> tool Edit: src/parse.rs
+<span class="dim">[general-purpose#2]</span> agent finished 20.8s claude-sonnet-5-5 in 9410 out 512
+<span class="dim">[main]</span> tool Bash: cargo test
+<span class="dim">[main]</span> text 修复了 parse_line 对空行的处理，测试全部通过。
+<span class="dim">[end]</span> finished 31.3s in 18234 out 912 cache read 42000 write 5100</div>
+
+<h2>rich 格式</h2>
+<p><code>--format rich</code> 在终端里显示动态界面，分三个区域。标准输出不是终端时，<code>rich</code> 按 <code>text</code> 输出。</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --prompt "给 parse 模块补测试并修复失败"
+<span class="dim">[main]</span> prompt 给 parse 模块补测试并修复失败 <span class="ref">1</span>
+<span class="dim">[main]</span> tool Read: src/parse.rs
+<span class="dim">[main]</span> agent 启动 explore#1（haiku）：查找所有调用 parse_line 的位置
+<span class="dim">[main]</span> agent 启动 general-purpose#2：为 parse_line 写边界测试
+<span class="dim">[main]</span> agent 启动 explore#3（haiku）：确认测试框架与运行方式
+<span class="dim">[explore#1]</span> tool Grep: parse_line
+<span class="dim">[general-purpose#2]</span> tool Read: tests/parse.rs
+<span class="dim">[explore#3]</span> agent finished 6.2s claude-haiku-4-5 in 1830 out 40
+<span class="dim">───────────────────────────────────────────────────────────────────────────</span>
+subagent  2 个运行中 <span class="ref">2</span>
+  ⠙ explore#1          claude-haiku-4-5   查找所有调用 parse_line 的位置   Read: src/cli.rs       0:11  ctx 14.1k
+  ⠹ general-purpose#2  claude-sonnet-5-5  为 parse_line 写边界测试         Edit: tests/parse.rs   0:09  ctx 22.4k
+<span class="dim">───────────────────────────────────────────────────────────────────────────</span>
+⠸ main  claude-sonnet-5-5  Bash: cargo check   0:24   in 18.2k out 0.9k cache 42.0k   ctx 61.3k <span class="ref">3</span></div>
+<ol class="callouts">
+  <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
+  <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 个运行中」。终端宽度不够时截断描述。</li>
+  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计 token 用量（包括 subagent）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
+</ol>
+<p>「正在执行的工具」在调用开始时就要显示，而 <code>tool</code> 事件在调用结束时才输出，所以 rich 从解析器内部记录的「已开始、未结束的调用」取这一项，不从事件流取。</p>
+</main>
+</body>
+</html>

@@ -1,13 +1,19 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["playwright"]
+# dependencies = ["playwright", "cryptography"]
 # ///
 import argparse
+import base64
+import os
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from cryptography import x509
+from cryptography.utils import CryptographyDeprecationWarning
+from cryptography.hazmat.primitives import hashes, serialization
 from playwright.sync_api import Error, sync_playwright
 
 PAGE_TIMEOUT_MS = 15000
@@ -92,17 +98,60 @@ def check(browser, root, html, out):
     return rel, errors
 
 
+def spki_hash(pem):
+    try:
+        cert = x509.load_pem_x509_certificate(pem)
+    except ValueError:
+        return None
+    spki = cert.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(spki)
+    return base64.b64encode(digest.finalize()).decode()
+
+
+def spki_hashes(bundle):
+    end = b"-----END CERTIFICATE-----"
+    blocks = [block + end for block in Path(bundle).read_bytes().split(end) if b"BEGIN" in block]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", CryptographyDeprecationWarning)
+        return [h for h in map(spki_hash, blocks) if h]
+
+
+def proxy_options():
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if not proxy:
+        return {}
+    options = {"proxy": {"server": proxy}}
+    bundle = os.environ.get("SSL_CERT_FILE")
+    if bundle and Path(bundle).is_file():
+        options["args"] = ["--ignore-certificate-errors-spki-list=" + ",".join(spki_hashes(bundle))]
+    return options
+
+
+def launch(p, browser):
+    options = proxy_options()
+    if browser == "chrome":
+        return p.chromium.launch(channel="chrome", **options)
+    bundled = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")) / "chromium"
+    if bundled.is_file():
+        return p.chromium.launch(executable_path=bundled, **options)
+    return p.chromium.launch(**options)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("root", nargs="?", default="docs/design", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--browser", choices=["chrome", "chromium"], default="chrome")
     args = parser.parse_args()
     root = args.root.resolve()
     out = args.out or Path(tempfile.mkdtemp())
     out.mkdir(parents=True, exist_ok=True)
     failed = False
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome")
+        browser = launch(p, args.browser)
         for html in sorted(root.rglob("*.html")):
             rel, errors = check(browser, root, html, out)
             print(f"{'FAIL' if errors else 'PASS'} {rel}")

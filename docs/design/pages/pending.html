@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentrun 待定与待实测</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · 待定</p>
+<h1>待定与待实测 <span class="tag">草稿</span></h1>
+<p class="lead">其他页面写的是已经确定的设计。本页列出<mark>还没有定的提案</mark>和还没有实测的假设，每项写明建议或怎么验证。定下来或测完后，内容移到对应页面，从本页删除。</p>
+
+<h2>待定的提案</h2>
+<h3>codex 不读用户配置的做法</h3>
+<p>要求是 codex 只使用用户的登录信息，不读用户的配置、规则与技能。提案是给 codex 一个独立的配置目录：会话临时目录下的 <code>codex-home/</code>（0700），里面只有登录信息。登录信息怎么放进去取决于 codex 刷新令牌时怎么写 <code>auth.json</code>：</p>
+<ul>
+  <li>codex 原地改写 <code>auth.json</code>：用符号链接指向用户的 <code>auth.json</code>。</li>
+  <li>codex 写临时文件再重命名：启动前复制一份（0600），运行结束后内容变了就原子写回用户的 <code>auth.json</code>，在删除临时目录之前，<code>interrupted</code>、<code>timeout</code>、<code>failed</code> 时也写回。理由：OpenAI 的刷新令牌可能用后失效，只留在临时目录会让用户的登录失效。代价：这会改写用户的登录文件；两个并发运行都刷新令牌时，后写回的一个生效。</li>
+</ul>
+<p>建议：等 macOS 与本机 Linux 的实测确定 codex 的写法后再选。还要确认独立配置目录下 codex 是否仍读取 <code>/etc/codex</code> 或工作目录里的 <code>.codex/</code>。</p>
+
+<h2>待实测</h2>
+<table>
+  <thead>
+    <tr><th>假设</th><th>影响</th><th>怎么验证</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>codex 的参数名、事件字段、<code>input_tokens</code> 是否含缓存部分、事件里是否有模型名</td><td>codex 适配的全部内容</td><td>macOS 与本机 Linux 实测，保存样本</td></tr>
+    <tr><td>codex 的 subagent 在事件流里的样子，能否关闭</td><td><code>subagent_start</code> 与 <code>--no-subagents</code></td><td>同上</td></tr>
+    <tr><td>codex 的 Linux 沙箱是什么实现，在 docker 里启动失败时怎么表现</td><td>旧样本显示它可能以退出码 0 结束却没有执行任何命令。<code>--sandbox on</code> 需要在启动前或运行中发现这种情况</td><td>本机 Linux 与 docker 实测；有可靠特征时加一条失败条件</td></tr>
+    <tr><td>codex 能否把沙箱流量交给外部代理，打开网页搜索的参数名</td><td><code>--network custom</code> 与 <code>full</code> 对 codex 是否可用</td><td>本机实测</td></tr>
+    <tr><td>codex 收到 SIGINT 与 SIGTERM 后的退出码与最后的事件</td><td>只影响 <code>detail</code>，状态由 agentrun 自己的信号记录决定</td><td>本机实测</td></tr>
+    <tr><td>claude-code 用 <code>--input-format stream-json</code> 传入多行或很长的提示词时是否正常；收到 SIGINT 时与有 subagent 时回显与退出是否照常</td><td><code>prompt</code> 事件与 claude-code 的启动方式</td><td>云端实测</td></tr>
+    <tr><td>codex 的输出里是否有提示词</td><td><code>prompt</code> 事件的来源</td><td>macOS 与本机 Linux 实测</td></tr>
+    <tr><td>claude-code 的沙箱设置 <code>failIfUnavailable</code>、<code>filesystem.allowWrite</code>、空的 <code>allowedDomains</code> 是否生效</td><td>沙箱失败能否被发现；写范围</td><td>云端实测</td></tr>
+    <tr><td>claude-code 的沙箱允许写 <code>/tmp</code>（云端实测），能否用设置收紧</td><td>写范围比设计宽</td><td>云端实测 <code>filesystem</code> 相关设置</td></tr>
+    <tr><td>claude-code 的 Edit 与 Write 工具能否写到工作目录以外</td><td>剩余风险表</td><td>云端实测，沙箱打开时让 Write 写 <code>$HOME</code></td></tr>
+    <tr><td>claude-code 用外部代理时是否仍按 <code>allowedDomains</code> 过滤</td><td><code>--network full|custom</code> 的做法</td><td>云端实测</td></tr>
+    <tr><td>macOS 上 Seatbelt 包裹 pi 时 node 还需要哪些可写路径（缓存目录、<code>/dev/tty</code> 等）</td><td>pi 的 Seatbelt 配置</td><td>macOS 实测</td></tr>
+    <tr><td>沙箱里命令看到的 <code>TMPDIR</code> 是否仍是会话临时目录</td><td>临时文件的位置</td><td>macOS 与 Linux 实测</td></tr>
+    <tr><td>pi 的模型服务主机表是否够用</td><td><code>--network none</code> 下 pi 能否访问模型</td><td>实现时用 <code>network</code> 事件核对</td></tr>
+    <tr><td>Cloud Managed 容器里宿主设置的几十个 <code>CLAUDE_</code> 变量是否影响 claude-code 的行为</td><td>是否需要扩大删除规则；目前不扩大，因为其中有登录需要的变量</td><td>云端对比实测</td></tr>
+  </tbody>
+</table>
+</main>
+</body>
+</html>
