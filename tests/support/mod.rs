@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use agentrun::adapter::Adapter;
 use agentrun::aggregate::Aggregator;
-use agentrun::cli::{Cli, Format, SandboxMode};
+use agentrun::cli::{Cli, Format, Runtime, SandboxMode};
 use agentrun::event::SandboxKind;
 use agentrun::run::{Exit, Invocation, conclude, stderr_tail, translate_line};
 use agentrun::sandbox::Sandbox;
+use agentrun::session::Session;
 use clap::Parser;
 use serde_json::Value;
 
@@ -28,8 +29,8 @@ pub fn read_meta(path: &Path) -> Option<Meta> {
     })
 }
 
-pub fn invocation(cwd: &Path, prompt: &str, sandboxed: bool) -> Invocation {
-    let cli = Cli::try_parse_from(["agentrun", "claude-code", "--prompt", prompt]).unwrap();
+pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -> Invocation {
+    let cli = Cli::try_parse_from(["agentrun", runtime.name(), "--prompt", prompt]).unwrap();
     let (runtime, args) = cli.command.into_parts();
     Invocation {
         runtime,
@@ -45,10 +46,11 @@ pub fn invocation(cwd: &Path, prompt: &str, sandboxed: bool) -> Invocation {
                 SandboxKind::None
             },
             reason: String::new(),
-            bwrap: None,
+            bwrap: sandboxed.then(|| PathBuf::from("/usr/bin/bwrap")),
             description: String::new(),
         },
-        tempdir: PathBuf::from("/tmp/agentrun-replay"),
+        tempdir: PathBuf::new(),
+        session: Session::assemble(runtime, &[], &[], &[], &[]),
     }
 }
 
@@ -63,10 +65,14 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
                 .replace(".raw.jsonl", ".meta.json"),
         ),
     );
+    let tempdir = tempfile::tempdir().expect("replay tempdir");
     let (exit, stderr) = match &meta {
         Some(meta) => {
+            let runtime = adapter.runtime();
+            let mut invocation = invocation(runtime, &meta.cwd, prompt, true);
+            invocation.tempdir = tempdir.path().to_path_buf();
             adapter
-                .launch(Path::new("claude"), &invocation(&meta.cwd, prompt, true))
+                .launch(Path::new(runtime.executable()), &invocation)
                 .unwrap();
             let exit = Exit {
                 code: meta.exit_code,

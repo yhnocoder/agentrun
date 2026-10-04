@@ -32,6 +32,12 @@ impl Env {
         env
     }
 
+    fn with_fake_codex() -> Env {
+        let env = Env::new();
+        env.install("codex", "#!/bin/sh\nexit 0\n");
+        env
+    }
+
     fn install(&self, name: &str, script: &str) {
         let path = self.bin().join(name);
         std::fs::write(&path, script).unwrap();
@@ -271,23 +277,8 @@ fn runtime_missing_from_path_is_rejected() {
 }
 
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
-const ADAPTER_MISSING: &str = "pi support is not implemented in this build";
-
-fn assert_rejected_with_debug(output: &Output, debug_lines: &[&str]) -> String {
-    assert_eq!(output.status.code(), Some(2));
-    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
-    let end: Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(end["status"], "rejected");
-    let detail = end["detail"].as_str().unwrap().to_string();
-    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
-    let mut expected: Vec<String> = debug_lines
-        .iter()
-        .map(|line| format!("[debug] {line}\n"))
-        .collect();
-    expected.push(format!("agentrun: {detail}\n"));
-    assert_eq!(stderr, expected.concat());
-    detail
-}
+const ADAPTER_MISSING: &str = "codex support is not implemented in this build";
+const PI_SANDBOX_PENDING: &str = "pi in the sandbox needs the filter proxy to reach its model service, which is not implemented in this build. Use --sandbox off";
 
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
@@ -306,13 +297,19 @@ fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
 #[test]
 fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
     let env = Env::with_fake_pi();
-    let output = env.run(&["pi", "--sandbox", "relax", "--debug", "--prompt", "hi"]);
+    let output = env.run(&[
+        "pi",
+        "--sandbox",
+        "relax",
+        "--debug",
+        "--dry-run",
+        "--prompt",
+        "hi",
+    ]);
+    assert_dry_run(&output);
     assert_eq!(
-        assert_rejected_with_debug(
-            &output,
-            &["sandbox: none (--sandbox relax: bwrap not found in PATH)"]
-        ),
-        ADAPTER_MISSING
+        String::from_utf8(output.stderr).unwrap(),
+        "[debug] sandbox: none (--sandbox relax: bwrap not found in PATH)\n"
     );
 }
 
@@ -360,37 +357,59 @@ fn missing_socat_is_rejected() {
     );
 }
 
+fn assert_dry_run(output: &Output) {
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(stdout.starts_with("command: "), "{stdout}");
+}
+
 #[test]
 fn sandbox_variable_from_every_source_and_option_precedence() {
     let env = Env::with_fake_pi();
     let output = env
-        .command(&["pi", "--prompt", "hi"])
+        .command(&["pi", "--dry-run", "--prompt", "hi"])
         .env("AGENTRUN_SANDBOX", "off")
         .output()
         .unwrap();
-    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
+    assert_dry_run(&output);
     let output = env
-        .command(&["pi", "--env", "AGENTRUN_SANDBOX", "--prompt", "hi"])
+        .command(&[
+            "pi",
+            "--dry-run",
+            "--env",
+            "AGENTRUN_SANDBOX",
+            "--prompt",
+            "hi",
+        ])
         .env("AGENTRUN_SANDBOX", "off")
         .output()
         .unwrap();
-    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
-    assert_eq!(
-        assert_rejected(&env.run(&["pi", "--env", "AGENTRUN_SANDBOX=off", "--prompt", "hi"])),
-        ADAPTER_MISSING
-    );
+    assert_dry_run(&output);
+    assert_dry_run(&env.run(&[
+        "pi",
+        "--dry-run",
+        "--env",
+        "AGENTRUN_SANDBOX=off",
+        "--prompt",
+        "hi",
+    ]));
     std::fs::write(
         env.root.path().join("sandbox.env"),
         "AGENTRUN_SANDBOX=off\n",
     )
     .unwrap();
-    assert_eq!(
-        assert_rejected(&env.run(&["pi", "--env-file", "sandbox.env", "--prompt", "hi"])),
-        ADAPTER_MISSING
-    );
+    assert_dry_run(&env.run(&[
+        "pi",
+        "--dry-run",
+        "--env-file",
+        "sandbox.env",
+        "--prompt",
+        "hi",
+    ]));
     assert_eq!(
         assert_rejected(&env.run(&[
             "pi",
+            "--dry-run",
             "--env-file",
             "sandbox.env",
             "--sandbox",
@@ -478,10 +497,21 @@ fn real_bwrap_passes_the_sandbox_step() {
     );
     assert_eq!(
         stderr.lines().nth(1),
-        Some(format!("agentrun: {ADAPTER_MISSING}").as_str())
+        Some(format!("agentrun: {PI_SANDBOX_PENDING}").as_str())
     );
     let output = env
-        .command(&["pi", "--network", "full", "--prompt", "hi"])
+        .command(&["pi", "--dry-run", "--prompt", "hi"])
+        .env(
+            "PATH",
+            format!("{}:{}", env.bin().display(), system.display()),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(assert_rejected(&output), PI_SANDBOX_PENDING);
+    assert!(env.no_leftover_tempdirs());
+    env.install("claude", "#!/bin/sh\nexit 0\n");
+    let output = env
+        .command(&["claude-code", "--network", "full", "--prompt", "hi"])
         .env(
             "PATH",
             format!("{}:{}", env.bin().display(), system.display()),
@@ -496,11 +526,10 @@ fn real_bwrap_passes_the_sandbox_step() {
 
 #[test]
 fn missing_adapter_is_rejected_without_tempdir() {
-    let env = Env::new();
-    env.install("pi", "#!/bin/sh\nexit 0\n");
+    let env = Env::with_fake_codex();
     assert_eq!(
-        assert_rejected(&env.run(&["pi", "--sandbox", "off", "--prompt", "hi"])),
-        "pi support is not implemented in this build"
+        assert_rejected(&env.run(&["codex", "--sandbox", "off", "--prompt", "hi"])),
+        ADAPTER_MISSING
     );
     assert!(env.no_leftover_tempdirs());
 }
@@ -553,13 +582,12 @@ fn malformed_env_file_line_is_rejected_without_its_content() {
 
 #[test]
 fn runtime_is_found_through_path_option() {
-    let env = Env::new();
-    env.install("pi", "#!/bin/sh\nexit 0\n");
+    let env = Env::with_fake_codex();
     let empty = env.root.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
     let output = env
         .command(&[
-            "pi",
+            "codex",
             "--sandbox",
             "off",
             "--path",
@@ -570,16 +598,13 @@ fn runtime_is_found_through_path_option() {
         .env("PATH", &empty)
         .output()
         .unwrap();
-    assert_eq!(
-        assert_rejected(&output),
-        "pi support is not implemented in this build"
-    );
+    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
     let output = env
-        .command(&["pi", "--sandbox", "off", "--prompt", "hi"])
+        .command(&["codex", "--sandbox", "off", "--prompt", "hi"])
         .env("PATH", &empty)
         .output()
         .unwrap();
-    assert_eq!(assert_rejected(&output), "pi not found in PATH");
+    assert_eq!(assert_rejected(&output), "codex not found in PATH");
 }
 
 #[test]

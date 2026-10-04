@@ -1,0 +1,1 @@
+{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"Error: Unknown option: --no-such-flag-probe","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}

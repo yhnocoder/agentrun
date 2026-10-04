@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-8f286e73/failure-samples-pi/arg", "exit_code": 1, "stderr": "Error: Unknown option: --no-such-flag-probe\n"}

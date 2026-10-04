@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-8f286e73/failure-samples-pi/model", "exit_code": 0, "stderr": "Warning: Model \"no-such-model-probe\" not found for provider \"deepseek\". Using custom model id.\n"}

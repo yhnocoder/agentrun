@@ -936,58 +936,6 @@ fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
 }
 
 #[test]
-fn pi_state_dir_is_created_when_the_sandbox_runs() {
-    if !bwrap_available() {
-        return;
-    }
-    let sandbox = Sandbox::new("#!/bin/sh\nexit 0\n");
-    sandbox.install("pi", "#!/bin/sh\nexit 0\n");
-    let home = sandbox.root.path().join("home");
-    let home_str = home.to_string_lossy().into_owned();
-    let outcome = sandbox.run_as(
-        "pi",
-        &[("HOME", home_str.as_str())],
-        &["--sandbox", "on"],
-        false,
-    );
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    let state = home.join(".pi/agent");
-    assert!(state.is_dir());
-    for created in [home.clone(), home.join(".pi"), state] {
-        let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", created.display());
-    }
-    let off = sandbox.root.path().join("home-off");
-    let outcome = sandbox.run_as(
-        "pi",
-        &[("HOME", off.to_str().unwrap())],
-        &["--sandbox", "off"],
-        false,
-    );
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    assert!(!off.exists());
-    let blocker = sandbox.root.path().join("blocker");
-    std::fs::write(&blocker, "").unwrap();
-    let blocked = blocker.join("agent");
-    let outcome = sandbox.run_as(
-        "pi",
-        &[("PI_CODING_AGENT_DIR", blocked.to_str().unwrap())],
-        &["--sandbox", "on"],
-        false,
-    );
-    assert_eq!(outcome.code, 2);
-    let detail = outcome.end()["detail"].as_str().unwrap().to_string();
-    assert!(
-        detail.starts_with(&format!(
-            "cannot create pi state directory {}: ",
-            blocked.display()
-        )),
-        "{detail}"
-    );
-    assert!(sandbox.leftover_tempdirs().is_empty());
-}
-
-#[test]
 fn replay_fake_fixture() {
     support::assert_replay(
         &mut FakeAdapter::new(false),

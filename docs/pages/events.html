@@ -267,7 +267,7 @@ interface Usage extends TokenCounts {
   "result": "测试全部通过。"
 }</code></pre>
 <h3>提示词</h3>
-<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。运行时不回显时（codex，待实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。</p>
+<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。</p>
 
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
@@ -279,14 +279,14 @@ interface Usage extends TokenCounts {
 <p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code> 与 <code>subagent_end</code>，不输出 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
 <p>主 agent 与多个 subagent 可以同时运行，它们的事件在流里交错出现。<code>id</code> 是运行时给出的工具调用 id，较长，用于关联事件；<code>number</code> 用于显示。</p>
 <p>运行结束时还没结束的 subagent，在 <code>end</code> 之前补发 <code>status</code> 为 <code>failed</code> 的 <code>subagent_end</code>，<code>duration_ms</code> 记到运行结束时。subagent 失败不改变 <code>end.status</code>，理由是主 agent 可能已经处理了它的失败并完成任务。</p>
-<p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭；pi 没有 subagent。</p>
+<p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭；pi 没有 subagent。codex 的输出里没有 subagent 的启动事件与 subagent 内部的事件，所以 codex 的事件流里没有 <code>subagent_start</code> 与 <code>subagent_end</code>，subagent 做的事不出现在事件流里（codex 0.159.2 实测）。</p>
 
 <h3>用量</h3>
 <p>用量属于一次模型调用，一次调用会产生多个 <code>tool</code> 与 <code>text</code> 事件，所以用量单独成一个 <code>usage</code> 事件，不附在其他事件上。</p>
 <ul>
   <li>claude-code 与 pi 每次模型调用都报告用量与模型，每次调用输出一个 <code>usage</code> 事件。codex 每轮结束时报告一次，每轮一个 <code>usage</code> 事件。</li>
   <li><code>input_tokens</code> 不含缓存命中的部分，三个运行时含义一致；<code>context_tokens</code> 是 <code>input_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和。</li>
-  <li>运行时没报告的字段为 null。codex 没有 <code>cache_write_tokens</code> 与 <code>context_tokens</code>。</li>
+  <li>运行时没报告的字段为 null。codex 的事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null。</li>
   <li>运行时自己生成、没有调用模型的消息（claude-code 里 model 为 <code>&lt;synthetic&gt;</code> 的错误文字）不输出 <code>usage</code>。</li>
 </ul>
 <p><code>end.usage</code> 取运行时自己报告的整次运行总量；运行时没有总量时（pi、codex）取全部 <code>usage</code> 事件的合计。claude-code 的总量里有它内部的一笔 haiku 调用（auto 模式的分类器），这笔调用没有对应的 <code>usage</code> 事件，所以 <code>end.usage</code> 可能大于 <code>usage</code> 事件之和。理由：与实际计费一致。<code>subagent_end.usage</code> 是 parent 链上属于这个 subagent 的 <code>usage</code> 事件之和，只用于展示，已经包含在 <code>end.usage</code> 里。</p>

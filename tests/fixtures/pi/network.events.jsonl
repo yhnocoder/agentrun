@@ -1,0 +1,6 @@
+{"schema":1,"type":"prompt","text":"Run this shell command and reply with only the HTTP status code it prints, or the error message if it fails: curl -sS -m 20 -o /dev/null -w '%{http_code}' https://api.github.com/"}
+{"schema":1,"type":"usage","parent":null,"model":"deepseek/deepseek-flash","input_tokens":1747,"output_tokens":94,"cache_read_tokens":512,"cache_write_tokens":0,"context_tokens":2259}
+{"schema":1,"type":"tool","id":"call_00_ZVN1kXxyYTKqun6NLEFH2087","parent":null,"name":"bash","summary":"bash: curl -sS -m 20 -o /dev/null -w '%{http_code}' https://api.github.com/","denied":false}
+{"schema":1,"type":"text","parent":null,"text":"curl: (56) CONNECT tunnel failed, response 403"}
+{"schema":1,"type":"usage","parent":null,"model":"deepseek/deepseek-flash","input_tokens":211,"output_tokens":156,"cache_read_tokens":2176,"cache_write_tokens":0,"context_tokens":2387}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":1958,"output_tokens":250,"cache_read_tokens":2688,"cache_write_tokens":0,"by_model":{"deepseek/deepseek-flash":{"input_tokens":1958,"output_tokens":250,"cache_read_tokens":2688,"cache_write_tokens":0}}},"result":"curl: (56) CONNECT tunnel failed, response 403"}
