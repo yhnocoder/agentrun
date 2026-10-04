@@ -123,7 +123,7 @@ impl TextFormatter {
                     line.push(' ');
                     line.push_str(model);
                 }
-                line.push_str(&in_out(&end.usage.totals));
+                line.push_str(&usage_items(&end.usage.totals));
                 vec![line]
             }
             Body::Network(network) => match network.reason {
@@ -139,20 +139,10 @@ impl TextFormatter {
                 if end.status == EndStatus::Rejected {
                     return vec![format!("[end] rejected {}", end.detail)];
                 }
-                let counts = &end.usage.totals;
                 let mut line = format!("[end] {} {}", end.status.name(), seconds(end.duration_ms));
-                line.push_str(&in_out(counts));
-                if counts.cache_read_tokens.is_some() || counts.cache_write_tokens.is_some() {
-                    line.push_str(" cache");
-                    if let Some(read) = counts.cache_read_tokens {
-                        line.push_str(&format!(" read {read}"));
-                    }
-                    if let Some(write) = counts.cache_write_tokens {
-                        line.push_str(&format!(" write {write}"));
-                    }
-                }
+                line.push_str(&usage_items(&end.usage.totals));
                 if !end.detail.is_empty() {
-                    line.push(' ');
+                    line.push_str("  ");
                     line.push_str(&end.detail);
                 }
                 vec![line]
@@ -195,15 +185,12 @@ fn seconds(duration_ms: u64) -> String {
     format!("{}.{}s", tenths / 10, tenths % 10)
 }
 
-fn in_out(counts: &TokenCounts) -> String {
-    let mut text = String::new();
-    if let Some(input) = counts.input_tokens {
-        text.push_str(&format!(" in {input}"));
-    }
-    if let Some(output) = counts.output_tokens {
-        text.push_str(&format!(" out {output}"));
-    }
-    text
+fn usage_items(counts: &TokenCounts) -> String {
+    counts
+        .summary(true)
+        .iter()
+        .map(|item| format!("  {item}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -369,7 +356,7 @@ mod tests {
                     by_model: Default::default(),
                 },
             }))),
-            vec!["[explore#1] agent finished 12.4s claude-haiku-4-5 in 3120 out 85"]
+            vec!["[explore#1] agent finished 12.4s claude-haiku-4-5  in 3.1k  out 85  cached 0%"]
         );
         assert_eq!(
             text.lines(&event(Body::SubagentEnd(SubagentEnd {
@@ -414,7 +401,7 @@ mod tests {
                 "",
                 counts(Some(18234), Some(912), Some(42000), Some(5100))
             )),
-            vec!["[end] finished 31.3s in 18234 out 912 cache read 42000 write 5100"]
+            vec!["[end] finished 31.3s  in 65.3k  out 0.9k  cached 64%"]
         );
         assert_eq!(
             text.lines(&end(
@@ -422,7 +409,7 @@ mod tests {
                 "boom",
                 counts(None, Some(3), None, Some(4))
             )),
-            vec!["[end] failed 31.3s out 3 cache write 4 boom"]
+            vec!["[end] failed 31.3s  in 4  out 3  boom"]
         );
         assert_eq!(
             text.lines(&end(EndStatus::Failed, "", TokenCounts::default())),

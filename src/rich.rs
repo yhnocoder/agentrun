@@ -6,7 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::cli::SandboxMode;
 use crate::event::{Body, Event};
 use crate::output::{TextFormatter, first_line, subagent_label};
-use crate::usage::TokenCounts;
+use crate::usage::{TokenCounts, tokens};
 
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -150,17 +150,7 @@ impl Panel {
         if !self.any_usage {
             return String::new();
         }
-        let mut parts = Vec::new();
-        for (name, value) in [
-            ("in", self.totals.input_tokens),
-            ("out", self.totals.output_tokens),
-            ("cache", self.totals.cache_read_tokens),
-        ] {
-            if let Some(value) = value {
-                parts.push(format!("{name} {}", tokens(value)));
-            }
-        }
-        parts.join(" ")
+        self.totals.summary(false).join("  ")
     }
 }
 
@@ -229,16 +219,6 @@ pub fn truncate(text: &str, max: usize) -> String {
         result.push('…');
     }
     result
-}
-
-pub fn tokens(count: u64) -> String {
-    if count < 100 {
-        count.to_string()
-    } else if count < 1_000_000 {
-        format!("{:.1}k", count as f64 / 1000.0)
-    } else {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    }
 }
 
 pub fn clock(elapsed: Duration) -> String {
@@ -696,7 +676,7 @@ mod tests {
         );
         assert_eq!(
             panel.lines(&no_tools, 80, 24, at(started, 24), false)[1],
-            "⠋ main  claude-sonnet-5-5  0:24  in 18.2k cache 42.0k"
+            "⠋ main  claude-sonnet-5-5  0:24  in 60.2k  cached 70%"
         );
         panel.observe(
             &usage(Some("ghost"), None, counts(1000, 912, 0, 0)),
@@ -711,7 +691,7 @@ mod tests {
                 at(started, 24),
                 false
             )[1],
-            "⠋ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 37.5k out 0.9k cache 84.0k  ctx 61.2k"
+            "⠋ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 122.5k  cached 69%  ctx 61.2k"
         );
     }
 

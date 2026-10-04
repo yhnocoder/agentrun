@@ -281,11 +281,7 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
         panel[2]
     );
     assert!(panel[2].ends_with("  ctx 3.1k"), "{}", panel[2]);
-    assert!(
-        panel[4].ends_with("  in 3.0k out 50 cache 0.1k"),
-        "{}",
-        panel[4]
-    );
+    assert!(panel[4].ends_with("  in 3.1k  cached 3%"), "{}", panel[4]);
 
     session.push(SUBAGENT_TOOL_END);
     assert_eq!(

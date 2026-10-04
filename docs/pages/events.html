@@ -319,10 +319,12 @@ interface Usage extends TokenCounts {
   <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。</li>
   <li><code>text</code>：文字的第一行。</li>
   <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写 <code>agent start 标签 (模型): 描述</code>，模型未知时省去括号。</li>
-  <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写状态、耗时、模型与 token 用量。</li>
+  <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net denied 主机:端口 (原因)</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
-  <li><code>end</code>：<code>[end] 状态 耗时s in X out Y cache read Z write W</code>，后接 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量与 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。</li>
+  <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
+  <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
   <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
 </ul>
 <p>一个 agent 显示的模型取它最近一次 <code>usage</code> 的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
@@ -335,13 +337,13 @@ interface Usage extends TokenCounts {
 <span class="dim">[general-purpose#2]</span> tool Read: tests/parse.rs
 <span class="dim">[main]</span> tool Bash: cat ~/.ssh/id_rsa (denied)
 <span class="dim">[explore#1]</span> text 共 3 处调用，都在 src/cli.rs。
-<span class="dim">[explore#1]</span> agent finished 12.4s claude-haiku-4-5 in 3120 out 85
+<span class="dim">[explore#1]</span> agent finished 12.4s claude-haiku-4-5  in 3.1k  out 85
 <span class="dim">[general-purpose#2]</span> tool Edit: tests/parse.rs
 <span class="dim">[main]</span> tool Edit: src/parse.rs
-<span class="dim">[general-purpose#2]</span> agent finished 20.8s claude-sonnet-5-5 in 9410 out 512
+<span class="dim">[general-purpose#2]</span> agent finished 20.8s claude-sonnet-5-5  in 9.4k  out 512
 <span class="dim">[main]</span> tool Bash: cargo test
 <span class="dim">[main]</span> text 修复了 parse_line 对空行的处理，测试全部通过。
-<span class="dim">[end]</span> finished 31.3s in 18234 out 912 cache read 42000 write 5100</div>
+<span class="dim">[end]</span> finished 31.3s  in 65.3k  out 0.9k  cached 64%</div>
 
 <h2>rich 格式</h2>
 <p><code>--format rich</code> 在终端里显示动态界面，分三个区域。标准输出不是终端时，<code>rich</code> 按 <code>text</code> 输出。</p>
@@ -353,17 +355,17 @@ interface Usage extends TokenCounts {
 <span class="dim">[main]</span> agent start explore#3 (haiku): 确认测试框架与运行方式
 <span class="dim">[explore#1]</span> tool Grep: parse_line
 <span class="dim">[general-purpose#2]</span> tool Read: tests/parse.rs
-<span class="dim">[explore#3]</span> agent finished 6.2s claude-haiku-4-5 in 1830 out 40
+<span class="dim">[explore#3]</span> agent finished 6.2s claude-haiku-4-5  in 1.8k  out 40
 <span class="dim">───────────────────────────────────────────────────────────────────────────</span>
 subagent  2 running <span class="ref">2</span>
   ⠙ explore#1          claude-haiku-4-5   查找所有调用 parse_line 的位置  Read: src/cli.rs      0:11  ctx 14.1k
   ⠹ general-purpose#2  claude-sonnet-5-5  为 parse_line 写边界测试        Edit: tests/parse.rs  0:09  ctx 22.4k
 <span class="dim">───────────────────────────────────────────────────────────────────────────</span>
-⠸ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 18.2k out 0.9k cache 42.0k  ctx 61.3k <span class="ref">3</span></div>
+⠸ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 54.2k  cached 78%  ctx 61.3k <span class="ref">3</span></div>
 <ol class="callouts">
   <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
   <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。</li>
-  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计 token 用量（包括 subagent）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
+  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
 <p>「正在执行的工具」在调用开始时就要显示，而 <code>tool</code> 事件在调用结束时才输出，所以 rich 从解析器内部记录的「已开始、未结束的调用」取这一项，不从事件流取。</p>
 <p>面板每 100 毫秒重画一次，滚动区每输出一行也立即重画；动画每 100 毫秒换一帧。面板第一次出现时隐藏光标，结束时恢复。</p>
