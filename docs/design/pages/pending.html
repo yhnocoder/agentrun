@@ -40,16 +40,12 @@
     <tr><td>codex 的 Linux 沙箱是什么实现，在 docker 里启动失败时怎么表现</td><td>旧样本显示它可能以退出码 0 结束却没有执行任何命令。<code>--sandbox on</code> 需要在启动前或运行中发现这种情况</td><td>本机 Linux 与 docker 实测；有可靠特征时加一条失败条件</td></tr>
     <tr><td>codex 能否把沙箱流量交给外部代理，打开网页搜索的参数名</td><td><code>--network custom</code> 与 <code>full</code> 对 codex 是否可用</td><td>本机实测</td></tr>
     <tr><td>codex 收到 SIGINT 与 SIGTERM 后的退出码与最后的事件</td><td>只影响 <code>detail</code>，状态由 agentrun 自己的信号记录决定</td><td>本机实测</td></tr>
-    <tr><td>claude-code 用 <code>--input-format stream-json</code> 传入多行或很长的提示词时是否正常；收到 SIGINT 时与有 subagent 时回显与退出是否照常</td><td><code>prompt</code> 事件与 claude-code 的启动方式</td><td>云端实测</td></tr>
     <tr><td>codex 的输出里是否有提示词</td><td><code>prompt</code> 事件的来源</td><td>macOS 与本机 Linux 实测</td></tr>
-    <tr><td>claude-code 的沙箱设置 <code>failIfUnavailable</code>、<code>filesystem.allowWrite</code>、空的 <code>allowedDomains</code> 是否生效</td><td>沙箱失败能否被发现；写范围</td><td>云端实测</td></tr>
-    <tr><td>claude-code 的沙箱允许写 <code>/tmp</code>（云端实测），能否用设置收紧</td><td>写范围比设计宽</td><td>云端实测 <code>filesystem</code> 相关设置</td></tr>
-    <tr><td>claude-code 的 Edit 与 Write 工具能否写到工作目录以外</td><td>剩余风险表</td><td>云端实测，沙箱打开时让 Write 写 <code>$HOME</code></td></tr>
     <tr><td>claude-code 用外部代理时是否仍按 <code>allowedDomains</code> 过滤</td><td><code>--network full|custom</code> 的做法</td><td>云端实测</td></tr>
     <tr><td>macOS 上 Seatbelt 包裹 pi 时 node 还需要哪些可写路径（缓存目录、<code>/dev/tty</code> 等）</td><td>pi 的 Seatbelt 配置</td><td>macOS 实测</td></tr>
-    <tr><td>沙箱里命令看到的 <code>TMPDIR</code> 是否仍是会话临时目录</td><td>临时文件的位置</td><td>macOS 与 Linux 实测</td></tr>
-    <tr><td>pi 的模型服务主机表是否够用</td><td><code>--network none</code> 下 pi 能否访问模型</td><td>实现时用 <code>network</code> 事件核对</td></tr>
-    <tr><td>Cloud Managed 容器里宿主设置的几十个 <code>CLAUDE_</code> 变量是否影响 claude-code 的行为</td><td>是否需要扩大删除规则；目前不扩大，因为其中有登录需要的变量</td><td>云端对比实测</td></tr>
+    <tr><td>macOS 上沙箱里命令看到的 <code>TMPDIR</code> 是否仍在会话临时目录之内（Linux 已在云端实测：bwrap 包裹的 pi 看到会话临时目录，claude-code 看到其下的 <code>claude-&lt;uid&gt;</code>）</td><td>临时文件的位置</td><td>macOS 实测</td></tr>
+    <tr><td>pi 的模型服务主机表对 deepseek 以外的服务商是否够用（deepseek 只需要 <code>api.deepseek.com</code>，云端实测）</td><td><code>--network none</code> 下 pi 能否访问模型</td><td>实现时用 <code>network</code> 事件核对</td></tr>
+    <tr><td>Cloud Managed 容器里宿主设置的几十个 <code>CLAUDE_</code> 变量是否影响 claude-code 的行为。已知一例：<code>CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES</code> 让输出多出 <code>stream_event</code>，这类事件只写入 <code>--raw</code>，不影响结果</td><td>是否需要扩大删除规则；目前不扩大，因为其中有登录需要的变量</td><td>云端对比实测</td></tr>
   </tbody>
 </table>
 </main>

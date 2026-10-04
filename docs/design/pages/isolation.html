@@ -58,7 +58,7 @@
     <tr><th>运行时</th><th>沙箱打开时</th><th>沙箱没有运行时</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>用 claude-code 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加 <code>socat</code>），由 <code>--settings</code> 打开。只作用于 Bash 命令：命令只能写两个目录、不能联网，沙箱里的命令自动放行，不允许沙箱外执行命令。权限模式 <code>auto</code></td><td>权限模式 <code>auto</code>，每条 Bash 命令由 claude-code 的分类器判断</td></tr>
+    <tr><td>claude-code</td><td>用 claude-code 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加 <code>socat</code>），由 <code>--settings</code> 打开。只作用于 Bash 命令：命令只能写两个目录、不能联网，沙箱里的命令自动放行，不允许沙箱外执行命令。Edit 与 Write 不经过沙箱，改用权限模式 <code>dontAsk</code> 加按路径放行的规则，只放行写两个目录</td><td>权限模式 <code>auto</code>，每条 Bash 命令由 claude-code 的分类器判断</td></tr>
     <tr><td>codex</td><td><code>--sandbox workspace-write</code>，关闭网络，<code>/tmp</code> 与 <code>$TMPDIR</code> 不自动可写，会话临时目录作为额外可写目录显式给出</td><td><code>--sandbox danger-full-access</code></td></tr>
     <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。可写目录另加 pi 的状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>）。网络见下一节</td><td>不包裹</td></tr>
   </tbody>
@@ -68,6 +68,7 @@
   <li>pi 的状态目录必须可写：pi 刷新令牌时要改写其中的 <code>auth.json</code> 并加锁，否则刷新会失败。目录不存在时 agentrun 先创建它（新建的每一级权限 0700），因为 <code>bwrap</code> 绑定不存在的路径会失败。</li>
   <li>pi 的包裹不加 <code>--unshare-pid</code> 与 <code>--new-session</code>，以保持<a href="session.html#signals">进程组与信号</a>的规则。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
   <li>macOS 上 Seatbelt 按真实路径匹配，<code>/tmp</code> 与 <code>/var</code> 指向 <code>/private</code>，所以三个可写路径先解析符号链接再写进配置。</li>
+  <li>沙箱打开时 claude-code 用 <code>dontAsk</code>，不用 <code>auto</code>。理由：Edit 与 Write 在 claude 进程里执行，不经过沙箱；auto 模式会放行写到工作目录以外的请求，即使放行规则只列了工作目录（claude 2.1.289 云端实测，Write 写成了 <code>$HOME</code> 与 <code>/tmp</code> 下的文件）。<code>dontAsk</code> 拒绝放行规则以外的所有调用，被拒绝的调用交还模型，Bash 仍由沙箱自动放行。被拒绝的调用记为 <code>tool</code> 事件的 <code>denied</code>。</li>
   <li>被沙箱拦下的写入或联网不算 <code>failed</code>，也不设 <code>tool</code> 事件的 <code>denied</code>。<code>denied</code> 只表示运行时权限机制的拒绝。理由：命令失败的结果会交还模型，由模型决定下一步，和其他命令出错一样。</li>
 </ul>
 
@@ -93,7 +94,7 @@
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
   <li>监听 <code>127.0.0.1</code> 上的随机端口。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，再由 <code>socat</code> 把会话临时目录里的 Unix socket 接到这个端口，做法与 claude-code 自己的沙箱相同。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址。</li>
-  <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 指向代理，<code>NO_PROXY</code> 清空。调用方环境里原有的代理变量改由过滤代理作为上游使用，所以Cloud Managed 容器自带的出口代理仍然生效。</li>
+  <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 与它们的小写形式指向代理，<code>NO_PROXY</code> 与 <code>no_proxy</code> 清空。小写也要设，因为 pi 先读小写的 <code>https_proxy</code>，调用方环境里原有的小写变量会让 pi 绕过过滤代理（pi 1.0.1 实测）。调用方环境里原有的代理变量改由过滤代理作为上游使用，所以Cloud Managed 容器自带的出口代理仍然生效。</li>
   <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#event-types">事件与输出</a>。</li>
 </ul>
 <figure>
@@ -146,7 +147,7 @@
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 不经过沙箱，由权限规则放行，能否写到工作目录以外待实测。claude-code 的沙箱允许写 <code>/tmp</code>，待确认能否收紧</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
+    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
     <tr><td>pi</td><td>能读用户可读的任何文件；能改写 pi 自己的状态目录，包括它的设置文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>

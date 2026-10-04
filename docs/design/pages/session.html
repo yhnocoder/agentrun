@@ -67,7 +67,7 @@ GREETING='hello world'</code></pre>
 <p>PATH 不限制 agent 能执行哪些程序，agent 可以用绝对路径执行任何程序。限制 agent 的是沙箱的写范围与网络限制。</p>
 
 <h2 id="tmpdir">会话临时目录</h2>
-<p>工具在 <code>$TMPDIR</code>（未设或为空时为 <code>/tmp</code>）下创建 <code>agentrun-&lt;随机后缀&gt;</code>，权限 0700。会话的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向它，沙箱把它加入可写路径。正常结束、失败、超时与被中断时都删除它；给了 <code>--debug</code> 时保留，路径写到标准错误。</p>
+<p>工具在 <code>$TMPDIR</code>（未设或为空时为 <code>/tmp</code>）下创建 <code>agentrun-&lt;随机后缀&gt;</code>，权限 0700。会话的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向它，沙箱把它加入可写路径。正常结束、失败、超时与被中断时都删除它；给了 <code>--debug</code> 时保留，路径写到标准错误。claude-code 的沙箱把命令看到的 <code>TMPDIR</code> 改成会话临时目录下的子目录 <code>claude-&lt;uid&gt;</code>，仍在会话临时目录之内（云端实测）。</p>
 <p>理由：工作目录里不出现临时文件；只开放这一个目录，不把整个 <code>/tmp</code> 设为可写，因为 <code>/tmp</code> 由整台机器共用，里面有其他程序的文件与 socket。</p>
 <p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>。</p>
 

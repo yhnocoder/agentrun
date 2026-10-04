@@ -130,13 +130,13 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 <h3>参数</h3>
 <pre><code class="language-bash">&lt;claude 的绝对路径&gt; -p --output-format stream-json --verbose
   --input-format stream-json --replay-user-messages
-  --permission-mode auto
+  --permission-mode dontAsk|auto
   --setting-sources ""
   --strict-mcp-config
   --no-session-persistence
   --session-id &lt;新生成的 UUID v4&gt;
   --tools Read,Edit,Write,Glob,Grep,Bash,Task
-  --allowedTools Read,Edit,Write,Glob,Grep,Task
+  --allowedTools &lt;放行列表&gt;
   [--settings &lt;沙箱设置&gt;]
   [--model ID] [--effort LEVEL] [--max-turns N]
   &lt;-- 之后的调用方参数&gt;</code></pre>
@@ -145,9 +145,10 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   <li><code>--strict-mcp-config</code> 不加载任何 MCP 服务器。</li>
   <li><code>--session-id</code> 每次新生成，与 <code>--no-session-persistence</code> 一起用。理由：在 Claude Code 会话里运行 agentrun 时，<code>claude -p</code> 子进程会继承父会话的 id，把记录写进父会话，只加 <code>--no-session-persistence</code> 不能避免。</li>
   <li><code>--tools</code> 限定可用的内置工具，去掉网页工具与技能等。<code>--allowedTools</code> 放行列出的工具，不经权限判断。Bash 不在放行列表里：沙箱打开时由 <code>autoAllowBashIfSandboxed</code> 自动放行，沙箱没有运行时由 auto 模式逐条判断。只用 <code>--tools</code> 而不放行时，auto 模式会拒绝 Write，且结果仍报告成功（实测）。</li>
+  <li>沙箱打开时权限模式是 <code>dontAsk</code>，放行列表是 <code>Read,Glob,Grep,Task</code> 加上 <code>Edit(//&lt;cwd&gt;/**)</code>、<code>Write(//&lt;cwd&gt;/**)</code>、<code>Edit(//&lt;会话临时目录&gt;/**)</code>、<code>Write(//&lt;会话临时目录&gt;/**)</code>；沙箱没有运行时权限模式是 <code>auto</code>，放行列表是 <code>Read,Edit,Write,Glob,Grep,Task</code>。理由见<a href="isolation.html">沙箱与网络</a>。规则里的绝对路径以 <code>//</code> 开头，只写一个 <code>/</code> 时规则不匹配（实测）。</li>
   <li>启动 subagent 的工具在参数与 <code>system/init</code> 的工具列表里叫 <code>Task</code>，在输出的 <code>tool_use</code> 里叫 <code>Agent</code>，两个名字都要识别。<code>--no-subagents</code> 从 <code>--tools</code> 与 <code>--allowedTools</code> 里去掉 <code>Task</code>，生效与否看 init 的工具列表里有没有 <code>Task</code>。</li>
   <li><code>--network full</code> 时两个列表都加上 <code>WebFetch</code> 与 <code>WebSearch</code>；<code>custom</code> 时 <code>--tools</code> 加 <code>WebFetch</code>，<code>--allowedTools</code> 每个主机加一条 <code>WebFetch(domain:HOST)</code>。</li>
-  <li>提示词从标准输入传入，不在命令行里：写入一行 JSON <code>{"type":"user","message":{"role":"user","content":"&lt;提示词&gt;"}}</code>，然后关闭标准输入。<code>--replay-user-messages</code> 让 claude-code 把这条消息回显到输出里，agentrun 据此输出 <code>prompt</code> 事件。不加这两个选项时，输出里没有提示词。实测单条提示词时，关闭标准输入后进程正常结束（退出码 0）；多行或很长的提示词、不关闭标准输入、与 SIGINT 和 subagent 同时出现的情况待实测。</li>
+  <li>提示词从标准输入传入，不在命令行里：写入一行 JSON <code>{"type":"user","message":{"role":"user","content":"&lt;提示词&gt;"}}</code>，然后关闭标准输入。<code>--replay-user-messages</code> 让 claude-code 把这条消息回显到输出里，agentrun 据此输出 <code>prompt</code> 事件。不加这两个选项时，输出里没有提示词。实测关闭标准输入后进程正常结束（退出码 0）；多行提示词与约 200 KB 的提示词，回显与原文逐字相同；收到 SIGINT 时，回显在中断前已经输出。</li>
 </ul>
 <p>沙箱设置（只在沙箱打开时传）：</p>
 <pre><code class="language-json">{
@@ -164,7 +165,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     }
   }
 }</code></pre>
-<p>前三项以外的设置（<code>failIfUnavailable</code>、<code>allowWrite</code>、空的 <code>allowedDomains</code>）取自 claude 的设置说明，还没有实测是否生效。<code>--network full|custom</code> 时另加 <code>network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。</p>
+<p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时另加 <code>network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。</p>
 
 <h3>输出映射</h3>
 <p>stream-json 每行一个 JSON 对象。用到的对象与字段：</p>
@@ -176,7 +177,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>system</code>，subtype <code>init</code></td><td><code>permissionMode</code>、<code>model</code>、<code>tools</code></td><td>不输出；用于检查 <code>--no-subagents</code></td></tr>
     <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略</td></tr>
     <tr><td><code>system</code>，subtype <code>permission_denied</code></td><td><code>tool_use_id</code>、<code>tool_name</code>、<code>decision_reason</code></td><td>把对应的调用标为被拒绝；它出现在对应的 tool_result 之前</td></tr>
-    <tr><td><code>user</code>，<code>isReplay</code> 为 true</td><td><code>message.content</code></td><td><code>prompt</code>。它在 <code>system/init</code> 之后、第一个 assistant 之前出现，<code>parent_tool_use_id</code> 为 null</td></tr>
+    <tr><td><code>user</code>，<code>isReplay</code> 为 true</td><td><code>message.content</code></td><td><code>prompt</code>，只取第一条。它在 <code>system/init</code> 之后、第一个 assistant 之前出现，<code>parent_tool_use_id</code> 为 null。之后出现的 <code>isReplay</code> 消息是后台 subagent 交回的结果（内容以 <code>&lt;agent-message</code> 开头），只写入 <code>--raw</code></td></tr>
     <tr><td><code>user</code>，其他</td><td><code>tool_result</code> 块的 <code>tool_use_id</code>、<code>is_error</code></td><td>对应的调用结束，输出 <code>tool</code></td></tr>
     <tr><td><code>system</code>，subtype <code>task_notification</code></td><td><code>tool_use_id</code>、<code>status</code>、<code>usage.duration_ms</code></td><td><code>subagent_end</code>；<code>status</code> 为 <code>completed</code> 时 finished，其他值 failed</td></tr>
     <tr><td><code>result</code></td><td><code>is_error</code>、<code>subtype</code>、<code>result</code>、<code>modelUsage</code></td><td><code>end</code> 的 <code>result</code>、失败判定与 <code>usage</code></td></tr>
