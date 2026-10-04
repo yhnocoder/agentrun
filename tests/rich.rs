@@ -361,7 +361,7 @@ fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut size,
+            &raw mut size,
         )
     };
     assert_eq!(opened, 0, "openpty");
