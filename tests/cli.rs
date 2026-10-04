@@ -281,6 +281,82 @@ fn missing_adapter_is_rejected_without_tempdir() {
 }
 
 #[test]
+fn env_without_caller_value_is_rejected() {
+    let env = Env::new();
+    assert_eq!(
+        assert_rejected(&env.run(&["pi", "--env", "NO_SUCH_VAR", "--prompt", "hi"])),
+        "--env NO_SUCH_VAR: not set in the caller's environment"
+    );
+    assert!(env.no_leftover_tempdirs());
+}
+
+#[test]
+fn env_with_invalid_name_is_rejected() {
+    assert_eq!(
+        assert_rejected(&Env::new().run(&["pi", "--env", "1BAD=x", "--prompt", "hi"])),
+        "--env: invalid variable name '1BAD'"
+    );
+}
+
+#[test]
+fn missing_path_dir_is_rejected() {
+    assert_eq!(
+        assert_rejected(&Env::new().run(&["pi", "--path", "/no/such/dir", "--prompt", "hi"])),
+        "--path /no/such/dir: not a directory"
+    );
+}
+
+#[test]
+fn missing_env_file_is_rejected() {
+    let detail =
+        assert_rejected(&Env::new().run(&["pi", "--env-file", "missing.env", "--prompt", "hi"]));
+    assert!(detail.starts_with("--env-file missing.env: "), "{detail}");
+}
+
+#[test]
+fn malformed_env_file_line_is_rejected_without_its_content() {
+    let env = Env::new();
+    std::fs::write(
+        env.root.path().join("bad.env"),
+        "A=1\n# comment\nSECRET_NAME = hunter2\n",
+    )
+    .unwrap();
+    let detail = assert_rejected(&env.run(&["pi", "--env-file", "bad.env", "--prompt", "hi"]));
+    assert_eq!(detail, "--env-file bad.env: line 3: expected KEY=VALUE");
+    assert!(!detail.contains("hunter2") && !detail.contains("SECRET_NAME"));
+}
+
+#[test]
+fn runtime_is_found_through_path_option() {
+    let env = Env::with_fake_claude();
+    let empty = env.root.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let output = env
+        .command(&[
+            "claude-code",
+            "--sandbox",
+            "off",
+            "--path",
+            env.bin().to_str().unwrap(),
+            "--prompt",
+            "hi",
+        ])
+        .env("PATH", &empty)
+        .output()
+        .unwrap();
+    assert_eq!(
+        assert_rejected(&output),
+        "claude-code support is not implemented in this build"
+    );
+    let output = env
+        .command(&["claude-code", "--sandbox", "off", "--prompt", "hi"])
+        .env("PATH", &empty)
+        .output()
+        .unwrap();
+    assert_eq!(assert_rejected(&output), "claude not found in PATH");
+}
+
+#[test]
 fn help_and_version_print_to_stdout() {
     let env = Env::new();
     for args in [["--help"], ["--version"]] {
