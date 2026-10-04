@@ -356,10 +356,10 @@ interface Usage extends TokenCounts {
 <span class="dim">[explore#3]</span> agent finished 6.2s claude-haiku-4-5 in 1830 out 40
 <span class="dim">───────────────────────────────────────────────────────────────────────────</span>
 subagent  2 running <span class="ref">2</span>
-  ⠙ explore#1          claude-haiku-4-5   查找所有调用 parse_line 的位置   Read: src/cli.rs       0:11  ctx 14.1k
-  ⠹ general-purpose#2  claude-sonnet-5-5  为 parse_line 写边界测试         Edit: tests/parse.rs   0:09  ctx 22.4k
+  ⠙ explore#1          claude-haiku-4-5   查找所有调用 parse_line 的位置  Read: src/cli.rs      0:11  ctx 14.1k
+  ⠹ general-purpose#2  claude-sonnet-5-5  为 parse_line 写边界测试        Edit: tests/parse.rs  0:09  ctx 22.4k
 <span class="dim">───────────────────────────────────────────────────────────────────────────</span>
-⠸ main  claude-sonnet-5-5  Bash: cargo check   0:24   in 18.2k out 0.9k cache 42.0k   ctx 61.3k <span class="ref">3</span></div>
+⠸ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 18.2k out 0.9k cache 42.0k  ctx 61.3k <span class="ref">3</span></div>
 <ol class="callouts">
   <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
   <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。</li>

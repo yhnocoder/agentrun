@@ -241,7 +241,7 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
     assert_eq!(session.expected, vec!["[main] prompt fix tests"]);
     let panel = session.panel();
     assert_eq!(panel.len(), 2);
-    assert!(panel[1].contains("  main  "), "{}", panel[1]);
+    assert!(panel[1].contains(" main  "), "{}", panel[1]);
 
     session.push(r#"{"record":"tool_start","id":"t1","parent":null,"name":"Bash","summary":"Bash: cargo check"}"#);
     let mut refresh = Vec::new();
@@ -252,7 +252,7 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
     session.screen.feed(&refresh);
     let panel = session.panel();
     assert!(
-        panel[1].contains("  main  Bash: cargo check  "),
+        panel[1].contains(" main  Bash: cargo check  "),
         "{}",
         panel[1]
     );
@@ -266,7 +266,7 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
     assert_eq!(panel.len(), 5);
     assert_eq!(panel[1], "subagent  1 running");
     assert!(
-        panel[2].contains("  explore#1  haiku  look around  "),
+        panel[2].contains(" explore#1  haiku  look around  "),
         "{}",
         panel[2]
     );
@@ -276,7 +276,7 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
     session.push(SUBAGENT_USAGE);
     let panel = session.panel();
     assert!(
-        panel[2].contains("  explore#1  claude-haiku-4-5  look around  Read: a.rs  "),
+        panel[2].contains(" explore#1  claude-haiku-4-5  look around  Read: a.rs  "),
         "{}",
         panel[2]
     );

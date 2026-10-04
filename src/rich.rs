@@ -113,31 +113,28 @@ impl Panel {
         if self.seen_subagent {
             lines.push(format!("subagent  {} running", self.subagents.len()));
             let shown = height.saturating_sub(HEIGHT_MARGIN).max(1);
-            let label_width = column_width(self.subagents.iter().map(|s| s.label.as_str()));
-            let model_width = column_width(
-                self.subagents
-                    .iter()
-                    .map(|s| s.model.as_deref().unwrap_or("")),
-            );
-            for subagent in self.subagents.iter().take(shown) {
-                let cells = vec![
-                    frame.clone(),
-                    pad(&subagent.label, label_width),
-                    pad(subagent.model.as_deref().unwrap_or(""), model_width),
-                    subagent.description.clone(),
-                    open_tool(Some(&subagent.id)).unwrap_or_default(),
-                    clock(now.duration_since(subagent.started)),
-                    context(subagent.context),
-                ];
-                lines.push(fit(cells, &[3, 4], "  ", max));
-            }
+            let rows = self
+                .subagents
+                .iter()
+                .take(shown)
+                .map(|subagent| {
+                    vec![
+                        subagent.label.clone(),
+                        subagent.model.clone().unwrap_or_default(),
+                        subagent.description.clone(),
+                        open_tool(Some(&subagent.id)).unwrap_or_default(),
+                        clock(now.duration_since(subagent.started)),
+                        context(subagent.context),
+                    ]
+                })
+                .collect();
+            lines.extend(table(rows, &[2, 3], &format!("  {frame} "), max));
             if self.subagents.len() > shown {
                 lines.push(format!("  … and {} more", self.subagents.len() - shown));
             }
             lines.push(rule);
         }
-        let cells = vec![
-            frame,
+        let status = vec![
             "main".to_string(),
             self.main_model.clone().unwrap_or_default(),
             open_tool(None).unwrap_or_default(),
@@ -145,7 +142,7 @@ impl Panel {
             self.usage(),
             context(self.main_context),
         ];
-        lines.push(fit(cells, &[3], "", max));
+        lines.extend(table(vec![status], &[2], &format!("{frame} "), max));
         lines
     }
 
@@ -173,35 +170,45 @@ fn context(tokens_count: Option<u64>) -> String {
         .unwrap_or_default()
 }
 
-fn column_width<'a>(values: impl Iterator<Item = &'a str>) -> usize {
-    values.map(|value| value.width()).max().unwrap_or(0)
-}
-
-fn pad(text: &str, width: usize) -> String {
-    format!("{text}{}", " ".repeat(width.saturating_sub(text.width())))
-}
-
-fn join(cells: &[String]) -> String {
-    cells
+fn table(rows: Vec<Vec<String>>, shrink: &[usize], prefix: &str, max: usize) -> Vec<String> {
+    let columns = rows.first().map_or(0, Vec::len);
+    let kept: Vec<usize> = (0..columns)
+        .filter(|&c| rows.iter().any(|row| !row[c].is_empty()))
+        .collect();
+    let mut widths: Vec<usize> = kept
         .iter()
-        .filter(|cell| !cell.is_empty())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
-fn fit(mut cells: Vec<String>, shrink: &[usize], prefix: &str, max: usize) -> String {
-    for &index in shrink {
-        let line = format!("{prefix}{}", join(&cells));
-        let excess = line.width().saturating_sub(max);
+        .map(|&c| rows.iter().map(|row| row[c].width()).max().unwrap_or(0))
+        .collect();
+    let gaps = 2 * kept.len().saturating_sub(1);
+    for column in shrink {
+        let Some(index) = kept.iter().position(|c| c == column) else {
+            continue;
+        };
+        let excess = (prefix.width() + widths.iter().sum::<usize>() + gaps).saturating_sub(max);
         if excess == 0 {
             break;
         }
-        let current = cells[index].width();
-        let target = current.saturating_sub(excess).max(MIN_COLUMN.min(current));
-        cells[index] = truncate(&cells[index], target);
+        let current = widths[index];
+        widths[index] = current.saturating_sub(excess).max(MIN_COLUMN.min(current));
     }
-    truncate(&format!("{prefix}{}", join(&cells)), max)
+    rows.iter()
+        .map(|row| {
+            let cells: Vec<String> = kept
+                .iter()
+                .zip(&widths)
+                .enumerate()
+                .map(|(index, (&c, &width))| {
+                    let cell = truncate(&row[c], width);
+                    if index + 1 == kept.len() {
+                        cell
+                    } else {
+                        format!("{cell}{}", " ".repeat(width - cell.width()))
+                    }
+                })
+                .collect();
+            truncate(format!("{prefix}{}", cells.join("  ")).trim_end(), max)
+        })
+        .collect()
 }
 
 pub fn truncate(text: &str, max: usize) -> String {
@@ -462,7 +469,7 @@ mod tests {
         let lines = panel.lines(&no_tools, 40, 24, at(started, 24), false);
         assert_eq!(
             lines,
-            vec!["─".repeat(39), "⠋  main  sonnet  0:24".to_string()]
+            vec!["─".repeat(39), "⠋ main  sonnet  0:24".to_string()]
         );
     }
 
@@ -487,9 +494,9 @@ mod tests {
             vec![
                 "─".repeat(79),
                 "subagent  1 running".to_string(),
-                "  ⠋  explore#1  haiku  look  Read: src/cli.rs  0:11".to_string(),
+                "  ⠋ explore#1  haiku  look  Read: src/cli.rs  0:11".to_string(),
                 "─".repeat(79),
-                "⠋  main  Bash: cargo check  0:24".to_string(),
+                "⠋ main  Bash: cargo check  0:24".to_string(),
             ]
         );
         panel.observe(
@@ -508,7 +515,7 @@ mod tests {
                 "─".repeat(79),
                 "subagent  0 running".to_string(),
                 "─".repeat(79),
-                "⠋  main  0:30".to_string(),
+                "⠋ main  0:30".to_string(),
             ]
         );
     }
@@ -542,13 +549,23 @@ mod tests {
         let lines = panel.lines(&no_tools, 120, 24, at(started, 65), false);
         assert_eq!(
             lines[2],
-            "  ⠋  explore#1          claude-haiku-4-5   查找调用  1:05  ctx 14.1k"
+            "  ⠋ explore#1          claude-haiku-4-5   查找调用  1:05  ctx 14.1k"
         );
         assert_eq!(
             lines[3],
-            "  ⠋  general-purpose#2  claude-sonnet-5-5  写测试  1:05"
+            "  ⠋ general-purpose#2  claude-sonnet-5-5  写测试    1:05"
         );
         assert_eq!("查找调用".width(), 8);
+        let tool = tools(&[("s1", "Read: src/cli.rs"), ("s2", "Edit: tests/parse.rs")]);
+        let lines = panel.lines(&tool, 120, 24, at(started, 65), false);
+        assert_eq!(
+            lines[2],
+            "  ⠋ explore#1          claude-haiku-4-5   查找调用  Read: src/cli.rs      1:05  ctx 14.1k"
+        );
+        assert_eq!(
+            lines[3],
+            "  ⠋ general-purpose#2  claude-sonnet-5-5  写测试    Edit: tests/parse.rs  1:05"
+        );
     }
 
     #[test]
@@ -563,23 +580,47 @@ mod tests {
         let full = panel.lines(&no_tools, 200, 24, started, false)[2].clone();
         assert_eq!(
             full,
-            "  ⠋  explore#1  这是一个很长的中文描述需要被截断  0:00"
+            "  ⠋ explore#1  这是一个很长的中文描述需要被截断  0:00"
         );
 
         let lines = panel.lines(&tool, 61, 24, started, false);
         assert_eq!(
             lines[2],
-            "  ⠋  explore#1  这是一个…  Read: src/some/very/long/p…  0:00"
+            "  ⠋ explore#1  这是一个…   Read: src/some/very/long/p…  0:00"
         );
         assert_eq!(lines[2].width(), 60);
 
         let lines = panel.lines(&tool, 40, 24, started, false);
-        assert_eq!(lines[2], "  ⠋  explore#1  这是一个…  Read: src… …");
+        assert_eq!(lines[2], "  ⠋ explore#1  这是一个…   Read: src… …");
         assert_eq!(lines[2].width(), 39);
 
+        panel.observe(&subagent_start("s2", 2, "Explore", None, "短描述"), started);
+        let both = tools(&[
+            ("s1", "Read: src/some/very/long/path/to/file.rs"),
+            ("s2", "Grep: x"),
+        ]);
+        let lines = panel.lines(&both, 61, 24, started, false);
+        assert_eq!(
+            lines[2],
+            "  ⠋ explore#1  这是一个…   Read: src/some/very/long/p…  0:00"
+        );
+        assert_eq!(
+            lines[3],
+            "  ⠋ explore#2  短描述      Grep: x                      0:00"
+        );
+        panel.observe(
+            &event(Body::SubagentEnd(SubagentEnd {
+                id: "s2".to_string(),
+                status: SubagentStatus::Finished,
+                duration_ms: 0,
+                usage: Default::default(),
+            })),
+            started,
+        );
+
         let lines = panel.lines(&tool, 20, 24, started, false);
-        assert_eq!(lines[2], "  ⠋  explore#1  这…");
-        assert_eq!(lines[2].width(), 19);
+        assert_eq!(lines[2], "  ⠋ explore#1  这…");
+        assert!(lines[2].width() <= 19);
     }
 
     #[test]
@@ -591,10 +632,10 @@ mod tests {
         let lines = panel.lines(&tool, 50, 24, started, false);
         assert_eq!(
             lines[1],
-            "⠋  main  claude-sonnet-5-5  Bash: cargo te…  0:00"
+            "⠋ main  claude-sonnet-5-5  Bash: cargo tes…  0:00"
         );
         let lines = panel.lines(&tool, 30, 24, started, false);
-        assert_eq!(lines[1], "⠋  main  claude-sonnet-5-5  …");
+        assert_eq!(lines[1], "⠋ main  claude-sonnet-5-5  B…");
     }
 
     #[test]
@@ -609,11 +650,11 @@ mod tests {
         }
         let lines = panel.lines(&no_tools, 80, 9, started, false);
         assert_eq!(lines.len(), 8);
-        assert_eq!(lines[2], "  ⠋  explore#1  x  0:00");
-        assert_eq!(lines[4], "  ⠋  explore#3  x  0:00");
+        assert_eq!(lines[2], "  ⠋ explore#1  x  0:00");
+        assert_eq!(lines[4], "  ⠋ explore#3  x  0:00");
         assert_eq!(lines[5], "  … and 2 more");
         let lines = panel.lines(&no_tools, 80, 5, started, false);
-        assert_eq!(lines[2], "  ⠋  explore#1  x  0:00");
+        assert_eq!(lines[2], "  ⠋ explore#1  x  0:00");
         assert_eq!(lines[3], "  … and 4 more");
         assert_eq!(lines.len(), 6);
     }
@@ -638,7 +679,7 @@ mod tests {
         panel.observe(&start(None), started);
         assert_eq!(
             panel.lines(&no_tools, 80, 24, at(started, 24), false)[1],
-            "⠋  main  0:24"
+            "⠋ main  0:24"
         );
         panel.observe(
             &usage(
@@ -655,7 +696,7 @@ mod tests {
         );
         assert_eq!(
             panel.lines(&no_tools, 80, 24, at(started, 24), false)[1],
-            "⠋  main  claude-sonnet-5-5  0:24  in 18.2k cache 42.0k"
+            "⠋ main  claude-sonnet-5-5  0:24  in 18.2k cache 42.0k"
         );
         panel.observe(
             &usage(Some("ghost"), None, counts(1000, 912, 0, 0)),
@@ -670,7 +711,7 @@ mod tests {
                 at(started, 24),
                 false
             )[1],
-            "⠋  main  claude-sonnet-5-5  Bash: cargo check  0:24  in 37.5k out 0.9k cache 84.0k  ctx 61.2k"
+            "⠋ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 37.5k out 0.9k cache 84.0k  ctx 61.2k"
         );
     }
 
