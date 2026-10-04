@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-8f286e73/network-pi", "exit_code": 0, "stderr": "2026/10/04 06:19:01 socat[16510] E read(6, 0x562ac1f7f000, 8192): Connection reset by peer\n"}

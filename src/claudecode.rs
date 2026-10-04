@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::adapter::{Adapter, Launch, Record};
 use crate::cli::Runtime;
 use crate::event::SubagentStatus;
+use crate::json::{first_line, joined_text, optional_string, string};
 use crate::run::Invocation;
 use crate::usage::{TokenCounts, Usage};
 
@@ -196,7 +197,7 @@ impl ClaudeCode {
             }
             self.prompt_echoed = true;
             return vec![Record::PromptEcho {
-                text: message_text(&line["message"]["content"]),
+                text: joined_text(&line["message"]["content"]),
             }];
         }
         let mut records = Vec::new();
@@ -340,6 +341,8 @@ impl Adapter for ClaudeCode {
         Ok(Launch {
             argv,
             stdin: prompt_line(&invocation.prompt),
+            env: Vec::new(),
+            signal_wrapped_child: false,
         })
     }
 
@@ -476,22 +479,6 @@ fn display_path(path: &Path, cwd: &Path) -> String {
     }
 }
 
-fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or_default().to_string()
-}
-
-fn message_text(content: &Value) -> String {
-    match content {
-        Value::String(text) => text.clone(),
-        Value::Array(blocks) => blocks
-            .iter()
-            .filter_map(|block| block["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
 fn usage_record(pending: &PendingUsage) -> Record {
     Record::Usage {
         parent: pending.parent.clone(),
@@ -518,14 +505,6 @@ fn model_usage_counts(usage: &Value) -> TokenCounts {
     }
 }
 
-fn string(value: &Value) -> String {
-    value.as_str().unwrap_or_default().to_string()
-}
-
-fn optional_string(value: &Value) -> Option<String> {
-    value.as_str().map(str::to_string)
-}
-
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -535,6 +514,7 @@ mod tests {
     use crate::cli::{Cli, Format, SandboxMode};
     use crate::event::SandboxKind;
     use crate::sandbox::Sandbox;
+    use crate::session::Session;
 
     fn invocation(sandboxed: bool, extra: &[&str]) -> Invocation {
         let mut args = vec!["agentrun", "claude-code", "--prompt", "hi"];
@@ -558,6 +538,7 @@ mod tests {
                 description: String::new(),
             },
             tempdir: PathBuf::from("/tmp/agentrun-abc"),
+            session: Session::assemble(runtime, &[], &[], &[], &[]),
         }
     }
 

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::Path;
 
 use serde_json::Value;
@@ -5,6 +6,7 @@ use serde_json::Value;
 use crate::claudecode::ClaudeCode;
 use crate::cli::Runtime;
 use crate::event::SubagentStatus;
+use crate::pi::Pi;
 use crate::run::Invocation;
 use crate::usage::{TokenCounts, Usage};
 
@@ -20,7 +22,8 @@ pub trait Adapter {
 pub fn builtin(runtime: Runtime) -> Option<Box<dyn Adapter>> {
     match runtime {
         Runtime::ClaudeCode => Some(Box::new(ClaudeCode::new())),
-        Runtime::Codex | Runtime::Pi => None,
+        Runtime::Pi => Some(Box::new(Pi::new())),
+        Runtime::Codex => None,
     }
 }
 
@@ -28,6 +31,8 @@ pub fn builtin(runtime: Runtime) -> Option<Box<dyn Adapter>> {
 pub struct Launch {
     pub argv: Vec<String>,
     pub stdin: Vec<u8>,
+    pub env: Vec<(OsString, OsString)>,
+    pub signal_wrapped_child: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

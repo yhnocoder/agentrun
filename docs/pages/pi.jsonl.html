@@ -683,7 +683,7 @@ interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; 
     <tr><td>SIGINT</td><td>130</td><td>流停在当前位置，没有收尾事件。样本中一次停在 <code>tool_execution_start</code> 之后，一次停在 <code>turn_start</code> 之后。标准错误为空</td></tr>
   </tbody>
 </table>
-<p>判定规则：退出码非 0 一定失败；退出码为 0 时，找到最后一个 role 为 <code>assistant</code> 的 <code>message_end</code>，<code>stopReason</code> 为 <code>stop</code> 算成功，<code>error</code>、<code>aborted</code>、<code>length</code> 算失败；没有 <code>agent_settled</code> 时按被中断处理。<code>docs/cli-integration.md</code> 说明 JSON 模式下失败或中止的 assistant 响应本身不产生非 0 退出码，只有进程抛出异常时才非 0；print 模式（<code>-p</code> 不加 <code>--mode json</code>）则相反，<code>error</code> 或 <code>aborted</code> 会产生非 0 退出码。SIGTERM 未实测。</p>
+<p>判定规则：退出码非 0 一定失败；退出码为 0 时，找到最后一个 role 为 <code>assistant</code> 的 <code>message_end</code>，<code>stopReason</code> 为 <code>stop</code> 或 <code>length</code> 算成功，<code>error</code> 或 <code>aborted</code> 算失败；没有 <code>agent_settled</code> 时按被中断处理。<code>docs/cli-integration.md</code> 说明 JSON 模式下失败或中止的 assistant 响应本身不产生非 0 退出码，只有进程抛出异常时才非 0；print 模式（<code>-p</code> 不加 <code>--mode json</code>）则相反，<code>error</code> 或 <code>aborted</code> 会产生非 0 退出码。SIGTERM 未实测。</p>
 <pre><code class="language-json">{
   "type": "message_end",
   "message": {

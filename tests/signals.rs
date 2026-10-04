@@ -73,6 +73,10 @@ fn main() {
             "signal_during_sandbox_check_kills_the_check",
             signal_during_sandbox_check_kills_the_check,
         ),
+        (
+            "first_signal_reaches_the_wrapped_runtime_directly",
+            first_signal_reaches_the_wrapped_runtime_directly,
+        ),
     ];
     let selected: Vec<(&str, fn())> = tests
         .into_iter()
@@ -469,4 +473,49 @@ fn adapter_can_terminate_the_process_group() {
     assert_eq!(outcome.end()["detail"], "model mismatch");
     assert_eq!(outcome.end()["exit_code"], Value::Null);
     assert!(outcome.texts().is_empty(), "{:?}", outcome.texts());
+}
+
+fn bwrap_available() -> bool {
+    let available = Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--die-with-parent",
+            "--",
+            "/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !available {
+        eprintln!("skipped: bwrap is not available here");
+    }
+    available
+}
+
+fn first_signal_reaches_the_wrapped_runtime_directly() {
+    if !bwrap_available() {
+        return;
+    }
+    let env = Env::new(&format!(
+        "trap 'sleep 1; : > \"$PWD/trap-ran\"; exit 0' TERM\necho '{READY}'\nwhile :; do sleep 1; done\n"
+    ));
+    let agentrun = env.start(&["--sandbox", "on"], true, Stdio::null());
+    agentrun.wait_for_ready();
+    let sent = Instant::now();
+    agentrun.signal(libc::SIGTERM);
+    let outcome = agentrun.finish(&env);
+    assert_between(sent.elapsed(), 0.9, 4.5);
+    assert!(
+        env.work().join("trap-ran").exists(),
+        "the wrapped runtime did not run its TERM trap"
+    );
+    assert_eq!(outcome.code, 143);
+    assert_eq!(outcome.end()["status"], "interrupted");
+    assert_eq!(outcome.end()["exit_code"], 0);
+    assert_eq!(outcome.events[0]["sandbox"], "bubblewrap");
 }

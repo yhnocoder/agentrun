@@ -1,0 +1,3 @@
+{"schema":1,"type":"prompt","text":"Reply with the single word OK."}
+{"schema":1,"type":"usage","parent":null,"model":"deepseek/deepseek-flash","input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"context_tokens":0}
+{"schema":1,"type":"end","status":"failed","exit_code":0,"detail":"401: {\"message\":\"Authentication Fails, Your api key: ****alid is invalid (request_id: 8e622dcf-cfeb-4221-860c-8948dae04820)\",\"type\":\"authentication_error\",\"param\":null,\"code\":\"invalid_request_error\"}","usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"by_model":{"deepseek/deepseek-flash":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0}}},"result":null}

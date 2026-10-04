@@ -1,6 +1,4 @@
 use std::ffi::OsStr;
-use std::fs::DirBuilder;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -11,8 +9,6 @@ use crate::signal::Signals;
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const BWRAP_PREFIX: &str = "bwrap: ";
-const PI_STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
-const PI_STATE_HOME_SUBDIR: &str = ".pi/agent";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sandbox {
@@ -244,34 +240,11 @@ pub fn failure_reason(exit_code: Option<i32>, stderr: &str) -> String {
     }
 }
 
-pub fn pi_state_dir(session: &Session, cwd: &Path) -> Result<PathBuf, String> {
-    session
-        .runtime_dir(cwd, PI_STATE_DIR_VARIABLE, PI_STATE_HOME_SUBDIR)
-        .ok_or_else(|| {
-            format!(
-                "cannot create pi state directory $HOME/{PI_STATE_HOME_SUBDIR}: HOME is not set"
-            )
-        })
-}
-
-pub fn create_pi_state_dir(dir: &Path) -> Result<(), String> {
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|error| {
-            format!(
-                "cannot create pi state directory {}: {error}",
-                dir.display()
-            )
-        })
-}
-
 pub fn wrap_pi(
     bwrap: &Path,
     cwd: &Path,
     tempdir: &Path,
-    state_dir: &Path,
+    login_file: Option<&Path>,
     argv: &[String],
 ) -> Vec<String> {
     let text = |path: &Path| path.to_string_lossy().into_owned();
@@ -281,15 +254,15 @@ pub fn wrap_pi(
         "/".to_string(),
         "/".to_string(),
     ];
-    let mut bind = |dir: &Path| {
+    let mut bind = |path: &Path| {
         wrapped.push("--bind".to_string());
-        wrapped.push(text(dir));
-        wrapped.push(text(dir));
+        wrapped.push(text(path));
+        wrapped.push(text(path));
     };
     bind(cwd);
     bind(tempdir);
-    if !is_under(state_dir, cwd) {
-        bind(state_dir);
+    if let Some(login_file) = login_file {
+        bind(login_file);
     }
     wrapped.extend(
         [
@@ -307,11 +280,6 @@ pub fn wrap_pi(
     wrapped
 }
 
-fn is_under(path: &Path, root: &Path) -> bool {
-    let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    real(path).starts_with(real(root))
-}
-
 pub fn wrapper_failure(exit_code: Option<i32>, stderr_tail: &str) -> Option<String> {
     if exit_code == Some(0) {
         return None;
@@ -324,13 +292,12 @@ pub fn wrapper_failure(exit_code: Option<i32>, stderr_tail: &str) -> Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-
     use super::*;
 
-    fn pairs(list: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    #[cfg(target_os = "linux")]
+    fn pairs(list: &[(&str, &str)]) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         list.iter()
-            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .map(|(key, value)| (key.into(), value.into()))
             .collect()
     }
 
@@ -475,78 +442,17 @@ mod tests {
     }
 
     #[test]
-    fn pi_state_dir_follows_variable_then_home() {
-        let cwd = Path::new("/work");
-        let explicit = Session::assemble(
-            Runtime::Pi,
-            &pairs(&[("PI_CODING_AGENT_DIR", "state"), ("HOME", "/home/u")]),
-            &[],
-            &[],
-            &[],
-        );
-        assert_eq!(
-            pi_state_dir(&explicit, cwd),
-            Ok(PathBuf::from("/work/state"))
-        );
-        let home = Session::assemble(
-            Runtime::Pi,
-            &pairs(&[("PI_CODING_AGENT_DIR", ""), ("HOME", "/home/u")]),
-            &[],
-            &[],
-            &[],
-        );
-        assert_eq!(
-            pi_state_dir(&home, cwd),
-            Ok(PathBuf::from("/home/u/.pi/agent"))
-        );
-        let none = Session::assemble(Runtime::Pi, &[], &[], &[], &[]);
-        assert_eq!(
-            pi_state_dir(&none, cwd),
-            Err("cannot create pi state directory $HOME/.pi/agent: HOME is not set".to_string())
-        );
-    }
-
-    #[test]
-    fn state_dir_is_created_privately_and_existing_kept() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("a/b/agent");
-        create_pi_state_dir(&dir).unwrap();
-        for created in [root.path().join("a"), root.path().join("a/b"), dir.clone()] {
-            let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700, "{}", created.display());
-        }
-        let open = root.path().join("open");
-        std::fs::create_dir(&open).unwrap();
-        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
-        create_pi_state_dir(&open).unwrap();
-        let mode = std::fs::metadata(&open).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o755);
-        let blocker = root.path().join("file");
-        std::fs::write(&blocker, "").unwrap();
-        let blocked = blocker.join("agent");
-        let detail = create_pi_state_dir(&blocked).unwrap_err();
-        assert!(
-            detail.starts_with(&format!(
-                "cannot create pi state directory {}: ",
-                blocked.display()
-            )),
-            "{detail}"
-        );
-    }
-
-    #[test]
-    fn wrapped_argv_binds_state_dir_outside_cwd() {
+    fn wrapped_argv_binds_cwd_tempdir_and_the_login_file_when_given() {
         let argv = strings(&["/usr/bin/pi", "-p", "hi"]);
-        let outside = wrap_pi(
+        let with_login = wrap_pi(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
-            Path::new("/nonexistent/home/.pi/agent"),
+            Some(Path::new("/nonexistent/home/.pi/agent/auth.json")),
             &argv,
         );
         assert_eq!(
-            outside,
+            with_login,
             strings(&[
                 "/usr/bin/bwrap",
                 "--ro-bind",
@@ -559,8 +465,8 @@ mod tests {
                 "/nonexistent/tmp/agentrun-x",
                 "/nonexistent/tmp/agentrun-x",
                 "--bind",
-                "/nonexistent/home/.pi/agent",
-                "/nonexistent/home/.pi/agent",
+                "/nonexistent/home/.pi/agent/auth.json",
+                "/nonexistent/home/.pi/agent/auth.json",
                 "--dev",
                 "/dev",
                 "--proc",
@@ -573,56 +479,18 @@ mod tests {
                 "hi",
             ])
         );
-        let inside = wrap_pi(
+        let without_login = wrap_pi(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
-            Path::new("/nonexistent/work/.pi"),
+            None,
             &argv,
         );
-        assert_eq!(inside.iter().filter(|arg| *arg == "--bind").count(), 2);
-        assert!(!inside.contains(&"/nonexistent/work/.pi".to_string()));
-        let sibling = wrap_pi(
-            Path::new("/usr/bin/bwrap"),
-            Path::new("/a/b"),
-            Path::new("/t"),
-            Path::new("/a/bc"),
-            &argv,
+        assert_eq!(
+            without_login.iter().filter(|arg| *arg == "--bind").count(),
+            2
         );
-        assert_eq!(sibling.iter().filter(|arg| *arg == "--bind").count(), 3);
-    }
-
-    #[test]
-    fn wrapped_argv_compares_real_paths_but_writes_given_ones() {
-        let root = tempfile::tempdir().unwrap();
-        let work = root.path().join("work");
-        std::fs::create_dir_all(work.join("state")).unwrap();
-        let link = root.path().join("link");
-        std::os::unix::fs::symlink(&work, &link).unwrap();
-        let linked_state = link.join("state");
-        let argv = strings(&["pi"]);
-        let wrapped = wrap_pi(
-            Path::new("/usr/bin/bwrap"),
-            &work,
-            root.path(),
-            &linked_state,
-            &argv,
-        );
-        assert_eq!(wrapped.iter().filter(|arg| *arg == "--bind").count(), 2);
-        let elsewhere = root.path().join("elsewhere");
-        std::fs::create_dir(&elsewhere).unwrap();
-        let elsewhere_link = work.join("to-elsewhere");
-        std::os::unix::fs::symlink(&elsewhere, &elsewhere_link).unwrap();
-        let wrapped = wrap_pi(
-            Path::new("/usr/bin/bwrap"),
-            &work,
-            root.path(),
-            &elsewhere_link,
-            &argv,
-        );
-        assert_eq!(wrapped.iter().filter(|arg| *arg == "--bind").count(), 3);
-        assert!(wrapped.contains(&elsewhere_link.to_string_lossy().into_owned()));
-        assert!(!wrapped.contains(&elsewhere.to_string_lossy().into_owned()));
+        assert_eq!(without_login.len(), with_login.len() - 3);
     }
 
     #[test]

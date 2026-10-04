@@ -5,6 +5,7 @@ use agentrun::adapter::{Adapter, Launch, Record};
 use agentrun::cli::Runtime;
 use agentrun::event::SubagentStatus;
 use agentrun::run::Invocation;
+use agentrun::sandbox::wrap_pi;
 use agentrun::usage::{TokenCounts, Usage};
 use serde_json::Value;
 
@@ -31,9 +32,19 @@ impl Adapter for FakeAdapter {
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
         argv.push(invocation.prompt.clone());
+        let bwrap = invocation
+            .sandbox
+            .bwrap
+            .as_deref()
+            .filter(|_| invocation.sandbox.runs());
+        if let Some(bwrap) = bwrap {
+            argv = wrap_pi(bwrap, &invocation.cwd, &invocation.tempdir, None, &argv);
+        }
         Ok(Launch {
             argv,
             stdin: format!("{}\n", invocation.prompt).into_bytes(),
+            env: Vec::new(),
+            signal_wrapped_child: bwrap.is_some(),
         })
     }
 

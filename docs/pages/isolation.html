@@ -67,7 +67,7 @@
 <ul>
   <li>pi 只放行登录文件，不放行整个状态目录：pi 刷新令牌时原地改写 <code>auth.json</code>，锁目录建在私有状态目录里，所以一个文件就够；状态目录里有 pi 的启动脚本与扩展，不能让沙箱里的 agent 改写，见<a href="session.html#runtime-home">私有配置目录</a>。Linux 上用 <code>--bind</code> 单独绑定这个文件；用户没有登录文件时不放行。</li>
   <li>codex 用 <code>default_permissions</code> 选择自定义权限配置，不传 <code>--sandbox</code>。理由：传了 <code>--sandbox</code> 时权限配置不生效；显式选择内置的 <code>:workspace</code> 时 codex 忽略 <code>sandbox_workspace_write</code> 的各项，<code>/tmp</code> 与 <code>$TMPDIR</code> 仍可写（codex 0.159.2 实测与源码）。</li>
-  <li>pi 的包裹不加 <code>--unshare-pid</code> 与 <code>--new-session</code>，以保持<a href="session.html#signals">进程组与信号</a>的规则。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
+  <li>pi 的包裹不加 <code>--unshare-pid</code>，让 agentrun 能在宿主的 <code>/proc</code> 里找到 bwrap 的子进程 pi 并直接给它发信号；不加 <code>--new-session</code>，让进程组的 SIGKILL 能清理沙箱里的全部进程，见<a href="session.html#signals">进程组与信号</a>。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
   <li>macOS 上 Seatbelt 按真实路径匹配，<code>/tmp</code> 与 <code>/var</code> 指向 <code>/private</code>，所以可写路径先解析符号链接再写进配置。</li>
   <li>沙箱打开时 claude-code 用 <code>dontAsk</code>，不用 <code>auto</code>。理由：Edit 与 Write 在 claude 进程里执行，不经过沙箱；auto 模式会放行写到工作目录以外的请求，即使放行规则只列了工作目录（claude 2.1.289 云端实测，Write 写成了 <code>$HOME</code> 与 <code>/tmp</code> 下的文件）。<code>dontAsk</code> 拒绝放行规则以外的所有调用，被拒绝的调用交还模型，Bash 仍由沙箱自动放行。被拒绝的调用记为 <code>tool</code> 事件的 <code>denied</code>。</li>
   <li>被沙箱拦下的写入或联网不算 <code>failed</code>，也不设 <code>tool</code> 事件的 <code>denied</code>。<code>denied</code> 只表示运行时权限机制的拒绝。理由：命令失败的结果会交还模型，由模型决定下一步，和其他命令出错一样。</li>
