@@ -5,6 +5,7 @@ pub mod cli;
 pub mod credential;
 pub mod event;
 pub mod json;
+pub mod network;
 pub mod output;
 pub mod pi;
 pub mod rich;

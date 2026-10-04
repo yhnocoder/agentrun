@@ -278,7 +278,6 @@ fn runtime_missing_from_path_is_rejected() {
 
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
 const ADAPTER_MISSING: &str = "codex support is not implemented in this build";
-const PI_SANDBOX_PENDING: &str = "pi in the sandbox needs the filter proxy to reach its model service, which is not implemented in this build. Use --sandbox off";
 
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
@@ -432,31 +431,110 @@ fn sandbox_variable_from_every_source_and_option_precedence() {
 }
 
 #[test]
-fn network_full_and_custom_are_not_implemented_yet() {
-    let env = Env::with_fake_claude();
-    assert_eq!(
-        assert_rejected(&env.run(&[
-            "claude-code",
-            "--sandbox",
-            "off",
-            "--network",
-            "custom",
-            "--prompt",
-            "hi"
-        ])),
-        "--network custom is not implemented in this build. Use --network none"
+fn network_usage_errors() {
+    let env = Env::with_fake_pi();
+    let cases = [
+        (
+            vec!["--network", "custom"],
+            "--network custom requires at least one --allow-host".to_string(),
+        ),
+        (
+            vec!["--allow-host", "example.com"],
+            "--allow-host requires --network custom".to_string(),
+        ),
+        (
+            vec!["--network", "full", "--allow-host", "example.com"],
+            "--allow-host requires --network custom".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "*"],
+            "--allow-host '*' is not allowed. Use --network full".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "api.*.com"],
+            "--allow-host 'api.*.com': a wildcard is only allowed as the first label, as in *.example.com".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "*.*.com"],
+            "--allow-host '*.*.com': a wildcard is only allowed as the first label, as in *.example.com".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", ":443"],
+            "--allow-host ':443': expected HOST or HOST:PORT".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "example.com:0"],
+            "--allow-host 'example.com:0': expected HOST or HOST:PORT".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "example.com:70000"],
+            "--allow-host 'example.com:70000': expected HOST or HOST:PORT".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "[::1]:443"],
+            "--allow-host '[::1]:443': IPv6 addresses are not supported".to_string(),
+        ),
+        (
+            vec!["--network", "custom", "--allow-host", "::1"],
+            "--allow-host '::1': IPv6 addresses are not supported".to_string(),
+        ),
+    ];
+    for (options, detail) in cases {
+        let mut args = vec!["pi", "--sandbox", "off"];
+        args.extend(options);
+        args.extend(["--prompt", "hi"]);
+        assert_eq!(assert_rejected(&env.run(&args)), detail, "{args:?}");
+    }
+    assert!(env.no_leftover_tempdirs());
+}
+
+#[test]
+fn start_network_reports_mode_allow_and_enforcement() {
+    let env = Env::new();
+    env.install(
+        "pi",
+        "#!/bin/sh\necho '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"provider\":\"deepseek\",\"model\":\"deepseek-flash\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0},\"stopReason\":\"stop\"}}'\n",
     );
+    let output = env.run(&[
+        "pi",
+        "--sandbox",
+        "off",
+        "--network",
+        "custom",
+        "--allow-host",
+        "API.Example.com.",
+        "--allow-host",
+        "*.github.com:443",
+        "--prompt",
+        "hi",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let start: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(start["type"], "start");
     assert_eq!(
-        assert_rejected(&env.run(&[
-            "claude-code",
-            "--sandbox",
-            "relax",
-            "--network",
-            "full",
-            "--prompt",
-            "hi"
-        ])),
-        "--network full is not implemented in this build. Use --network none"
+        start["network"],
+        serde_json::json!({
+            "mode": "custom",
+            "allow": ["API.Example.com.", "*.github.com:443"],
+            "enforced": false,
+        })
+    );
+    let output = env.run(&[
+        "pi",
+        "--sandbox",
+        "off",
+        "--network",
+        "full",
+        "--prompt",
+        "hi",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let start: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        start["network"],
+        serde_json::json!({"mode": "full", "allow": [], "enforced": false})
     );
 }
 
@@ -472,12 +550,18 @@ fn real_bwrap_passes_the_sandbox_step() {
     };
     let env = Env::with_fake_pi();
     let system = bwrap.parent().unwrap();
+    let path = format!("{}:{}", env.bin().display(), system.display());
     let output = env
-        .command(&["pi", "--debug", "--prompt", "hi"])
-        .env(
-            "PATH",
-            format!("{}:{}", env.bin().display(), system.display()),
-        )
+        .command(&[
+            "pi",
+            "--debug",
+            "--dry-run",
+            "--model",
+            "deepseek/deepseek-flash",
+            "--prompt",
+            "hi",
+        ])
+        .env("PATH", &path)
         .output()
         .unwrap();
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
@@ -486,7 +570,7 @@ fn real_bwrap_passes_the_sandbox_step() {
         eprintln!("skipped: {first}");
         return;
     }
-    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_dry_run(&output);
     assert!(
         first.starts_with(&format!(
             "[debug] sandbox: bubblewrap ({}, socat {}/socat, check ",
@@ -495,33 +579,88 @@ fn real_bwrap_passes_the_sandbox_step() {
         )),
         "{first}"
     );
-    assert_eq!(
-        stderr.lines().nth(1),
-        Some(format!("agentrun: {PI_SANDBOX_PENDING}").as_str())
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout.lines().next().unwrap();
+    assert!(
+        command.contains(&format!(
+            " {}/socat '<proxy port>' '<tempdir>/proxy.sock' {}/pi ",
+            system.display(),
+            env.bin().display()
+        )),
+        "{command}"
     );
+    assert!(command.contains("--unshare-net"), "{command}");
+    assert!(env.no_leftover_tempdirs());
     let output = env
         .command(&["pi", "--dry-run", "--prompt", "hi"])
-        .env(
-            "PATH",
-            format!("{}:{}", env.bin().display(), system.display()),
-        )
-        .output()
-        .unwrap();
-    assert_eq!(assert_rejected(&output), PI_SANDBOX_PENDING);
-    assert!(env.no_leftover_tempdirs());
-    env.install("claude", "#!/bin/sh\nexit 0\n");
-    let output = env
-        .command(&["claude-code", "--network", "full", "--prompt", "hi"])
-        .env(
-            "PATH",
-            format!("{}:{}", env.bin().display(), system.display()),
-        )
+        .env("PATH", &path)
         .output()
         .unwrap();
     assert_eq!(
         assert_rejected(&output),
-        "--network full is not implemented in this build. Use --network none"
+        "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>"
     );
+    let output = env
+        .command(&["pi", "--dry-run", "--model", "acme/robot", "--prompt", "hi"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        assert_rejected(&output),
+        "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
+    );
+    for mode in ["custom", "full"] {
+        let mut args = vec![
+            "pi",
+            "--dry-run",
+            "--model",
+            "acme/robot",
+            "--network",
+            mode,
+        ];
+        if mode == "custom" {
+            args.extend(["--allow-host", "robot.example"]);
+        }
+        args.extend(["--prompt", "hi"]);
+        let output = env.command(&args).env("PATH", &path).output().unwrap();
+        assert_dry_run(&output);
+    }
+    assert!(env.no_leftover_tempdirs());
+    env.install("claude", "#!/bin/sh\nexit 0\n");
+    let output = env
+        .command(&[
+            "claude-code",
+            "--network",
+            "full",
+            "--dry-run",
+            "--prompt",
+            "hi",
+        ])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert_dry_run(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout.lines().next().unwrap();
+    assert!(
+        command.contains(
+            r#""network":{"allowedDomains":[],"httpProxyPort":"<proxy port>","socksProxyPort":"<proxy port>"}"#
+        ),
+        "{command}"
+    );
+    let output = env
+        .command(&["claude-code", "--dry-run", "--prompt", "hi"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert_dry_run(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout.lines().next().unwrap();
+    assert!(
+        command.contains(r#""network":{"allowedDomains":[]}"#),
+        "{command}"
+    );
+    assert!(!command.contains("proxy port"), "{command}");
 }
 
 #[test]

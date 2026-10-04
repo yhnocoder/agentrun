@@ -47,10 +47,13 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
             },
             reason: String::new(),
             bwrap: sandboxed.then(|| PathBuf::from("/usr/bin/bwrap")),
+            socat: sandboxed.then(|| PathBuf::from("/usr/bin/socat")),
             description: String::new(),
         },
         tempdir: PathBuf::new(),
         session: Session::assemble(runtime, &[], &[], &[], &[]),
+        allow_hosts: Vec::new(),
+        proxy: None,
     }
 }
 
@@ -127,4 +130,89 @@ pub fn assert_replay(adapter: &mut dyn Adapter, runtime: &str, name: &str, promp
         .map(|line| without_timing(serde_json::from_str(line).expect("expected event is JSON")))
         .collect();
     assert_eq!(actual, expected);
+}
+
+pub struct WebServer {
+    pub port: u16,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<usize>>,
+}
+
+impl WebServer {
+    pub fn start() -> WebServer {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut served = 0;
+            while !flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                            .unwrap();
+                        let mut head = Vec::new();
+                        let mut byte = [0u8; 1];
+                        while !head.ends_with(b"\r\n\r\n")
+                            && stream.read(&mut byte).is_ok_and(|n| n == 1)
+                        {
+                            head.push(byte[0]);
+                        }
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        );
+                        served += 1;
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                }
+            }
+            served
+        });
+        WebServer {
+            port,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    pub fn served(mut self) -> usize {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.thread.take().unwrap().join().unwrap()
+    }
+}
+
+impl Drop for WebServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+pub fn bwrap_available() -> bool {
+    let available = std::process::Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--die-with-parent",
+            "--",
+            "/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !available {
+        eprintln!("skipped: bwrap is not available here");
+    }
+    available
 }

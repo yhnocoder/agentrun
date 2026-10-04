@@ -28,7 +28,7 @@
   <li>按给出的顺序加载 <code>--env-file</code>。</li>
   <li>按给出的顺序应用 <code>--env</code>。</li>
   <li>读取 <code>AGENTRUN_</code> 开头的变量（<code>AGENTRUN_SANDBOX</code> 与两个凭据变量），然后从会话环境删除所有 <code>AGENTRUN_</code> 变量。</li>
-  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；pi 与 codex 的 <code>PI_CODING_AGENT_DIR</code> 与 <code>CODEX_HOME</code> 指向<a href="#runtime-home">私有配置目录</a>；网络经过滤代理时设置代理变量。</li>
+  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；pi 与 codex 的 <code>PI_CODING_AGENT_DIR</code> 与 <code>CODEX_HOME</code> 指向<a href="#runtime-home">私有配置目录</a>；网络经过滤代理时设置代理变量；claude-code 的沙箱运行时设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>，理由见<a href="isolation.html#network">网络</a>。</li>
 </ol>
 <table>
   <thead>

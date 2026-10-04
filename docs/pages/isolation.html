@@ -85,23 +85,28 @@
     <tr><td><code>custom</code></td><td><code>--allow-host</code> 列出的主机，pi 另加模型服务的主机</td><td>只打开网页读取，限制在列出的主机</td></tr>
   </tbody>
 </table>
-<p><code>--allow-host HOST[:PORT]</code> 可重复。<code>HOST</code> 是完整主机名，或 <code>*.example.com</code>（匹配所有子域名，不匹配 <code>example.com</code> 本身）。不写端口时允许 443 与 80。以下情形是用法错误：<code>custom</code> 但没有 <code>--allow-host</code>；给了 <code>--allow-host</code> 但不是 <code>custom</code>；主机名里有 <code>*</code> 但不是以 <code>*.</code> 开头；单独一个 <code>*</code>。理由：单独的 <code>*</code> 与 <code>full</code> 同义，只保留一种写法，<code>start</code> 事件里一眼能看出是否全开。</p>
-<p><code>full</code> 与 <code>custom</code> 默认拒绝解析到私有地址的主机，主机被显式列在 <code>--allow-host</code> 里时放行。</p>
+<p><code>--allow-host HOST[:PORT]</code> 可重复。<code>HOST</code> 是完整主机名，或 <code>*.example.com</code>（匹配所有子域名，不匹配 <code>example.com</code> 本身）。不写端口时允许 443 与 80。以下情形是用法错误：<code>custom</code> 但没有 <code>--allow-host</code>；给了 <code>--allow-host</code> 但不是 <code>custom</code>；主机名里有 <code>*</code> 但不是以 <code>*.</code> 开头；单独一个 <code>*</code>；主机为空或端口不是 1 到 65535 的整数；主机是 IPv6 字面量（见<a href="#no-ipv6">不支持 IPv6</a>）。理由：单独的 <code>*</code> 与 <code>full</code> 同义，只保留一种写法，<code>start</code> 事件里一眼能看出是否全开。</p>
+<p><code>full</code> 与 <code>custom</code> 默认拒绝解析到私有地址的主机，主机名或 IP 被逐字列在 <code>--allow-host</code> 里时放行；<code>*.example.com</code> 这类通配规则匹配到的主机仍然检查，因为允许用户自建子域名或泛解析的域名能让某个子域名解析到内网地址。私有地址是 <code>0.0.0.0/8</code>、<code>10.0.0.0/8</code>、<code>100.64.0.0/10</code>、<code>127.0.0.0/8</code>、<code>169.254.0.0/16</code>、<code>172.16.0.0/12</code>、<code>192.168.0.0/16</code>。<code>198.18.0.0/15</code> 不在其中：本机 DNS 由代理工具做 fake-ip 时，公网域名解析到这个网段，把它当作私有地址会让放行列表里的主机也被拒绝。</p>
 <p>custom 不打开网页搜索的理由：claude-code 的网页搜索与 codex 的网页搜索在服务商的服务器上执行，无法按主机限制，而且搜索词本身可以带出文件内容。</p>
 
 <h3>过滤代理</h3>
 <p>沙箱打开且需要按主机放行时，agentrun 在启动运行时之前在自己的进程里启动一个过滤代理，会话结束时关闭。代理运行在沙箱外，沙箱里的进程只能连到它。</p>
 <ul>
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
-  <li>监听 <code>127.0.0.1</code> 上的随机端口。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，再由 <code>socat</code> 把会话临时目录里的 Unix socket 接到这个端口，做法与 claude-code 自己的沙箱相同。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
-  <li>代理自己解析域名，判断私有地址。</li>
-  <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 与它们的小写形式指向代理，<code>NO_PROXY</code> 与 <code>no_proxy</code> 清空。小写也要设，因为 pi 先读小写的 <code>https_proxy</code>，调用方环境里原有的小写变量会让 pi 绕过过滤代理（pi 1.0.1 实测）。调用方环境里原有的代理变量改由过滤代理作为上游使用，所以Cloud Managed 容器自带的出口代理仍然生效。</li>
+  <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成的名字与 IPv4 字面量，其他字节的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
+  <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
+  <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
+  <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB，连接目标最多等 10 秒。</li>
+  <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 与它们的小写形式指向代理，<code>NO_PROXY</code> 与 <code>no_proxy</code> 清空。小写也要设，因为 pi 先读小写的 <code>https_proxy</code>，调用方环境里原有的小写变量会让 pi 绕过过滤代理（pi 1.0.1 实测）。</li>
+  <li>调用方环境里原有的代理变量改由过滤代理作为上游使用，所以 Cloud Managed 容器自带的出口代理仍然生效：<code>CONNECT</code> 与 SOCKS5 依次取 <code>https_proxy</code>、<code>HTTPS_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，普通 HTTP 依次取 <code>http_proxy</code>、<code>HTTP_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，第一个非空的值生效。只支持 <code>http://</code> 上游，地址里的用户名与密码转为 <code>Proxy-Authorization: Basic</code>；其他协议的值当作没有上游。调用方原有的 <code>no_proxy</code> 或 <code>NO_PROXY</code> 匹配的主机直接连接。目标主机解析失败时，有上游则交给上游连接，没有上游则按连接失败处理。代理变量的值可能带凭据，不出现在任何输出里。</li>
   <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#event-types">事件与输出</a>。</li>
 </ul>
 <figure>
 <svg class="diagram" viewBox="0 0 600 370" style="max-width:600px" role="img" aria-label="沙箱内进程经过滤代理访问网络"><defs><marker id="arr-net" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="20" y="10" width="560" height="84" rx="10" style="fill:none;stroke-dasharray:6 4"/><text class="note" x="34" y="30" text-anchor="start">沙箱</text><rect x="110" y="34" width="380" height="44" rx="8"/><text x="300.0" y="61.0" text-anchor="middle">agent 进程：运行时与它执行的命令</text><path d="M300,78 L300,138" marker-end="url(#arr-net)"/><text class="note" x="312" y="113" text-anchor="start">只能连接 127.0.0.1 上的随机端口</text><rect x="130" y="140" width="340" height="44" rx="8"/><text x="300.0" y="167.0" text-anchor="middle">过滤代理：在 agentrun 进程里，沙箱外</text><path d="M300,184 C300,214 100,214 100,248" marker-end="url(#arr-net)"/><path d="M300,184 L300,248" marker-end="url(#arr-net)"/><path d="M300,184 C300,214 500,214 500,248" marker-end="url(#arr-net)"/><rect x="20" y="250" width="160" height="60" rx="8"/><text x="100.0" y="276.0" text-anchor="middle">放行</text><text x="100.0" y="294.0" text-anchor="middle">经上游代理或直连</text><rect x="220" y="250" width="160" height="60" rx="8"/><text x="300.0" y="276.0" text-anchor="middle">拒绝</text><text x="300.0" y="294.0" text-anchor="middle">not_allowed</text><rect x="420" y="250" width="160" height="60" rx="8"/><text x="500.0" y="276.0" text-anchor="middle">拒绝</text><text x="500.0" y="294.0" text-anchor="middle">private_address</text><text class="note" x="100" y="330" text-anchor="middle">主机在放行列表里</text><text class="note" x="300" y="330" text-anchor="middle">主机不在放行列表里</text><text class="note" x="500" y="330" text-anchor="middle">解析到私有地址</text><text class="note" x="300" y="358" text-anchor="middle">每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 network 事件</text></svg>
 <figcaption>沙箱里的进程只能连到过滤代理，由代理按主机决定放行或拒绝。</figcaption>
 </figure>
+<h4 id="no-ipv6">不支持 IPv6</h4>
+<p>过滤代理与网络限制只支持 IPv4：只在 <code>127.0.0.1</code> 监听；解析目标主机只取 IPv4 地址，没有 IPv4 地址时按连接失败处理；目标是 IPv6 字面量时拒绝，<code>reason</code> 为 <code>not_allowed</code>；<code>--allow-host</code> 的主机是 IPv6 字面量时是用法错误；SOCKS5 的 IPv6 地址类型回复「不支持的地址类型」。理由：Cloud Managed 容器的内核没有 IPv6，IPv6 的路径无法在云端验收。已知后果：在 <code>localhost</code> 先解析为 <code>::1</code> 的主机上，claude-code 在沙箱外用 <code>TCP:localhost:&lt;端口&gt;</code> 连接过滤代理可能失败，由本机 Linux 实测确认。</p>
 <p>没有直接用各运行时自带的网络设置，因为三者能力不一致：claude-code 沙箱的 <code>allowedDomains</code> 不接受单独的 <code>*</code>，表达不了 full（claude 2.1.289）；codex 按主机放行要开启它自带的实验性代理，而且这个代理拒绝解析到私有网段的主机；pi 没有任何网络控制。三套做法含义不同，也没有统一的连接记录可供排查。</p>
 
 <h3>各运行时的做法</h3>
@@ -110,12 +115,13 @@
     <tr><th>运行时</th><th><code>none</code></th><th><code>full</code> 与 <code>custom</code></th><th>网页工具</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
+    <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。设了这两个端口后 claude-code 不再按 <code>allowedDomains</code> 过滤，沙箱里命令的流量全部交给过滤代理，主机由过滤代理判定（claude 2.1.289 云端实测），所以 <code>allowedDomains</code> 保持为空</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
     <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：权限配置的网络打开，直接联网，不经过代理，没有 <code>network</code> 事件。custom：开启 codex 自带的代理，放行 <code>--allow-host</code> 列出的主机；codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，codex 的代理把放行的请求转给它，过滤代理按同一份列表再判断一次并输出 <code>network</code> 事件。codex 的代理关闭 SOCKS5，因为 SOCKS5 的连接不经过上游。codex 访问模型与刷新令牌的请求也经过过滤代理，过滤代理另外放行 codex 的服务主机，见模型服务的主机</td><td>full：<code>web_search="live"</code>。none 与 custom：<code>web_search="disabled"</code></td></tr>
     <tr><td>pi</td><td>包裹断开网络，只能连代理，代理只放行模型服务</td><td>同 none，代理按取值放行</td><td>pi 没有网页工具，靠 bash 里的 <code>curl</code></td></tr>
   </tbody>
 </table>
-<p>claude-code 的 WebFetch 在 claude 进程里运行，不经过沙箱也不经过代理，只能靠权限规则限制主机。所以沙箱没有运行时，custom 下的 WebFetch 仍按主机限制。</p>
+<p>claude-code 的 WebFetch 在 claude 进程里运行，不经过沙箱也不经过代理，只能靠权限规则限制主机。所以沙箱没有运行时，custom 下的 WebFetch 仍按主机限制。claude-code 进程本身不设置代理变量，它访问 Anthropic 的流量不经过过滤代理。</p>
+<p>claude-code 的沙箱运行时，三种取值下会话环境都设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>。理由：claude-code 在断网的网络命名空间里用 <code>socat</code> 把沙箱里的端口转发到它的代理 socket，没有指定地址族；内核没有 IPv6 时（Cloud Managed 容器），socat 1.8 选了 IPv6 而启动失败，claude-code 丢弃它的输出，沙箱里的命令连不上任何代理。这个变量让 socat 改用 IPv4 监听。</p>
 
 <h3>模型服务的主机</h3>
 <p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>：</p>
@@ -131,7 +137,7 @@
     <tr><td><code>openrouter</code></td><td><code>openrouter.ai</code></td></tr>
   </tbody>
 </table>
-<p>服务商不在表里时，agentrun 不知道该放行哪个主机。<code>none</code> 下启动前报错（退出码 2），提示改用 <code>--network custom --allow-host &lt;服务商主机&gt;</code>；<code>custom</code> 下只放行 <code>--allow-host</code> 列出的主机；<code>full</code> 不受影响。</p>
+<p>服务商不在表里时，agentrun 不知道该放行哪个主机。<code>none</code> 下启动前报错（退出码 2），<code>detail</code> 为 <code>cannot tell which host pi's model service uses (provider: &lt;服务商或 unknown&gt;). Use --network custom --allow-host &lt;host of the model service&gt;</code>；没给 <code>--model</code> 且 pi 设置文件不存在、不是 JSON 或没有 <code>defaultProvider</code> 时服务商按 unknown 处理；<code>custom</code> 下只放行 <code>--allow-host</code> 列出的主机；<code>full</code> 不受影响。</p>
 <p>codex 的进程不在沙箱里，<code>none</code> 与 <code>full</code> 下它直接访问模型服务。<code>custom</code> 下 codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，它自己的请求也经过过滤代理，所以过滤代理另外放行下面四个主机，不看用户用哪种方式登录：</p>
 <table>
   <thead>
@@ -165,6 +171,13 @@
     <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户的 pi 登录文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>
 </table>
+<p>过滤代理本身的剩余风险：</p>
+<ul>
+  <li>HTTPS 只按 <code>CONNECT</code> 的主机名与端口判定，TLS 里的 SNI 与 <code>Host</code> 不检查。放行的主机如果和别的站点共用 IP 并按 SNI 选站点，隧道里可以访问那些站点。</li>
+  <li>有上游代理时，私有地址只看本机的解析结果，上游会自己再解析一次；本机解析失败时不做检查，直接交给上游。</li>
+  <li>过滤代理在本机回环地址上监听 TCP 端口，会话期间同一台机器上的其他用户也能连这个端口，经它发出的请求会带上调用方的上游代理凭据。</li>
+  <li><code>full</code> 下 claude-code 的 WebFetch 在 claude 进程里运行，不经过过滤代理，也就没有私有地址检查。</li>
+</ul>
 <p>不走代理的程序在沙箱里连不上网。例如 <code>git clone git@github.com:...</code> 走 SSH，即使用了 <code>--network full</code> 也会失败；改用 HTTPS 地址可以成功。</p>
 </main>
 </body>

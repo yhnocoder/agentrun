@@ -18,11 +18,11 @@ use tempfile::TempDir;
 use crate::adapter::{Adapter, Launch, Record};
 use crate::aggregate::Aggregator;
 use crate::cli::{
-    Cli, Format, NetworkMode, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
-    usage_error_detail,
+    Cli, Format, RunArgs, Runtime, SandboxMode, default_format, prescan_format, usage_error_detail,
 };
 use crate::credential::write_session_credential;
-use crate::event::{Body, End, EndStatus, Event, NetworkInfo, Start};
+use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Start};
+use crate::network::{self, FilterProxy, HostRule, Policy, ProxyEndpoint, Upstream};
 use crate::output::Output;
 use crate::pi;
 use crate::rich::{OpenTool, REFRESH_PERIOD, Rich, terminal_size};
@@ -102,6 +102,8 @@ pub struct Invocation {
     pub sandbox: Sandbox,
     pub tempdir: PathBuf,
     pub session: Session,
+    pub allow_hosts: Vec<HostRule>,
+    pub proxy: Option<ProxyEndpoint>,
 }
 
 struct Ready {
@@ -142,8 +144,17 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         Ok(ready) => ready,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
+    let proxy_needed = network::proxy_needed(
+        ready.invocation.runtime,
+        ready.invocation.args.network,
+        ready.invocation.sandbox.runs(),
+    );
     if ready.invocation.args.dry_run {
         ready.invocation.tempdir = PathBuf::from(DRY_RUN_TEMPDIR);
+        ready.invocation.proxy = proxy_needed.then(|| ProxyEndpoint {
+            port: None,
+            socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
+        });
         let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
             Ok(launch) => launch,
             Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -181,13 +192,30 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         .signals
         .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
+    let mut proxy = None;
+    if proxy_needed {
+        match FilterProxy::bind(tempdir.path()) {
+            Ok(bound) => {
+                ready.invocation.proxy = Some(bound.endpoint());
+                proxy = Some(bound);
+            }
+            Err(error) => {
+                return reject(
+                    &mut caller,
+                    format,
+                    &format!("cannot start the filter proxy: {error}"),
+                    started,
+                );
+            }
+        }
+    }
     let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
         Ok(launch) => launch,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
     let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
     plan.push(credential_line);
-    execute(caller, ready, launch, plan, tempdir, started)
+    execute(caller, ready, launch, plan, tempdir, proxy, started)
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
@@ -220,6 +248,7 @@ fn prepare(
     if let (Runtime::Pi, Some(model)) = (runtime, &args.model) {
         pi::parse_model(model)?;
     }
+    let allow_hosts = network::check_usage(args.network, &args.allow_host)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let prompt = read_prompt(caller, &args)?;
     let env_args = parse_env_args(&args.env, &caller.env)?;
@@ -241,15 +270,6 @@ fn prepare(
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
-    if runtime == Runtime::Pi && sandbox.runs() {
-        return Err(pi::SANDBOX_NOT_IMPLEMENTED.to_string());
-    }
-    if args.network != NetworkMode::None {
-        return Err(format!(
-            "--network {} is not implemented in this build. Use --network none",
-            args.network.name()
-        ));
-    }
     let adapter = adapters(runtime).ok_or_else(|| {
         format!(
             "{} support is not implemented in this build",
@@ -265,6 +285,8 @@ fn prepare(
         sandbox,
         tempdir: PathBuf::new(),
         session,
+        allow_hosts,
+        proxy: None,
     };
     Ok(Ready {
         invocation,
@@ -390,6 +412,7 @@ fn execute(
     launch: Launch,
     plan: Vec<String>,
     tempdir: TempDir,
+    mut proxy: Option<FilterProxy>,
     started: Instant,
 ) -> u8 {
     let Ready {
@@ -399,6 +422,24 @@ fn execute(
         ..
     } = ready;
     let debug = invocation.args.debug;
+    let (sender, receiver) = mpsc::channel();
+    if let Some(proxy) = proxy.as_mut() {
+        let (upstream, notes) = Upstream::from_env(&invocation.session.env);
+        if debug {
+            for note in notes {
+                caller.print_error_line(&format!("[debug] {note}"));
+            }
+        }
+        let policy = Policy {
+            mode: invocation.args.network,
+            rules: invocation.allow_hosts.clone(),
+            service_hosts: launch.service_hosts.clone(),
+        };
+        let reporter = sender.clone();
+        proxy.serve(policy, upstream, move |network| {
+            let _ = reporter.send(Message::Network(network));
+        });
+    }
     let raw = match raw {
         Some(raw) => Some(raw),
         None if debug => {
@@ -507,7 +548,6 @@ fn execute(
     thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });
-    let (sender, receiver) = mpsc::channel();
     let stderr = child.stderr.take().expect("stderr is piped");
     let sink = Arc::clone(&caller.stderr);
     let tail = Arc::new(Mutex::new(Vec::new()));
@@ -534,10 +574,15 @@ fn execute(
     let exit_code = supervise(&caller, &receiver, |input| {
         let Input::Line(content) = input else {
             let open_tool = |agent: Option<&str>| aggregator.open_tool(agent);
-            caller.with_stdout(|stdout| match input {
-                Input::Stderr(bytes) => output.stderr(stdout, bytes, &open_tool),
-                _ => output.refresh(stdout, &open_tool),
-            });
+            match input {
+                Input::Network(network) => {
+                    caller.emit(&mut output, &Event::now(Body::Network(network)), &open_tool);
+                }
+                Input::Stderr(bytes) => {
+                    caller.with_stdout(|stdout| output.stderr(stdout, bytes, &open_tool));
+                }
+                _ => caller.with_stdout(|stdout| output.refresh(stdout, &open_tool)),
+            }
             return false;
         };
         if let Some(file) = raw.as_mut() {
@@ -564,6 +609,7 @@ fn execute(
         translated.terminate
     });
     drop(receiver);
+    drop(proxy);
 
     let tail = tail.lock().map(|tail| tail.clone()).unwrap_or_default();
     let stderr_tail = stderr_tail(&String::from_utf8_lossy(&tail));
@@ -585,6 +631,7 @@ enum Message {
     Line(Vec<u8>),
     Stderr(Vec<u8>),
     Refresh,
+    Network(Network),
     StdoutEnd,
     StderrEnd,
     Exited(ExitStatus),
@@ -594,6 +641,7 @@ enum Input<'a> {
     Line(&'a [u8]),
     Stderr(&'a [u8]),
     Refresh,
+    Network(Network),
 }
 
 fn supervise(
@@ -628,6 +676,9 @@ fn supervise(
             }
             Some(Message::Refresh) => {
                 handle(Input::Refresh);
+            }
+            Some(Message::Network(network)) => {
+                handle(Input::Network(network));
             }
             Some(Message::StdoutEnd) => stdout_ended = true,
             Some(Message::StderrEnd) => stderr_ended = true,

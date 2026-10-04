@@ -7,15 +7,24 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::adapter::{Adapter, Launch, Record};
+use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};
+use crate::network::proxy_environment;
 use crate::run::Invocation;
-use crate::sandbox::{wrap_pi, wrapper_failure};
+use crate::sandbox::{ProxyForward, wrap_pi, wrapper_failure};
 use crate::usage::TokenCounts;
 
 pub const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
 pub const STATE_HOME_SUBDIR: &str = ".pi/agent";
-pub const SANDBOX_NOT_IMPLEMENTED: &str = "pi in the sandbox needs the filter proxy to reach its model service, which is not implemented in this build. Use --sandbox off";
+const SERVICE_HOSTS: [(&str, &str); 5] = [
+    ("deepseek", "api.deepseek.com"),
+    ("anthropic", "api.anthropic.com"),
+    ("openai", "api.openai.com"),
+    ("google", "generativelanguage.googleapis.com"),
+    ("openrouter", "openrouter.ai"),
+];
+const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const PRIVATE_STATE_DIR: &str = "pi-agent";
 const LOGIN_FILE: &str = "auth.json";
 const MODELS_FILE: &str = "models.json";
@@ -174,6 +183,37 @@ impl Adapter for Pi {
         argv.extend(invocation.args.runtime_args.iter().cloned());
         argv.push("--".to_string());
         argv.push(invocation.prompt.clone());
+        let mut env = vec![(
+            OsString::from(STATE_DIR_VARIABLE),
+            private_dir.into_os_string(),
+        )];
+        let mut service_hosts = Vec::new();
+        let mut forward = None;
+        if let Some(proxy) = &invocation.proxy {
+            let provider = match &self.expected {
+                Some(model) => Some(model.provider.clone()),
+                None => user_dir
+                    .as_deref()
+                    .and_then(|dir| default_provider(&dir.join(SETTINGS_FILE))),
+            };
+            match provider.as_deref().and_then(service_host) {
+                Some(host) => service_hosts.push(host.to_string()),
+                None if invocation.args.network == NetworkMode::None => {
+                    return Err(format!(
+                        "cannot tell which host pi's model service uses (provider: {}). Use --network custom --allow-host <host of the model service>",
+                        provider.as_deref().unwrap_or("unknown")
+                    ));
+                }
+                None => {}
+            }
+            let socat = invocation
+                .sandbox
+                .socat
+                .as_deref()
+                .ok_or_else(|| "socat not found in PATH".to_string())?;
+            forward = Some((socat.to_path_buf(), proxy.port_text(), proxy.socket.clone()));
+            env.extend(proxy_environment(&proxy.port_text()));
+        }
         let bwrap = invocation
             .sandbox
             .bwrap
@@ -183,22 +223,26 @@ impl Adapter for Pi {
             let login = user_dir
                 .as_deref()
                 .and_then(|dir| std::fs::canonicalize(dir.join(LOGIN_FILE)).ok());
+            let forward = forward.as_ref().map(|(socat, port, socket)| ProxyForward {
+                socat,
+                port,
+                socket,
+            });
             argv = wrap_pi(
                 bwrap,
                 &invocation.cwd,
                 &invocation.tempdir,
                 login.as_deref(),
+                forward.as_ref(),
                 &argv,
             );
         }
         Ok(Launch {
             argv,
             stdin: Vec::new(),
-            env: vec![(
-                OsString::from(STATE_DIR_VARIABLE),
-                private_dir.into_os_string(),
-            )],
+            env,
             signal_wrapped_child: bwrap.is_some(),
+            service_hosts,
         })
     }
 
@@ -310,6 +354,20 @@ fn link_existing(source: &Path, link: &Path) -> std::io::Result<()> {
     }
 }
 
+pub fn service_host(provider: &str) -> Option<&'static str> {
+    SERVICE_HOSTS
+        .iter()
+        .find(|(name, _)| *name == provider)
+        .map(|(_, host)| *host)
+}
+
+fn default_provider(path: &Path) -> Option<String> {
+    default_model_settings(path)
+        .get(DEFAULT_PROVIDER_KEY)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 fn default_model_settings(path: &Path) -> Map<String, Value> {
     let mut settings = Map::new();
     let parsed = std::fs::read(path)
@@ -367,6 +425,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, SandboxMode};
     use crate::event::SandboxKind;
+    use crate::network::ProxyEndpoint;
     use crate::sandbox::Sandbox;
     use crate::session::{Session, parse_env_args};
 
@@ -436,10 +495,13 @@ mod tests {
                     },
                     reason: String::new(),
                     bwrap: sandboxed.then(|| PathBuf::from("/usr/bin/bwrap")),
+                    socat: sandboxed.then(|| PathBuf::from("/usr/bin/socat")),
                     description: String::new(),
                 },
                 tempdir: self.tempdir(),
                 session,
+                allow_hosts: Vec::new(),
+                proxy: None,
             }
         }
 
@@ -712,6 +774,143 @@ mod tests {
         assert_eq!(
             std::fs::read_link(setup.private().join("auth.json")).unwrap(),
             std::fs::canonicalize(custom.join("auth.json")).unwrap()
+        );
+    }
+
+    fn proxy(port: Option<u16>, setup: &Setup) -> ProxyEndpoint {
+        ProxyEndpoint {
+            port,
+            socket: setup.tempdir().join("proxy.sock"),
+        }
+    }
+
+    fn proxied(setup: &Setup, port: Option<u16>, extra: &[&str]) -> Result<Launch, String> {
+        let _ = std::fs::remove_dir_all(setup.private());
+        let mut invocation = setup.invocation(&pairs(&setup.with_home()), true, extra);
+        invocation.proxy = Some(proxy(port, setup));
+        Pi::new().launch(Path::new("/opt/bin/pi"), &invocation)
+    }
+
+    #[test]
+    fn proxied_launch_forwards_through_socat_and_sets_proxy_variables() {
+        let setup = Setup::new();
+        let launch = proxied(&setup, Some(41234), &["--model", "deepseek/deepseek-flash"]).unwrap();
+        assert_eq!(launch.service_hosts, ["api.deepseek.com"]);
+        let separator = launch.argv.iter().position(|arg| arg == "--").unwrap();
+        assert_eq!(
+            launch.argv[separator + 1..separator + 7],
+            [
+                "/bin/sh",
+                "-c",
+                r#""$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2>/dev/null & shift 2; exec "$@""#,
+                "/usr/bin/socat",
+                "41234",
+                setup.tempdir().join("proxy.sock").to_str().unwrap(),
+            ]
+        );
+        assert_eq!(launch.argv[separator + 7], "/opt/bin/pi");
+        assert!(launch.argv.contains(&"--unshare-net".to_string()));
+        let address = OsString::from("http://127.0.0.1:41234");
+        let mut expected = vec![(
+            OsString::from("PI_CODING_AGENT_DIR"),
+            setup.private().into_os_string(),
+        )];
+        for name in [
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "ALL_PROXY",
+            "https_proxy",
+            "http_proxy",
+            "all_proxy",
+        ] {
+            expected.push((OsString::from(name), address.clone()));
+        }
+        for name in ["NO_PROXY", "no_proxy"] {
+            expected.push((OsString::from(name), OsString::new()));
+        }
+        assert_eq!(launch.env, expected);
+    }
+
+    #[test]
+    fn proxied_launch_takes_the_provider_from_user_settings() {
+        let setup = Setup::new();
+        setup.write_user_file("settings.json", "{\"defaultProvider\":\"openai\"}");
+        let launch = proxied(&setup, Some(1), &[]).unwrap();
+        assert_eq!(launch.service_hosts, ["api.openai.com"]);
+        for (provider, host) in [
+            ("anthropic", "api.anthropic.com"),
+            ("google", "generativelanguage.googleapis.com"),
+            ("openrouter", "openrouter.ai"),
+        ] {
+            let launch = proxied(&setup, Some(1), &["--model", &format!("{provider}/m")]).unwrap();
+            assert_eq!(launch.service_hosts, [host]);
+        }
+    }
+
+    #[test]
+    fn proxied_launch_without_a_known_provider_depends_on_the_network_mode() {
+        let setup = Setup::new();
+        let unknown = "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>";
+        assert_eq!(proxied(&setup, Some(1), &[]).unwrap_err(), unknown);
+        setup.write_user_file("settings.json", "not json");
+        assert_eq!(proxied(&setup, Some(1), &[]).unwrap_err(), unknown);
+        setup.write_user_file("settings.json", "{\"defaultProvider\":5}");
+        assert_eq!(proxied(&setup, Some(1), &[]).unwrap_err(), unknown);
+        assert_eq!(
+            proxied(&setup, Some(1), &["--model", "acme/robot"]).unwrap_err(),
+            "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
+        );
+        let custom = proxied(
+            &setup,
+            Some(1),
+            &[
+                "--model",
+                "acme/robot",
+                "--network",
+                "custom",
+                "--allow-host",
+                "robot.example",
+            ],
+        )
+        .unwrap();
+        assert!(custom.service_hosts.is_empty());
+        let full = proxied(
+            &setup,
+            Some(1),
+            &["--model", "acme/robot", "--network", "full"],
+        )
+        .unwrap();
+        assert!(full.service_hosts.is_empty());
+    }
+
+    #[test]
+    fn proxied_dry_run_writes_the_port_placeholder() {
+        let setup = Setup::new();
+        let launch = proxied(
+            &setup,
+            None,
+            &["--dry-run", "--model", "deepseek/deepseek-flash"],
+        )
+        .unwrap();
+        assert!(launch.argv.contains(&"<proxy port>".to_string()));
+        assert!(launch.env.contains(&(
+            OsString::from("HTTPS_PROXY"),
+            OsString::from("http://127.0.0.1:<proxy port>")
+        )));
+        assert!(!setup.private().exists());
+    }
+
+    #[test]
+    fn proxied_launch_without_socat_is_an_error() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(&[], true, &["--model", "deepseek/deepseek-flash"]);
+        invocation.proxy = Some(proxy(Some(1), &setup));
+        invocation.sandbox.socat = None;
+        assert_eq!(
+            Pi::new()
+                .launch(Path::new("/opt/bin/pi"), &invocation)
+                .unwrap_err(),
+            "socat not found in PATH"
         );
     }
 

@@ -81,7 +81,7 @@ removed: (none)</div>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败；codex 的登录文件不存在。</li>
   <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
-  <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且没有用 <code>--network custom</code>。</li>
+  <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>。</li>
   <li>会话临时目录创建失败。</li>
 </ul>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
@@ -172,7 +172,7 @@ removed: (none)</div>
     }
   }
 }</code></pre>
-<p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时另加 <code>network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。</p>
+<p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时 <code>network</code> 改为 <code>{"allowedDomains":[],"httpProxyPort":&lt;代理端口&gt;,"socksProxyPort":&lt;代理端口&gt;}</code>，两个端口都是过滤代理的 TCP 端口（过滤代理按第一个字节区分 HTTP 与 SOCKS5）；<code>--dry-run</code> 的命令里端口写成 <code>&lt;proxy port&gt;</code>。</p>
 
 <h3>输出映射</h3>
 <p>stream-json 每行一个 JSON 对象。用到的对象与字段：</p>
@@ -232,7 +232,14 @@ removed: (none)</div>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
   <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
-  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt; --bind &lt;pi 登录文件&gt; &lt;pi 登录文件&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。用户没有 pi 登录文件时不绑定它。</li>
+  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>。Linux：
+<pre><code class="language-bash">bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt;
+  --bind &lt;pi 登录文件&gt; &lt;pi 登录文件&gt; --dev /dev --proc /proc
+  --die-with-parent --unshare-net --
+  /bin/sh -c '"$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2&gt;/dev/null &amp; shift 2; exec "$@"'
+  &lt;socat&gt; &lt;代理端口&gt; &lt;临时目录&gt;/proxy.sock
+  &lt;pi 的命令&gt;</code></pre>
+  macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb &lt;pi 的命令&gt;</code>。用户没有 pi 登录文件时不绑定它。Linux 的 <code>sh</code> 先在后台启动 <code>socat</code>，把沙箱里 <code>127.0.0.1</code> 上与过滤代理相同的端口号转发到会话临时目录里的 Unix socket，再用 <code>exec</code> 换成 pi，进程组与退出码不变；pi 退出后进程组收到 SIGKILL，socat 一起结束。socat 的标准错误指向 <code>/dev/null</code>：沙箱里的进程中途关闭连接时 socat 会打印一行 read 错误，这些行会混进 pi 的标准错误输出；转发本身不会启动失败，因为命名空间里只有回环接口，socket 文件在启动 pi 之前已经存在。</li>
   <li>环境里 <code>PI_CODING_AGENT_DIR</code> 指向私有状态目录，见<a href="session.html#runtime-home">私有配置目录</a>。</li>
 </ul>
 

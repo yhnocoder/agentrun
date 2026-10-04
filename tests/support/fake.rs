@@ -38,13 +38,21 @@ impl Adapter for FakeAdapter {
             .as_deref()
             .filter(|_| invocation.sandbox.runs());
         if let Some(bwrap) = bwrap {
-            argv = wrap_pi(bwrap, &invocation.cwd, &invocation.tempdir, None, &argv);
+            argv = wrap_pi(
+                bwrap,
+                &invocation.cwd,
+                &invocation.tempdir,
+                None,
+                None,
+                &argv,
+            );
         }
         Ok(Launch {
             argv,
             stdin: format!("{}\n", invocation.prompt).into_bytes(),
             env: Vec::new(),
             signal_wrapped_child: bwrap.is_some(),
+            service_hosts: Vec::new(),
         })
     }
 
