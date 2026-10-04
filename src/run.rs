@@ -18,18 +18,19 @@ use tempfile::TempDir;
 use crate::adapter::{Adapter, Launch, Record};
 use crate::aggregate::Aggregator;
 use crate::cli::{
-    Cli, Format, RunArgs, Runtime, SandboxMode, default_format, prescan_format, usage_error_detail,
+    Cli, Format, NetworkMode, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
+    usage_error_detail,
 };
 use crate::credential::write_session_credential;
 use crate::event::{Body, End, EndStatus, Event, NetworkInfo, SandboxKind, Start};
 use crate::output::Output;
+use crate::sandbox::{self, Sandbox};
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::signal::{SharedWriter, Signal, Signals};
 use crate::usage::Usage;
 
 const STDERR_TAIL_CHARS: usize = 500;
 const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;
-const SANDBOX_UNAVAILABLE_REASON: &str = "not implemented in this build";
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
@@ -90,6 +91,7 @@ pub struct Invocation {
     pub cwd: PathBuf,
     pub prompt: String,
     pub format: Format,
+    pub sandbox: Sandbox,
 }
 
 struct Ready {
@@ -154,6 +156,15 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ),
         None => "credentials: (none)".to_string(),
     });
+    if ready.invocation.runtime == Runtime::Pi
+        && ready.invocation.sandbox.kind == SandboxKind::Bubblewrap
+    {
+        let prepared = sandbox::pi_state_dir(&ready.session, &ready.invocation.cwd)
+            .and_then(|dir| sandbox::create_pi_state_dir(&dir));
+        if let Err(detail) = prepared {
+            return reject(&mut caller, format, &detail, started);
+        }
+    }
     let tempdir = match create_tempdir(&caller) {
         Ok(tempdir) => tempdir,
         Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -203,11 +214,17 @@ fn prepare(
         .map(|path| read_env_file(path))
         .collect::<Result<Vec<_>, _>>()?;
     let session = Session::assemble(runtime, &caller.env, &path_dirs, &env_files, &env_args);
+    let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;
     let executable = find_executable(runtime.executable(), &session.path, &cwd)
         .ok_or_else(|| format!("{} not found in PATH", runtime.executable()))?;
-    if args.sandbox == SandboxMode::On {
+    let sandbox = sandbox::check(mode, runtime, &session, &cwd, &caller.signals)?;
+    if args.debug {
+        caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
+    }
+    if args.network != NetworkMode::None {
         return Err(format!(
-            "sandbox is not available: {SANDBOX_UNAVAILABLE_REASON}. Use --sandbox relax or --sandbox off"
+            "--network {} is not implemented in this build. Use --network none",
+            args.network.name()
         ));
     }
     let adapter = adapters(runtime).ok_or_else(|| {
@@ -222,6 +239,7 @@ fn prepare(
         cwd,
         prompt,
         format,
+        sandbox,
     };
     let launch = adapter.launch(&executable, &invocation);
     Ok(Ready {
@@ -384,8 +402,8 @@ fn execute(
     let mut raw = raw.map(|(_, file)| file);
     let mut output = Output::new(
         invocation.format,
-        invocation.args.sandbox,
-        SANDBOX_UNAVAILABLE_REASON,
+        invocation.sandbox.mode,
+        &invocation.sandbox.reason,
     );
 
     let (program, program_args) = launch
@@ -429,11 +447,11 @@ fn execute(
 
     let start = Event::now(Body::Start(Start {
         runtime: invocation.runtime,
-        sandbox: SandboxKind::None,
+        sandbox: invocation.sandbox.kind,
         network: NetworkInfo {
             mode: invocation.args.network,
             allow: invocation.args.allow_host.clone(),
-            enforced: false,
+            enforced: invocation.sandbox.runs(),
         },
         model: invocation.args.model.clone(),
         cwd: invocation.cwd.to_string_lossy().into_owned(),

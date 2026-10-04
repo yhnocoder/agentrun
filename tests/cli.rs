@@ -22,10 +22,14 @@ impl Env {
 
     fn with_fake_claude() -> Env {
         let env = Env::new();
-        let path = env.bin().join("claude");
-        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        env.install("claude", "#!/bin/sh\nexit 0\n");
         env
+    }
+
+    fn install(&self, name: &str, script: &str) {
+        let path = self.bin().join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     fn bin(&self) -> PathBuf {
@@ -260,14 +264,241 @@ fn runtime_missing_from_path_is_rejected() {
     );
 }
 
+const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+const ADAPTER_MISSING: &str = "claude-code support is not implemented in this build";
+
+fn assert_rejected_with_debug(output: &Output, debug_lines: &[&str]) -> String {
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    let end: Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(end["status"], "rejected");
+    let detail = end["detail"].as_str().unwrap().to_string();
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    let mut expected: Vec<String> = debug_lines
+        .iter()
+        .map(|line| format!("[debug] {line}\n"))
+        .collect();
+    expected.push(format!("agentrun: {detail}\n"));
+    assert_eq!(stderr, expected.concat());
+    detail
+}
+
 #[test]
-fn sandbox_on_is_rejected_without_tempdir() {
+fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
     let env = Env::with_fake_claude();
     assert_eq!(
         assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
-        "sandbox is not available: not implemented in this build. Use --sandbox relax or --sandbox off"
+        format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
+    );
+    assert_eq!(
+        assert_rejected(&env.run(&["claude-code", "--dry-run", "--prompt", "hi"])),
+        format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
     );
     assert!(env.no_leftover_tempdirs());
+}
+
+#[test]
+fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
+    let env = Env::with_fake_claude();
+    let output = env.run(&[
+        "claude-code",
+        "--sandbox",
+        "relax",
+        "--debug",
+        "--prompt",
+        "hi",
+    ]);
+    assert_eq!(
+        assert_rejected_with_debug(
+            &output,
+            &["sandbox: none (--sandbox relax: bwrap not found in PATH)"]
+        ),
+        ADAPTER_MISSING
+    );
+}
+
+#[test]
+fn bwrap_that_cannot_start_is_rejected_with_its_message() {
+    let env = Env::with_fake_claude();
+    env.install(
+        "bwrap",
+        "#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n",
+    );
+    env.install("socat", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        "sandbox is not available: bwrap cannot start: No permissions to create new namespace. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+    );
+    env.install("bwrap", "#!/bin/sh\nexit 3\n");
+    assert_eq!(
+        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        "sandbox is not available: bwrap cannot start: exited with code 3. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+    );
+}
+
+#[test]
+fn bwrap_that_hangs_is_killed_after_five_seconds() {
+    let env = Env::with_fake_claude();
+    env.install("bwrap", "#!/bin/sh\nexec /bin/sleep 10\n");
+    env.install("socat", "#!/bin/sh\nexit 0\n");
+    let started = std::time::Instant::now();
+    let detail = assert_rejected(&env.run(&["claude-code", "--prompt", "hi"]));
+    let elapsed = started.elapsed().as_secs_f64();
+    assert!((4.5..9.0).contains(&elapsed), "took {elapsed:.2}s");
+    assert_eq!(
+        detail,
+        "sandbox is not available: bwrap cannot start: timed out after 5 seconds. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+    );
+}
+
+#[test]
+fn missing_socat_is_rejected() {
+    let env = Env::with_fake_claude();
+    env.install("bwrap", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        format!("sandbox is not available: socat not found in PATH. {INSTALL_HINT}")
+    );
+}
+
+#[test]
+fn sandbox_variable_from_every_source_and_option_precedence() {
+    let env = Env::with_fake_claude();
+    let output = env
+        .command(&["claude-code", "--prompt", "hi"])
+        .env("AGENTRUN_SANDBOX", "off")
+        .output()
+        .unwrap();
+    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
+    let output = env
+        .command(&["claude-code", "--env", "AGENTRUN_SANDBOX", "--prompt", "hi"])
+        .env("AGENTRUN_SANDBOX", "off")
+        .output()
+        .unwrap();
+    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
+    assert_eq!(
+        assert_rejected(&env.run(&[
+            "claude-code",
+            "--env",
+            "AGENTRUN_SANDBOX=off",
+            "--prompt",
+            "hi"
+        ])),
+        ADAPTER_MISSING
+    );
+    std::fs::write(
+        env.root.path().join("sandbox.env"),
+        "AGENTRUN_SANDBOX=off\n",
+    )
+    .unwrap();
+    assert_eq!(
+        assert_rejected(&env.run(&["claude-code", "--env-file", "sandbox.env", "--prompt", "hi"])),
+        ADAPTER_MISSING
+    );
+    assert_eq!(
+        assert_rejected(&env.run(&[
+            "claude-code",
+            "--env-file",
+            "sandbox.env",
+            "--sandbox",
+            "on",
+            "--prompt",
+            "hi"
+        ])),
+        format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
+    );
+    let output = env
+        .command(&["claude-code", "--prompt", "hi"])
+        .env("AGENTRUN_SANDBOX", "maybe")
+        .output()
+        .unwrap();
+    assert_eq!(
+        assert_rejected(&output),
+        "invalid AGENTRUN_SANDBOX value 'maybe': expected on, relax or off"
+    );
+    assert!(env.no_leftover_tempdirs());
+}
+
+#[test]
+fn network_full_and_custom_are_not_implemented_yet() {
+    let env = Env::with_fake_claude();
+    assert_eq!(
+        assert_rejected(&env.run(&[
+            "claude-code",
+            "--sandbox",
+            "off",
+            "--network",
+            "custom",
+            "--prompt",
+            "hi"
+        ])),
+        "--network custom is not implemented in this build. Use --network none"
+    );
+    assert_eq!(
+        assert_rejected(&env.run(&[
+            "claude-code",
+            "--sandbox",
+            "relax",
+            "--network",
+            "full",
+            "--prompt",
+            "hi"
+        ])),
+        "--network full is not implemented in this build. Use --network none"
+    );
+}
+
+#[test]
+fn real_bwrap_passes_the_sandbox_step() {
+    let Some(bwrap) = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
+    else {
+        eprintln!("skipped: bwrap is not installed");
+        return;
+    };
+    let env = Env::with_fake_claude();
+    let system = bwrap.parent().unwrap();
+    let output = env
+        .command(&["claude-code", "--debug", "--prompt", "hi"])
+        .env(
+            "PATH",
+            format!("{}:{}", env.bin().display(), system.display()),
+        )
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    let first = stderr.lines().next().unwrap_or_default();
+    if first.contains("bwrap cannot start") {
+        eprintln!("skipped: {first}");
+        return;
+    }
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        first.starts_with(&format!(
+            "[debug] sandbox: bubblewrap ({}, socat {}/socat, check ",
+            bwrap.display(),
+            system.display()
+        )),
+        "{first}"
+    );
+    assert_eq!(
+        stderr.lines().nth(1),
+        Some(format!("agentrun: {ADAPTER_MISSING}").as_str())
+    );
+    let output = env
+        .command(&["claude-code", "--network", "full", "--prompt", "hi"])
+        .env(
+            "PATH",
+            format!("{}:{}", env.bin().display(), system.display()),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(
+        assert_rejected(&output),
+        "--network full is not implemented in this build. Use --network none"
+    );
 }
 
 #[test]

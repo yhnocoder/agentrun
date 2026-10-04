@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use agentrun::adapter::Adapter;
@@ -174,19 +175,7 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
         "printf '{\"record\":\"usage\",\"parent\":null,\"model\":null,\"input_tokens\":3,\"output_tokens\":4,\"cache_read_tokens\":null,\"cache_write_tokens\":null}\\n'\n",
         "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"all done\"}\\n'\n",
     ));
-    let outcome = sandbox.run(
-        &[
-            "--model",
-            "m1",
-            "--network",
-            "custom",
-            "--allow-host",
-            "pypi.org",
-            "--",
-            "--extra",
-        ],
-        false,
-    );
+    let outcome = sandbox.run(&["--model", "m1", "--", "--extra"], false);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let events = outcome.events();
     for event in &events {
@@ -201,7 +190,7 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
         outcome.stripped(),
         vec![
             json!({"schema": 1, "type": "start", "runtime": "claude-code", "sandbox": "none",
-                "network": {"mode": "custom", "allow": ["pypi.org"], "enforced": false},
+                "network": {"mode": "none", "allow": [], "enforced": false},
                 "model": "m1", "cwd": work, "argv": [executable, "--extra"], "env": []}),
             json!({"schema": 1, "type": "prompt", "text": "hi"}),
             json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true}),
@@ -502,7 +491,7 @@ fn debug_keeps_tempdir_and_writes_raw_jsonl() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
+            "[debug] sandbox: none (--sandbox off)\n[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
             executable.display(),
             sandbox.path_var(),
             dir.display(),
@@ -568,13 +557,17 @@ fn text_format_shows_note_and_lines() {
         "\n",
         r#"{"record":"text","parent":null,"text":"done\nmore"}"#
     ));
+    sandbox.install(
+        "bwrap",
+        "#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n",
+    );
     let outcome = sandbox.run(&["--format", "text", "--sandbox", "relax"], false);
     assert_eq!(outcome.code, 0);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[..4],
         [
-            "[note] sandbox not running (--sandbox relax: not implemented in this build). agentrun does not restrict what the agent writes or which hosts it reaches",
+            "[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent writes or which hosts it reaches",
             "[main] prompt hi",
             "[main] agent start explore#1 (haiku): look around",
             "[explore#1] tool Grep: foo",
@@ -772,7 +765,7 @@ fn debug_lists_removed_variables_for_claude_code() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let lines: Vec<&str> = outcome.stderr.lines().collect();
     assert_eq!(
-        lines[2..6],
+        lines[3..7],
         [
             "[debug] set: ANTHROPIC_API_KEY",
             "[debug] removed: ANTHROPIC_API_KEY, CLAUDE_CODE_USE_BEDROCK",
@@ -810,6 +803,148 @@ fn credential_write_failure_is_rejected_before_tempdir() {
     assert!(!outcome.stdout.contains("secret-value"));
     assert!(!outcome.stderr.contains("secret-value"));
     assert!(!sandbox.bin().join("pi.ran").exists());
+    assert!(sandbox.leftover_tempdirs().is_empty());
+}
+
+fn bwrap_available() -> bool {
+    let available = Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--die-with-parent",
+            "--",
+            "/bin/true",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !available {
+        eprintln!("skipped: bwrap is not available here");
+    }
+    available
+}
+
+#[test]
+fn start_event_records_bubblewrap_when_sandbox_is_on() {
+    if !bwrap_available() {
+        return;
+    }
+    let sandbox = Sandbox::with_output("");
+    let outcome = sandbox.run(&["--sandbox", "on", "--format", "jsonl", "--debug"], false);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let start = &outcome.events()[0];
+    assert_eq!(start["sandbox"], "bubblewrap");
+    assert_eq!(start["network"]["enforced"], true);
+    let first = outcome.stderr.lines().next().unwrap();
+    assert!(
+        first.starts_with(
+            "[debug] sandbox: bubblewrap (/usr/bin/bwrap, socat /usr/bin/socat, check "
+        ),
+        "{first}"
+    );
+    assert!(first.ends_with("ms)"), "{first}");
+    let text = sandbox.run(&["--sandbox", "on", "--format", "text"], false);
+    assert!(!text.stdout.contains("[note]"), "{}", text.stdout);
+}
+
+#[test]
+fn start_event_records_none_for_relax_and_off() {
+    let sandbox = Sandbox::with_output("");
+    sandbox.install("bwrap", "#!/bin/sh\nexit 1\n");
+    let relax = sandbox.run(&["--sandbox", "relax", "--debug"], false);
+    assert_eq!(relax.code, 0, "{}", relax.stderr);
+    let start = &relax.events()[0];
+    assert_eq!(start["sandbox"], "none");
+    assert_eq!(start["network"]["enforced"], false);
+    assert_eq!(
+        relax.stderr.lines().next().unwrap(),
+        "[debug] sandbox: none (--sandbox relax: bwrap cannot start: exited with code 1)"
+    );
+    let off = sandbox.run(&["--sandbox", "off"], false);
+    let start = &off.events()[0];
+    assert_eq!(start["sandbox"], "none");
+    assert_eq!(start["network"]["enforced"], false);
+}
+
+#[test]
+fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
+    let sandbox = Sandbox::with_output("");
+    let empty = sandbox.root.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let outcome = sandbox.run_as(
+        "claude-code",
+        &[],
+        &[
+            "--sandbox",
+            "on",
+            "--env",
+            "PATH=/nonexistent",
+            "--path",
+            sandbox.bin().to_str().unwrap(),
+        ],
+        false,
+    );
+    assert_eq!(outcome.code, 2);
+    assert_eq!(
+        outcome.end()["detail"],
+        "sandbox is not available: bwrap not found in PATH. Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off"
+    );
+    assert!(sandbox.leftover_tempdirs().is_empty());
+}
+
+#[test]
+fn pi_state_dir_is_created_when_the_sandbox_runs() {
+    if !bwrap_available() {
+        return;
+    }
+    let sandbox = Sandbox::new("#!/bin/sh\nexit 0\n");
+    sandbox.install("pi", "#!/bin/sh\nexit 0\n");
+    let home = sandbox.root.path().join("home");
+    let home_str = home.to_string_lossy().into_owned();
+    let outcome = sandbox.run_as(
+        "pi",
+        &[("HOME", home_str.as_str())],
+        &["--sandbox", "on"],
+        false,
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let state = home.join(".pi/agent");
+    assert!(state.is_dir());
+    for created in [home.clone(), home.join(".pi"), state] {
+        let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{}", created.display());
+    }
+    let off = sandbox.root.path().join("home-off");
+    let outcome = sandbox.run_as(
+        "pi",
+        &[("HOME", off.to_str().unwrap())],
+        &["--sandbox", "off"],
+        false,
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(!off.exists());
+    let blocker = sandbox.root.path().join("blocker");
+    std::fs::write(&blocker, "").unwrap();
+    let blocked = blocker.join("agent");
+    let outcome = sandbox.run_as(
+        "pi",
+        &[("PI_CODING_AGENT_DIR", blocked.to_str().unwrap())],
+        &["--sandbox", "on"],
+        false,
+    );
+    assert_eq!(outcome.code, 2);
+    let detail = outcome.end()["detail"].as_str().unwrap().to_string();
+    assert!(
+        detail.starts_with(&format!(
+            "cannot create pi state directory {}: ",
+            blocked.display()
+        )),
+        "{detail}"
+    );
     assert!(sandbox.leftover_tempdirs().is_empty());
 }
 

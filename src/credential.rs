@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -62,23 +61,10 @@ pub fn write_session_credential(
     let Some(value) = value.as_ref().filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    let session_var = |name: &str| {
-        session
-            .env
-            .get(OsStr::new(name))
-            .filter(|value| !value.is_empty())
-            .map(|value| cwd.join(value))
-    };
-    let dir = match session_var(dir_variable) {
-        Some(dir) => dir,
-        None => match session_var("HOME") {
-            Some(home) => home.join(home_subdir),
-            None => {
-                return Err(format!(
-                    "cannot write {variable} to $HOME/{home_subdir}/{LOGIN_FILE}: HOME is not set"
-                ));
-            }
-        },
+    let Some(dir) = session.runtime_dir(cwd, dir_variable, home_subdir) else {
+        return Err(format!(
+            "cannot write {variable} to $HOME/{home_subdir}/{LOGIN_FILE}: HOME is not set"
+        ));
     };
     let path = dir.join(LOGIN_FILE);
     let status = write_credential(&path, value.as_bytes())

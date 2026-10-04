@@ -79,6 +79,16 @@ impl Session {
             pi_auth,
         }
     }
+
+    pub fn runtime_dir(&self, cwd: &Path, variable: &str, home_subdir: &str) -> Option<PathBuf> {
+        let value = |name: &str| {
+            self.env
+                .get(OsStr::new(name))
+                .filter(|value| !value.is_empty())
+                .map(|value| cwd.join(value))
+        };
+        value(variable).or_else(|| value("HOME").map(|home| home.join(home_subdir)))
+    }
 }
 
 fn removed_by(runtime: Runtime, name: &OsStr) -> bool {

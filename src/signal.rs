@@ -74,6 +74,7 @@ struct Preparation {
     started: Instant,
     tempdir: Option<PathBuf>,
     keep_tempdir: bool,
+    check_pid: Option<i32>,
 }
 
 struct Running {
@@ -130,6 +131,7 @@ impl Signals {
             started,
             tempdir: None,
             keep_tempdir: false,
+            check_pid: None,
         };
         match state.first_signal {
             Some(signal) => {
@@ -146,6 +148,12 @@ impl Signals {
     pub fn format(&self, format: Format) {
         if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
             preparation.format = format;
+        }
+    }
+
+    pub fn checking(&self, pid: Option<i32>) {
+        if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
+            preparation.check_pid = pid;
         }
     }
 
@@ -250,6 +258,11 @@ impl Shared {
 
 impl Preparation {
     fn abort(&self, signal: Signal) -> u8 {
+        if let Some(pid) = self.check_pid {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
         let status = EndStatus::Interrupted(signal);
         let end = Event::now(Body::End(End {
             status,
