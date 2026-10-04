@@ -10,19 +10,63 @@
 <body>
 <main class="wide index">
 <h1>Design Docs</h1>
-<p class="lead">本项目的设计文档索引。每份文档写用户能看到的行为、模块接口、影响结果的常量和改动时容易被破坏的设计决定。</p>
+<p class="lead">agentrun 的设计文档索引。每页回答一类问题，写用户能看到的行为、模块接口、影响结果的常量和改动时容易被破坏的设计决定。从「总览」开始读。</p>
 
 <h2>设计文档</h2>
 <ul class="cards">
   <li><a class="card" href="pages/agentrun.html">
     <div class="pv">
-      <div class="pv-line pv-cmd"><b>$</b><span class="pv-a">agentrun codex</span></div>
-      <div class="pv-line pv-a pv-s2">[tool] Bash: cargo test</div>
-      <div class="pv-line pv-a pv-s3">[text] 测试全部通过</div>
-      <div class="pv-line pv-a pv-s4">[end] finished 31.3s</div>
+      <div class="pv-line pv-cmd"><b>$</b><span class="pv-a">agentrun claude-code</span></div>
+      <div class="pv-line pv-a pv-s2">--sandbox on</div>
+      <div class="pv-line pv-a pv-s3">[end] finished 31.3s</div>
     </div>
-    <div class="card-body"><strong>agentrun 设计</strong><span>命令行界面、各环境的隔离方式、凭据与会话环境、统一事件流、doctor 检查和退出码。</span>
-    <div class="card-tags"><i>cli</i><i>sandbox</i><i>草稿</i></div></div>
+    <div class="card-body"><strong>agentrun 总览</strong><span>要做到什么、四种环境里怎么调用、命令行选项、doctor 与退出码。</span>
+    <div class="card-tags"><i>cli</i><i>doctor</i><i>草稿</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/isolation.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><span class="pv-a">--sandbox on|relax|off</span></div>
+      <div class="pv-line pv-a pv-s2">--network custom</div>
+      <div class="pv-line pv-a pv-s3">net 拒绝 github.com:22</div>
+    </div>
+    <div class="card-body"><strong>隔离：沙箱与网络</strong><span>--sandbox on|relax|off、--network、三个运行时怎么关进沙箱、剩余风险。</span>
+    <div class="card-tags"><i>sandbox</i><i>network</i><i>草稿</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/session.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><span class="pv-a">--env-file prod.env</span></div>
+      <div class="pv-line pv-a pv-s2">AGENTRUN_PI_AUTH</div>
+      <div class="pv-line pv-a pv-s3">SIGINT → 5s → SIGKILL</div>
+    </div>
+    <div class="card-body"><strong>会话环境</strong><span>环境变量、PATH、会话临时目录、凭据、进程组、信号与超时。</span>
+    <div class="card-tags"><i>env</i><i>process</i><i>草稿</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/events.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><span class="pv-a">{&quot;type&quot;:&quot;tool&quot;,...}</span></div>
+      <div class="pv-line pv-a pv-s2">[explore#1] tool Grep</div>
+      <div class="pv-line pv-a pv-s3">[end] finished</div>
+    </div>
+    <div class="card-body"><strong>事件与输出</strong><span>统一事件流、subagent 与用量、end.status、text 与 rich 格式。</span>
+    <div class="card-tags"><i>events</i><i>output</i><i>草稿</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/runtimes.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><span class="pv-a">claude -p --output-format</span></div>
+      <div class="pv-line pv-a pv-s2">pi --mode json</div>
+      <div class="pv-line pv-a pv-s3">codex exec --json</div>
+    </div>
+    <div class="card-body"><strong>运行时适配</strong><span>claude-code、pi、codex 的参数、输出映射与失败判定。</span>
+    <div class="card-tags"><i>claude-code</i><i>pi</i><i>codex</i><i>草稿</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/pending.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><span class="pv-a">待实测：codex</span></div>
+      <div class="pv-line pv-a pv-s2">待定：CODEX_HOME</div>
+      <div class="pv-line pv-a pv-s3">→ 实测后移入正文</div>
+    </div>
+    <div class="card-body"><strong>待定与待实测</strong><span>还没定的提案与还没实测的假设，各带建议与验证方法。</span>
+    <div class="card-tags"><i>pending</i><i>草稿</i></div></div>
   </a></li>
 </ul>
 </main>

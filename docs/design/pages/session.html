@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentrun 会话环境</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a> · <a href="agentrun.html">总览</a> · <a href="isolation.html">隔离</a> · 会话环境 · <a href="events.html">事件与输出</a> · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
+<h1>会话环境 <span class="tag">草稿</span></h1>
+<p class="lead">运行时进程启动时拿到什么：环境变量、PATH、临时目录与登录凭据；以及它怎么结束：进程组、信号与超时。目标是<mark>调用方能完整控制会话环境</mark>，同时调用方环境里残留的变量不会悄悄改变登录方式。</p>
+
+<h2 id="env">环境变量</h2>
+<p>会话的环境变量按以下顺序组装，后一步覆盖前一步：</p>
+<ol>
+  <li>从调用方自己的环境开始。</li>
+  <li>按运行时删除会改变登录方式的变量，见下表。</li>
+  <li>按给出的顺序加载 <code>--env-file</code>。</li>
+  <li>按给出的顺序应用 <code>--env</code>。</li>
+  <li>读取 <code>AGENTRUN_</code> 开头的变量（<code>AGENTRUN_SANDBOX</code> 与两个凭据变量），然后从会话环境删除所有 <code>AGENTRUN_</code> 变量。</li>
+  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；网络经过滤代理时设置代理变量。</li>
+</ol>
+<table>
+  <thead>
+    <tr><th>运行时</th><th>删除的变量</th><th>效果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>以 <code>ANTHROPIC_</code> 或 <code>CLAUDE_CODE_USE_</code> 开头的变量</td><td>使用订阅登录，不受调用方环境里的 API key 或第三方端点影响</td></tr>
+    <tr><td>codex</td><td><code>CODEX_API_KEY</code>、<code>OPENAI_API_KEY</code>、<code>OPENAI_BASE_URL</code></td><td>使用 <code>auth.json</code> 里的登录</td></tr>
+    <tr><td>pi</td><td>不删除</td><td>pi 从环境变量或 <code>auth.json</code> 读取服务商 key</td></tr>
+  </tbody>
+</table>
+<p>删除只作用于从调用方环境继承来的变量，<code>--env</code> 与 <code>--env-file</code> 显式给出的变量不受影响。理由：删除规则防的是调用方没有意识到的残留变量；显式给出的变量是调用方的意图，例如用 <code>--env ANTHROPIC_BASE_URL=...</code> 接入兼容 Anthropic 接口的其他服务。这时登录方式由调用方负责，和 <code>--</code> 透传一样。</p>
+<p><code>AGENTRUN_</code> 变量从会话环境删除的理由：凭据变量里是登录文件的完整内容，留在会话环境里，agent 运行 <code>env</code> 就能读到。<code>AGENTRUN_</code> 变量可以来自 <code>--env</code> 与 <code>--env-file</code>，所以在第 5 步才读取。</p>
+
+<h3><code>--env</code></h3>
+<ul>
+  <li><code>KEY=VALUE</code>：第一个等号之后的全部内容都是值。</li>
+  <li>只写 <code>KEY</code>：取第 2 步删除之前调用方环境里的值。调用方环境里没有这个变量时启动前报错（退出码 2），理由是静默忽略会让调用方以为变量已经传进去了。</li>
+  <li>KEY 必须匹配 <code>[A-Za-z_][A-Za-z0-9_]*</code>，否则是用法错误。</li>
+</ul>
+
+<h3>env 文件格式</h3>
+<pre><code class="language-bash"># 注释行与空行忽略
+AGENTRUN_SANDBOX=off
+export CLAUDE_CODE_OAUTH_TOKEN="..."
+GREETING='hello world'</code></pre>
+<p>每行 <code>KEY=VALUE</code>，行尾的 <code>\r</code> 去掉；允许 <code>export </code> 前缀；等号两侧不允许空格；值两端成对的单引号或双引号去掉，引号内不处理转义；不做变量展开，不支持多行值；未加引号的值里的 <code>#</code> 是值的一部分。文件不存在、不是 UTF-8 或某一行格式错误时，启动前报错（退出码 2），错误信息写出文件名与行号，不写出这一行的内容。</p>
+<p>工具不自动加载工作目录里的 <code>.env</code>。理由：工作目录 agent 可写，agent 可以写一个 <code>.env</code> 改变下一次运行的登录方式或 PATH；项目里的 <code>.env</code> 也常有调用方不打算交给 agent 的密钥。</p>
+
+<h3>只显示变量名</h3>
+<p><code>start</code> 事件的 <code>env</code> 字段是 <code>--env-file</code> 与 <code>--env</code> 设置过的变量名，按首次出现顺序去重，不含 <code>AGENTRUN_</code> 变量。<code>--debug</code> 与 <code>--dry-run</code> 另外写出被删除的变量名、被设置的变量名、读到的 <code>AGENTRUN_</code> 变量名与会话 PATH。任何输出都不写变量的值，PATH 除外。</p>
+
+<h2>PATH</h2>
+<p>会话的 PATH 是 <code>--path</code> 给出的目录（转为绝对路径，按给出的顺序）加上组装后的 PATH。运行时（<code>claude</code>、<code>codex</code>、<code>pi</code>）、<code>bwrap</code> 与 <code>socat</code> 都在这个 PATH 里查找，用找到的绝对路径启动，不解析符号链接。</p>
+<p>这样运行时在调用方的终端里能启动，在会话里也能启动。运行时可能是一个 sh 脚本，里面再调用 node 或其他程序，工具无法事先知道它会用到哪些命令。</p>
+<p>PATH 不限制 agent 能执行哪些程序，agent 可以用绝对路径执行任何程序。限制 agent 的是沙箱的写范围与网络限制。</p>
+
+<h2 id="tmpdir">会话临时目录</h2>
+<p>工具在 <code>$TMPDIR</code>（未设或为空时为 <code>/tmp</code>）下创建 <code>agentrun-&lt;随机后缀&gt;</code>，权限 0700。会话的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向它，沙箱把它加入可写路径。正常结束、失败、超时与被中断时都删除它；给了 <code>--debug</code> 时保留，路径写到标准错误。</p>
+<p>理由：工作目录里不出现临时文件；只开放这一个目录，不把整个 <code>/tmp</code> 设为可写，因为 <code>/tmp</code> 由整台机器共用，里面有其他程序的文件与 socket。</p>
+<p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>。</p>
+
+<h2 id="credentials">凭据</h2>
+<p>本机沿用用户已有的登录，工具不改动用户自己的登录文件。容器里由启动方把登录文件的内容放进环境变量，工具在运行与 doctor 开始时写到运行时读取的位置。这两个变量可以来自调用方环境，也可以来自 <code>--env</code> 与 <code>--env-file</code>。</p>
+<table>
+  <thead>
+    <tr><th>环境变量</th><th>写入位置</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>AGENTRUN_CODEX_AUTH</code></td><td><code>$CODEX_HOME/auth.json</code>，未设 <code>CODEX_HOME</code> 时为 <code>~/.codex/auth.json</code></td></tr>
+    <tr><td><code>AGENTRUN_PI_AUTH</code></td><td><code>$PI_CODING_AGENT_DIR/auth.json</code>，未设时为 <code>~/.pi/agent/auth.json</code></td></tr>
+  </tbody>
+</table>
+<p>一次运行只写当前运行时的变量。变量未设或为空时不写。路径变量与 <code>HOME</code> 从组装后的会话环境读取，相对路径按 <code>--cwd</code> 解析。</p>
+<p>每次写入时，工具在同一目录记一个旁注文件 <code>auth.json.agentrun-sha256</code>，内容是这次变量值的 SHA-256（小写十六进制加换行）。下次运行时：登录文件不存在就写入；变量值的 SHA-256 与旁注相同就不动；不同或没有旁注就覆盖登录文件并更新旁注。理由：运行时会在使用中刷新令牌并改写登录文件，变量没变时保留刷新后的令牌；启动方轮换了凭据时，即使登录文件在持久卷上，会话也会改用新账号。</p>
+<p>写入用同目录的临时文件，以排他方式创建、权限 0600、fsync 后重命名，并发启动的多次运行不会读到写了一半的文件；两次运行同时写入时，结果是其中一次写入的完整内容。新建的每一级目录权限 0700，已有目录不改权限。多个并发运行共用同一登录文件时，令牌刷新的冲突由运行时自己处理。写入失败时启动前报错（退出码 2），<code>detail</code> 写变量名与路径，不写值。</p>
+<p>claude-code 在容器里用它自己的令牌变量 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 登录，没有登录文件。工具不做转换，只保证它不被删除（它不以 <code>ANTHROPIC_</code> 或 <code>CLAUDE_CODE_USE_</code> 开头）。</p>
+<p>codex 要求登录信息以文件形式保存，登录文件不存在时启动前报错，提示先运行 <code>codex login</code> 或在容器里用 <code>AGENTRUN_CODEX_AUTH</code> 传入。</p>
+<p>凭据内容不出现在事件流、标准错误、<code>--raw</code> 与错误信息里，只显示变量名与文件路径。</p>
+
+<h2 id="signals">进程、信号与超时</h2>
+<p>无论运行以哪种方式结束，都满足三条：事件流以 <code>end</code> 结尾；会话临时目录被删除（<code>--debug</code> 除外）；运行时及其子进程不再运行。</p>
+<ul>
+  <li>运行时启动在新的进程组里，终端的 Ctrl-C 只发给 agentrun，由 agentrun 转发。pi 被包裹时，包裹命令是进程组的首进程，退出码透传 pi 的退出码。</li>
+  <li>提示词写入标准输入后关闭（pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
+  <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再最多等 1 秒读完剩余的输出，然后输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 waitpid 判断主进程退出，不用标准输出的 EOF 判断。</li>
+  <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
+  <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>
+  <li>结束顺序：输出 <code>end</code>，删除临时目录，按<a href="agentrun.html">退出码</a>表退出。agentrun 不重新给自己发信号。</li>
+</ul>
+<p>是否被中断只看 agentrun 自己收到的信号与自己的计时，不看运行时的退出码与事件。理由：实测 claude-code 收到 SIGINT 后以退出码 0 结束，SIGTERM 后以 143 结束且没有 result；pi 收到 SIGINT 后以 130 结束，最后没有 <code>message_end</code>。</p>
+<p>已知限制：子进程自己调用 setsid 离开进程组时，agentrun 清理不到。</p>
+</main>
+</body>
+</html>

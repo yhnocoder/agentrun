@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentrun 运行时适配</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a> · <a href="agentrun.html">总览</a> · <a href="isolation.html">隔离</a> · <a href="session.html">会话环境</a> · <a href="events.html">事件与输出</a> · 运行时适配 · <a href="pending.html">待定</a></p>
+<h1>运行时适配 <span class="tag">草稿</span></h1>
+<p class="lead">每个运行时一节：agentrun 用什么参数启动它、它的原始输出怎么映射到统一事件、什么情况算失败。参数与行为都来自实测，写明了实测的版本；<mark>运行时升级后要重新核对</mark>。</p>
+
+<table>
+  <thead>
+    <tr><th>运行时</th><th>实测版本</th><th>实测环境</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>2.1.288（设置名另据 2.1.289 的说明）</td><td>Claude 云端，打开与不打开自带沙箱</td></tr>
+    <tr><td>pi</td><td>1.0.1，npm 包 <code>@earendil-works/pi-coding-agent</code>（旧包名 <code>@mariozechner/pi-coding-agent</code> 停在 0.73.1）</td><td>Claude 云端，bwrap 包裹与不包裹，模型 <code>deepseek/deepseek-flash</code></td></tr>
+    <tr><td>codex</td><td>未实测</td><td>待 macOS 与本机 Linux 实测</td></tr>
+  </tbody>
+</table>
+
+<h2 id="claude-code">claude-code</h2>
+<h3>参数</h3>
+<pre><code class="language-bash">&lt;claude 的绝对路径&gt; -p --output-format stream-json --verbose
+  --permission-mode auto
+  --setting-sources ""
+  --strict-mcp-config
+  --no-session-persistence
+  --session-id &lt;新生成的 UUID v4&gt;
+  --tools Read,Edit,Write,Glob,Grep,Bash,Task
+  --allowedTools Read,Edit,Write,Glob,Grep,Task
+  [--settings &lt;沙箱设置&gt;]
+  [--model ID] [--effort LEVEL] [--max-turns N]
+  &lt;-- 之后的调用方参数&gt;</code></pre>
+<ul>
+  <li><code>--setting-sources ""</code> 不加载用户、项目与本地设置，工作目录里的 <code>CLAUDE.md</code> 不进入模型上下文（实测）。因此沙箱设置只来自 <code>--settings</code>。</li>
+  <li><code>--strict-mcp-config</code> 不加载任何 MCP 服务器。</li>
+  <li><code>--session-id</code> 每次新生成，与 <code>--no-session-persistence</code> 一起用。理由：在 Claude Code 会话里运行 agentrun 时，<code>claude -p</code> 子进程会继承父会话的 id，把记录写进父会话，只加 <code>--no-session-persistence</code> 不能避免。</li>
+  <li><code>--tools</code> 限定可用的内置工具，去掉网页工具与技能等。<code>--allowedTools</code> 放行列出的工具，不经权限判断。Bash 不在放行列表里：沙箱打开时由 <code>autoAllowBashIfSandboxed</code> 自动放行，沙箱没有运行时由 auto 模式逐条判断。只用 <code>--tools</code> 而不放行时，auto 模式会拒绝 Write，且结果仍报告成功（实测）。</li>
+  <li>启动 subagent 的工具在参数与 <code>system/init</code> 的工具列表里叫 <code>Task</code>，在输出的 <code>tool_use</code> 里叫 <code>Agent</code>，两个名字都要识别。<code>--no-subagents</code> 从 <code>--tools</code> 与 <code>--allowedTools</code> 里去掉 <code>Task</code>，生效与否看 init 的工具列表里有没有 <code>Task</code>。</li>
+  <li><code>--network full</code> 时两个列表都加上 <code>WebFetch</code> 与 <code>WebSearch</code>；<code>custom</code> 时 <code>--tools</code> 加 <code>WebFetch</code>，<code>--allowedTools</code> 每个主机加一条 <code>WebFetch(domain:HOST)</code>。</li>
+  <li>提示词从标准输入传入，不在命令行里。</li>
+</ul>
+<p>沙箱设置（只在沙箱打开时传）：</p>
+<pre><code class="language-json">{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
+  "filesystem":{"allowWrite":["&lt;cwd 的绝对路径&gt;","&lt;会话临时目录&gt;"]},
+  "network":{"allowedDomains":[]}}}</code></pre>
+<p>前三项以外的设置（<code>failIfUnavailable</code>、<code>allowWrite</code>、空的 <code>allowedDomains</code>）取自 claude 的设置说明，还没有实测是否生效。<code>--network full|custom</code> 时另加 <code>network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。</p>
+
+<h3>auto 模式没有生效时终止</h3>
+<p>claude-code 在某些模型下不支持 auto 模式，这时它不报错，而是改用 default 权限模式：<code>system/init</code> 的 <code>permissionMode</code> 为 <code>default</code>，Bash 命令全部被拒绝，退出码仍为 0。实测 haiku 作主模型时如此，sonnet 正常。agentrun 读到 init 的 <code>permissionMode</code> 不是 <code>auto</code> 时，立即向进程组发 SIGKILL，判为 <code>failed</code>，<code>detail</code> 写明实际的权限模式、当前模型与「换一个支持 auto 模式的模型」。理由：否则一次什么命令都没执行的运行会被报告为成功；agentrun 不替调用方选模型，默认配置可能落到任何模型上。</p>
+
+<h3>输出映射</h3>
+<p>stream-json 每行一个 JSON 对象。用到的对象与字段：</p>
+<table>
+  <thead>
+    <tr><th>原始事件</th><th>用到的字段</th><th>转成</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>system</code>，subtype <code>init</code></td><td><code>permissionMode</code>、<code>model</code>、<code>tools</code></td><td>不输出；用于检查 auto 模式与 <code>--no-subagents</code></td></tr>
+    <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略</td></tr>
+    <tr><td><code>system</code>，subtype <code>permission_denied</code></td><td><code>tool_use_id</code>、<code>tool_name</code>、<code>decision_reason</code></td><td>把对应的调用标为被拒绝；它出现在对应的 tool_result 之前</td></tr>
+    <tr><td><code>user</code></td><td><code>tool_result</code> 块的 <code>tool_use_id</code>、<code>is_error</code></td><td>对应的调用结束，输出 <code>tool</code></td></tr>
+    <tr><td><code>system</code>，subtype <code>task_notification</code></td><td><code>tool_use_id</code>、<code>status</code>、<code>usage.duration_ms</code></td><td><code>subagent_end</code>；<code>status</code> 为 <code>completed</code> 时 finished，其他值 failed</td></tr>
+    <tr><td><code>result</code></td><td><code>is_error</code>、<code>subtype</code>、<code>result</code>、<code>modelUsage</code></td><td><code>end</code> 的 <code>result</code>、失败判定与 <code>usage</code></td></tr>
+    <tr><td>其他，例如 <code>stream_event</code>、<code>rate_limit_event</code>、<code>system/status</code>、<code>task_started</code>、<code>task_progress</code></td><td></td><td>只写入 <code>--raw</code></td></tr>
+  </tbody>
+</table>
+<ul>
+  <li><code>parent</code> 取所在 assistant 消息的 <code>parent_tool_use_id</code>；它不是任何 <code>subagent_start</code> 的 id 时按 null 处理。</li>
+  <li>subagent：<code>kind</code> 取 input 的 <code>subagent_type</code>，缺省为 <code>general-purpose</code>；<code>model</code> 取 input 的 <code>model</code>；<code>description</code> 取 input 的 <code>description</code> 第一行。subagent 默认在后台运行，启动后立即有一个 <code>status</code> 为 <code>async_launched</code> 的 tool_result，这个结果不输出事件。前台运行的 subagent 没有 <code>task_notification</code>，在收到它的 tool_result 时输出 <code>subagent_end</code>，<code>is_error</code> 为 true 时 failed。subagent 交回结果用的内部工具 <code>SubagentHandback</code> 不输出 <code>tool</code>。</li>
+  <li>usage：claude-code 把一次模型调用拆成多条 assistant 消息（thinking、tool_use、text 各一条），它们的 <code>message.id</code> 相同，每条都带 usage。同一个 id 只输出一个 <code>usage</code>，在出现新的 id 或运行时结束时输出，取最后一条的值，<code>time</code> 取输出时的时间。字段：<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_input_tokens</code>、<code>cache_creation_input_tokens</code>。model 为 <code>&lt;synthetic&gt;</code> 的消息不输出 <code>usage</code>，它的文字照常输出。</li>
+  <li>一次运行可能有多个 result：subagent 在后台运行时，主 agent 每收到一个 subagent 的结果就多一轮，每轮一个 result，<code>modelUsage</code> 是到当时为止的累计值。所有用到 result 的地方都取运行时退出前的最后一个。<code>end.usage</code> 由它的 <code>modelUsage</code> 按模型换算。</li>
+</ul>
+<table>
+  <thead>
+    <tr><th>工具</th><th>summary</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Bash</td><td><code>Bash: </code> 加 <code>command</code> 的第一行</td></tr>
+    <tr><td>Read、Edit、Write</td><td>工具名加 <code>file_path</code>；在 <code>--cwd</code> 之内时写相对路径</td></tr>
+    <tr><td>Glob、Grep</td><td>工具名加 <code>pattern</code></td></tr>
+    <tr><td>WebFetch</td><td>工具名加 <code>url</code></td></tr>
+    <tr><td>其他</td><td>只写工具名</td></tr>
+  </tbody>
+</table>
+
+<h3>失败判定</h3>
+<p>以下任一成立即为 <code>failed</code>，<code>detail</code> 按顺序取第一项的信息：</p>
+<ol>
+  <li>auto 模式没有生效（见上）。</li>
+  <li>最后一个 result 的 <code>is_error</code> 为 true：取它的 <code>result</code> 文字。例如无效模型（同时退出码 1、标准错误有 <code>[claude-code:unrecognized_model]</code>）、无效凭据（退出码 1）。</li>
+  <li>退出码非 0：取标准错误的最后 500 个字符。例如未知选项，没有任何事件。</li>
+  <li>退出码 0 但没有 result：<code>运行时退出（退出码 N）时没有输出 result 事件</code>。</li>
+</ol>
+<p>收到 SIGINT 时 claude-code 约 0.4 秒退出，退出码 0，最后的 result 为 <code>is_error: true</code>、subtype <code>error_during_execution</code>；SIGTERM 时退出码 143、没有 result。两种情况都由 agentrun 记为 <code>interrupted</code>。</p>
+<p>auto 模式的分类器会拒绝部分命令。实测稳定被拒绝的是读取凭据的命令，例如 <code>cat ~/.ssh/id_rsa</code>；用 curl 把文件外发会触发模型的安全拦截，整次运行以 API Error 失败。</p>
+
+<h2 id="pi">pi</h2>
+<h3>参数</h3>
+<pre><code class="language-bash">&lt;pi 的绝对路径&gt; -p --mode json --no-session
+  --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files
+  --no-approve --offline
+  --tools read,bash,edit,write,grep,find,ls
+  [--model 服务商/模型] [--thinking LEVEL]
+  &lt;-- 之后的调用方参数&gt; -- &lt;提示词&gt;</code></pre>
+<ul>
+  <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
+  <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
+  <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
+  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">隔离</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; --bind &lt;临时目录&gt; --bind &lt;状态目录&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。状态目录在 cwd 之下时不再单独绑定。</li>
+</ul>
+
+<h3>模型检查</h3>
+<p><code>--model</code> 必须写成 <code>服务商/模型</code>，可以带 <code>:推理强度</code> 后缀；没有 <code>/</code> 或任一侧为空时是用法错误。理由：pi 对模型名做模糊匹配，能匹配上的未知模型名会被换成别的服务商的模型，退出码仍为 0。例如环境里有 <code>AWS_</code> 变量时，<code>deepseek/deepseek-v4-flash</code>（1.0.1 已改名为 <code>deepseek-flash</code>）被换成了 Amazon Bedrock 上的模型。</p>
+<p>给了 <code>--model</code> 时，agentrun 在第一个 assistant 的 <code>message_start</code>（此时还没有请求模型）比较它的 <code>provider</code> 与 <code>model</code>，区分大小写，不做别名处理。不一致时向进程组发 SIGKILL，判为 <code>failed</code>，<code>detail</code> 为 <code>pi 实际使用 &lt;provider&gt;/&lt;model&gt;，与 --model &lt;值&gt; 不符</code>。</p>
+<p>没给 <code>--model</code> 时不传，pi 用它 <code>settings.json</code> 里的默认模型。设置里的模型不存在、或者没有设置文件时，pi 同样会不提示地改用环境里其他可用的服务商。这种情况由 doctor 的登录检查发现：它报告 pi 实际选中的服务商与模型，与设置不一致时失败。</p>
+
+<h3>输出映射</h3>
+<p><code>--mode json</code> 每行一个事件，只用以下三种，其余（<code>session</code>、<code>message_update</code>、<code>turn_end</code>、<code>agent_end</code> 等）只写入 <code>--raw</code>。不用 <code>turn_end</code> 与 <code>agent_end</code>，因为它们重复 <code>message_end</code> 的内容，会重复计算用量。</p>
+<table>
+  <thead>
+    <tr><th>原始事件</th><th>转成</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>tool_execution_end</code></td><td><code>tool</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，<code>denied</code> 为 false（<code>isError</code> 表示执行出错，不是拒绝）。<code>args</code> 不在这个事件里，从对应的 <code>tool_execution_start</code> 取。同一条消息里的多个调用并行执行，结束顺序可能与开始顺序不同</td></tr>
+    <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测）；<code>reasoning</code> 与 <code>cost</code> 不进统一事件</td></tr>
+    <tr><td>第一个 assistant 的 <code>message_start</code></td><td>不输出；用于模型检查</td></tr>
+  </tbody>
+</table>
+<p>summary：<code>bash</code> 写 <code>command</code> 的第一行；<code>read</code>、<code>write</code>、<code>edit</code>、<code>ls</code> 写 <code>path</code>（<code>ls</code> 没有 path 时写 <code>.</code>）；<code>grep</code>、<code>find</code> 写 <code>pattern</code>；其他只写工具名。<code>end.result</code> 是最后一个 <code>text</code>。</p>
+
+<h3>失败判定</h3>
+<p>以下任一成立即为 <code>failed</code>，<code>detail</code> 按顺序取第一项的信息：</p>
+<ol>
+  <li>模型检查不通过。</li>
+  <li>退出码非 0：取标准错误的最后 500 个字符。</li>
+  <li>最后一条 assistant 消息的 <code>stopReason</code> 为 <code>error</code> 或 <code>aborted</code>：取 <code>errorMessage</code> 的前 500 个字符，没有时写 <code>stopReason: 值</code>。</li>
+  <li>退出码 0 但没有 assistant 的 <code>message_end</code>：<code>pi 没有输出模型回复</code>。</li>
+</ol>
+<table>
+  <thead>
+    <tr><th>实测情况</th><th>退出码</th><th>输出</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>正常完成</td><td>0</td><td>最后的 <code>message_end</code> 的 <code>stopReason</code> 为 <code>stop</code></td></tr>
+    <tr><td>模型调用失败（无效 key、连不上服务）</td><td>0</td><td><code>stopReason</code> 为 <code>error</code>，<code>errorMessage</code> 例如 <code>401: {...}</code>、<code>Connection error.</code></td></tr>
+    <tr><td>没有所选服务商的 key</td><td>1</td><td>只有 <code>session</code> 事件；标准错误 <code>No API key found</code></td></tr>
+    <tr><td>模型不存在、未知选项</td><td>1</td><td>没有事件；标准错误 <code>Error: ...</code></td></tr>
+    <tr><td>SIGINT（包裹与不包裹相同）</td><td>130</td><td>最后没有 <code>message_end</code> 与 <code>agent_end</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="codex">codex</h2>
+<p>codex 还没有实测，本节按 codex 的文档写，标「待实测」的参数与字段要用 macOS 与本机 Linux 的样本核对。某项要求在实测版本里没有做法时，停下来报告，由用户决定是否修改设计。</p>
+<h3>参数</h3>
+<pre><code class="language-bash">&lt;codex 的绝对路径&gt; exec --json --skip-git-repo-check --ephemeral
+  --sandbox workspace-write|danger-full-access
+  -c approval_policy="never"
+  -c sandbox_workspace_write.network_access=false
+  -c sandbox_workspace_write.exclude_slash_tmp=true
+  -c sandbox_workspace_write.exclude_tmpdir_env_var=true
+  -c sandbox_workspace_write.writable_roots=["&lt;会话临时目录&gt;"]
+  -c project_doc_max_bytes=0 -c allow_login_shell=false -c web_search="disabled"
+  [-m ID] [-c model_reasoning_effort="LEVEL"]
+  &lt;-- 之后的调用方参数&gt; -</code></pre>
+<ul>
+  <li>沙箱打开时用 <code>workspace-write</code>，没有运行时用 <code>danger-full-access</code>，后者不带 <code>sandbox_workspace_write.*</code> 各项。最后的 <code>-</code> 表示从标准输入读提示词。</li>
+  <li><code>project_doc_max_bytes=0</code> 不读 <code>AGENTS.md</code>；不加载技能与用户配置的做法见<a href="pending.html">待定</a>。各 <code>-c</code> 项的名字待实测。</li>
+  <li><code>--max-turns</code> 是用法错误。<code>--no-subagents</code> 找不到关闭方式时是用法错误。</li>
+</ul>
+<h3>输出映射</h3>
+<table>
+  <thead>
+    <tr><th>原始事件</th><th>转成</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>item.completed</code>，<code>command_execution</code></td><td><code>tool</code>：<code>name</code> 为 <code>command_execution</code>，summary 为 <code>shell: </code> 加命令第一行</td></tr>
+    <tr><td><code>item.completed</code>，<code>file_change</code></td><td><code>tool</code>：summary 为 <code>patch: </code> 加全部路径，空格分隔</td></tr>
+    <tr><td><code>item.completed</code>，<code>mcp_tool_call</code></td><td><code>tool</code>：summary 为 <code>mcp: server.tool</code></td></tr>
+    <tr><td><code>item.completed</code>，<code>agent_message</code></td><td><code>text</code></td></tr>
+    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>；若 <code>input_tokens</code> 含缓存部分就减去它（待实测）</td></tr>
+    <tr><td>其他（<code>reasoning</code>、<code>todo_list</code>、<code>web_search</code>、<code>item.started</code> 等）</td><td>只写入 <code>--raw</code></td></tr>
+  </tbody>
+</table>
+<p><code>denied</code> 恒为 false。subagent 在样本里能识别时按<a href="events.html">事件与输出</a>的规则输出；看不出时不输出 subagent 事件，<code>parent</code> 全部为 null。</p>
+<h3>失败判定</h3>
+<ol>
+  <li><code>turn.failed</code>：取最后一个的 <code>error.message</code> 前 500 个字符。</li>
+  <li><code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。若 codex 在能自行恢复时也输出 <code>error</code>，改为只在没有 <code>turn.completed</code> 时生效（待实测）。</li>
+  <li>退出码非 0：取标准错误的最后 500 个字符。</li>
+  <li>退出码 0 但没有 <code>turn.completed</code>：<code>codex 没有输出 turn.completed</code>。</li>
+</ol>
+</main>
+</body>
+</html>
