@@ -130,7 +130,7 @@ removed: (none)</div>
 <ul>
   <li>claude-code: >= 2.1.288</li>
   <li>pi: >= 1.0.1，npm 包 <code>@earendil-works/pi-coding-agent</code></li>
-  <li>codex: unknown</li>
+  <li>codex: >= 0.159.2，权限配置与 <code>--ignore-user-config</code> 需要这个版本</li>
 </ul>
 
 <h2 id="claude-code">claude-code</h2>
@@ -232,7 +232,8 @@ removed: (none)</div>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
   <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
-  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt; --bind &lt;状态目录&gt; &lt;状态目录&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。状态目录在 cwd 之下时不再单独绑定。</li>
+  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt; --bind &lt;pi 登录文件&gt; &lt;pi 登录文件&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。用户没有 pi 登录文件时不绑定它。</li>
+  <li>环境里 <code>PI_CODING_AGENT_DIR</code> 指向私有状态目录，见<a href="session.html#runtime-home">私有配置目录</a>。</li>
 </ul>
 
 <h3>模型检查</h3>
@@ -277,22 +278,28 @@ removed: (none)</div>
 </table>
 
 <h2 id="codex">codex</h2>
-<p>codex 还没有实测，本节按 codex 的文档写，标「待实测」的参数与字段要用 macOS 与本机 Linux 的样本核对。某项要求在实测版本里没有做法时，停下来报告，由用户决定是否修改设计。</p>
 <h3>参数</h3>
-<pre><code class="language-bash">&lt;codex 的绝对路径&gt; exec --json --skip-git-repo-check --ephemeral
-  --sandbox workspace-write|danger-full-access
-  -c approval_policy="never"
-  -c sandbox_workspace_write.network_access=false
-  -c sandbox_workspace_write.exclude_slash_tmp=true
-  -c sandbox_workspace_write.exclude_tmpdir_env_var=true
-  -c sandbox_workspace_write.writable_roots=["&lt;会话临时目录&gt;"]
-  -c project_doc_max_bytes=0 -c allow_login_shell=false -c web_search="disabled"
+<pre><code class="language-bash">&lt;codex 的绝对路径&gt; exec --json --skip-git-repo-check
+  --ignore-user-config --ignore-rules -C &lt;cwd&gt;
+  -c default_permissions=agentrun
+  -c 'permissions.agentrun.filesystem={":root"="read", ":workspace_roots"={"."="write"}, "&lt;会话临时目录&gt;"="write"}'
+  -c permissions.agentrun.network.enabled=false
+  -c approval_policy="never" -c web_search="disabled" -c project_doc_max_bytes=0
+  -c skills.include_instructions=false -c skills.bundled.enabled=false -c allow_login_shell=false
+  --disable apps --disable plugins --disable remote_plugin --disable plugin_sharing
+  --disable tool_suggest --disable hooks --disable skill_mcp_dependency_install
+  --disable image_generation --disable goals --disable memories --disable shell_snapshot
+  --disable computer_use --disable browser_use --disable browser_use_external
+  --disable in_app_browser --disable daemon_auto_start
   [-m ID] [-c model_reasoning_effort="LEVEL"]
   &lt;-- 之后的调用方参数&gt; -</code></pre>
 <ul>
-  <li>沙箱打开时用 <code>workspace-write</code>，没有运行时用 <code>danger-full-access</code>，后者不带 <code>sandbox_workspace_write.*</code> 各项。最后的 <code>-</code> 表示从标准输入读提示词。</li>
-  <li><code>project_doc_max_bytes=0</code> 不读 <code>AGENTS.md</code>；不加载技能与用户配置的做法见<a href="pending.html">待定</a>。各 <code>-c</code> 项的名字待实测。</li>
-  <li><code>--max-turns</code> 是用法错误。<code>--no-subagents</code> 找不到关闭方式时是用法错误。</li>
+  <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#runtime-home">私有配置目录</a>。最后的 <code>-</code> 表示从标准输入读提示词。</li>
+  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径。沙箱没有运行时把三行权限参数换成 <code>-c default_permissions=":danger-full-access"</code>。<code>--network full</code> 与 <code>custom</code> 时的网络部分见<a href="isolation.html#network">网络</a>。</li>
+  <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除。</li>
+  <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
+  <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
+  <li><code>--max-turns</code> 是用法错误。</li>
 </ul>
 <h3>输出映射</h3>
 <table>
@@ -300,23 +307,36 @@ removed: (none)</div>
     <tr><th>原始事件</th><th>转成</th></tr>
   </thead>
   <tbody>
-    <tr><td>没有对应的原始事件</td><td><code>prompt</code>：agentrun 在 <code>start</code> 之后用自己传入的提示词输出。codex 的输出里是否有提示词待实测</td></tr>
+    <tr><td>没有对应的原始事件</td><td><code>prompt</code>：agentrun 在 <code>start</code> 之后用自己传入的提示词输出。codex 的输出里没有提示词（codex 0.159.2 实测）</td></tr>
     <tr><td><code>item.completed</code>，<code>command_execution</code></td><td><code>tool</code>：<code>name</code> 为 <code>command_execution</code>，summary 为 <code>shell: </code> 加命令第一行</td></tr>
     <tr><td><code>item.completed</code>，<code>file_change</code></td><td><code>tool</code>：summary 为 <code>patch: </code> 加全部路径，空格分隔</td></tr>
     <tr><td><code>item.completed</code>，<code>mcp_tool_call</code></td><td><code>tool</code>：summary 为 <code>mcp: server.tool</code></td></tr>
     <tr><td><code>item.completed</code>，<code>agent_message</code></td><td><code>text</code></td></tr>
-    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>；若 <code>input_tokens</code> 含缓存部分就减去它（待实测）</td></tr>
-    <tr><td>其他（<code>reasoning</code>、<code>todo_list</code>、<code>web_search</code>、<code>item.started</code> 等）</td><td>只写入 <code>--raw</code></td></tr>
+    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>input_tokens</code> 减去 <code>cached_input_tokens</code> 为输入，<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>，<code>cache_write_input_tokens</code> 对应 <code>cache_write_tokens</code>，<code>output_tokens</code> 为输出。<code>input_tokens</code> 含缓存部分按 OpenAI 用量的含义处理，样本里 <code>cached_input_tokens</code> 小于 <code>input_tokens</code>。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null</td></tr>
+    <tr><td>其他（<code>collab_tool_call</code>、<code>reasoning</code>、<code>todo_list</code>、<code>web_search</code>、<code>item.started</code> 等）</td><td>只写入 <code>--raw</code></td></tr>
   </tbody>
 </table>
-<p><code>denied</code> 恒为 false。subagent 在样本里能识别时按<a href="events.html">事件与输出</a>的规则输出；看不出时不输出 subagent 事件，<code>parent</code> 全部为 null。</p>
+<p><code>denied</code> 恒为 false。codex 的输出里没有 subagent 的启动事件，也没有 subagent 自己的命令与文件改动，只有主 agent 等待 subagent 的 <code>collab_tool_call</code>（<code>tool</code> 为 <code>wait</code>，codex 0.159.2 实测）。所以 codex 不输出 <code>subagent_start</code> 与 <code>subagent_end</code>，<code>parent</code> 全部为 null。</p>
 <h3>失败判定</h3>
 <ol>
   <li><code>turn.failed</code>：取最后一个的 <code>error.message</code> 前 500 个字符。</li>
-  <li><code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。若 codex 在能自行恢复时也输出 <code>error</code>，改为只在没有 <code>turn.completed</code> 时生效（待实测）。</li>
+  <li>没有 <code>turn.completed</code> 时的 <code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。codex 重试连接时也输出 <code>error</code>，重试成功后照常完成，所以有 <code>turn.completed</code> 时不看 <code>error</code>。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。</li>
   <li>退出码 0 但没有 <code>turn.completed</code>：<code>codex produced no turn.completed</code>。</li>
 </ol>
+<table>
+  <thead>
+    <tr><th>实测情况（codex 0.159.2，macOS）</th><th>退出码</th><th>输出</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>正常完成</td><td>0</td><td>以 <code>turn.completed</code> 结束</td></tr>
+    <tr><td>模型不存在</td><td>1</td><td><code>error</code> 与 <code>turn.failed</code>，消息为服务端的 400 错误</td></tr>
+    <tr><td>无效凭据</td><td>1</td><td>约 10 个 <code>error</code>（重试）后 <code>turn.failed</code>，消息含 <code>401 Unauthorized</code></td></tr>
+    <tr><td>未知选项</td><td>2</td><td>没有事件；标准错误 <code>error: unexpected argument ...</code></td></tr>
+    <tr><td>SIGINT</td><td>1</td><td>最后是 <code>item.completed</code>，没有 <code>turn.completed</code></td></tr>
+    <tr><td>SIGTERM</td><td>143</td><td>同上</td></tr>
+  </tbody>
+</table>
 </main>
 </body>
 </html>

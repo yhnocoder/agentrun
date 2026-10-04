@@ -14,13 +14,13 @@ check_sandbox_preflight() {
   CHECK_TIMEOUT=$PREFLIGHT_TIMEOUT
   case "$SANDBOX_KIND" in
     seatbelt)
-      if [ -x /usr/bin/sandbox-exec ]; then
-        printf '0\n' > "$CHECK_DIR/exit_code"
-        record $id - pass "/usr/bin/sandbox-exec is executable"
+      run_capture stdout.txt /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
+      if [ "$LAST_RC" = 0 ] && [ "$LAST_TIMED_OUT" = 0 ]; then
+        record $id - pass "sandbox-exec started /usr/bin/true in $(cat "$CHECK_DIR/duration_ms")ms"
       else
         PREFLIGHT_OK=0
-        PREFLIGHT_DETAIL="/usr/bin/sandbox-exec missing or not executable"
-        printf '1\n' > "$CHECK_DIR/exit_code"
+        PREFLIGHT_DETAIL="sandbox-exec exit=$LAST_RC: $(stderr_head 300)"
+        LAST_TIMED_OUT=0
         record $id - fail "$PREFLIGHT_DETAIL"
       fi
       ;;
@@ -49,10 +49,6 @@ check_sandbox_preflight() {
   end_check
 }
 
-ensure_pi_state_dir() {
-  [ -d "$PI_STATE_DIR" ] || make_private_dirs "$PI_STATE_DIR"
-}
-
 path_is_under() {
   case "$1" in
     "$2"|"$2"/*) return 0 ;;
@@ -61,13 +57,14 @@ path_is_under() {
 }
 
 write_seatbelt_profile() {
-  local file=$1 cwd=$2 tmp=$3 state=$4 port=$5
+  local file=$1 cwd=$2 tmp=$3 port=$4
   {
     echo '(version 1)'
     echo '(allow default)'
     echo '(deny file-write*)'
     echo '(allow file-write*'
-    printf '  (subpath "%s")\n' "$cwd" "$tmp" "$state"
+    printf '  (subpath "%s")\n' "$cwd" "$tmp"
+    [ -n "$PI_AUTH_TARGET" ] && printf '  (literal "%s")\n' "$PI_AUTH_TARGET"
     echo '  (literal "/dev/null")'
     echo '  (literal "/dev/zero")'
     echo '  (literal "/dev/tty")'
@@ -81,21 +78,17 @@ write_seatbelt_profile() {
 }
 
 wrap_cmd() {
-  local cwd state tmp
+  local cwd tmp
   cwd=$(real_dir "$RUN_CWD")
   tmp=$(real_dir "$SESSION_TMP")
-  ensure_pi_state_dir
-  state=$(real_dir "$PI_STATE_DIR")
   case "$SANDBOX_KIND" in
     seatbelt)
-      write_seatbelt_profile "$SESSION_TMP/seatbelt.sb" "$cwd" "$tmp" "$state" "$PROXY_PORT"
+      write_seatbelt_profile "$SESSION_TMP/seatbelt.sb" "$cwd" "$tmp" "$PROXY_PORT"
       WRAPPED=(/usr/bin/sandbox-exec -f "$SESSION_TMP/seatbelt.sb" "$@")
       ;;
     bwrap)
       WRAPPED=(bwrap --ro-bind / / --bind "$RUN_CWD" "$RUN_CWD" --bind "$SESSION_TMP" "$SESSION_TMP")
-      if ! path_is_under "$state" "$cwd"; then
-        WRAPPED+=(--bind "$PI_STATE_DIR" "$PI_STATE_DIR")
-      fi
+      [ -n "$PI_AUTH_TARGET" ] && WRAPPED+=(--bind "$PI_AUTH_TARGET" "$PI_AUTH_TARGET")
       WRAPPED+=(--dev /dev --proc /proc --die-with-parent --unshare-net --)
       if [ -n "$PROXY_PORT" ]; then
         WRAPPED+=(sh -c 'socat "TCP-LISTEN:$0,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$1" & shift; exec "$@"' "$PROXY_PORT" "$SESSION_TMP/proxy.sock" "$@")
@@ -165,24 +158,30 @@ sandbox_unavailable() {
 }
 
 check_sandbox_write() {
-  local id=sandbox-write marker outside usrlocal
+  local id=sandbox-write marker outside usrlocal statefile auth_state
   if [ "$PREFLIGHT_OK" = 0 ]; then sandbox_unavailable $id; return; fi
   begin_check $id
   CHECK_TIMEOUT=$SANDBOX_TIMEOUT
   marker=$(rand_hex)
   outside="$HOME/agentrun-probe-outside-$marker"
   usrlocal="/usr/local/agentrun-probe-$marker"
-  wrap_cmd sh -c 'for f in "$@"; do if echo probe > "$f" 2>/dev/null; then echo "written: $f"; else echo "blocked: $f"; fi; done' sh "$RUN_CWD/inside.txt" "$outside" "$usrlocal"
+  statefile="$PI_STATE_DIR/agentrun-probe-$marker"
+  wrap_cmd sh -c 'auth=$1; shift; for f in "$@"; do if echo probe > "$f" 2>/dev/null; then echo "written: $f"; else echo "blocked: $f"; fi; done
+if [ -n "$auth" ]; then if ( : >> "$auth" ) 2>/dev/null; then echo "auth: writable"; else echo "auth: blocked"; fi; fi' sh "$PI_AUTH_TARGET" "$RUN_CWD/inside.txt" "$outside" "$usrlocal" "$statefile"
   run_capture stdout.txt "${WRAPPED[@]}"
-  local inside=missing home=blocked ul=blocked
+  local inside=missing home=blocked ul=blocked state=blocked
   [ -f "$RUN_CWD/inside.txt" ] && inside=written
   [ -f "$outside" ] && home=written
   [ -f "$usrlocal" ] && ul=written
-  rm -f "$outside" "$usrlocal"
-  if [ "$inside" = written ] && [ "$home" = blocked ] && [ "$ul" = blocked ]; then
-    record $id - pass "cwd=$inside \$HOME=$home /usr/local=$ul"
+  [ -f "$statefile" ] && state=written
+  rm -f "$outside" "$usrlocal" "$statefile"
+  auth_state=$(sed -n 's/^auth: //p' "$CHECK_DIR/stdout.txt")
+  [ -z "$PI_AUTH_TARGET" ] && auth_state=absent
+  local detail="cwd=$inside \$HOME=$home /usr/local=$ul pi-state-dir=$state pi-auth.json=${auth_state:-missing}"
+  if [ "$inside" = written ] && [ "$home" = blocked ] && [ "$ul" = blocked ] && [ "$state" = blocked ] && { [ "$auth_state" = writable ] || [ "$auth_state" = absent ]; }; then
+    record $id - pass "$detail"
   else
-    record $id - fail "cwd=$inside \$HOME=$home /usr/local=$ul exit=$LAST_RC $(stderr_head)"
+    record $id - fail "$detail exit=$LAST_RC $(stderr_head)"
   fi
   end_check
 }
@@ -269,4 +268,7 @@ run_sandbox_checks() {
   selected sandbox-tmpdir && check_sandbox_tmpdir
   selected sandbox-child-process && check_sandbox_child_process
   selected sandbox-network && check_sandbox_network
+  case ",$RUNTIMES," in
+    *,codex,*) have codex && selected codex-sandbox && check_codex_sandbox ;;
+  esac
 }

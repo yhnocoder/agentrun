@@ -39,7 +39,7 @@
 <h3>判断沙箱能不能用</h3>
 <p>只看 <code>bwrap</code> 是否存在不够：docker 容器、关闭了非特权用户命名空间的系统、被 AppArmor 限制的系统里，<code>bwrap</code> 装了也启动不了。所以 <code>on</code> 与 <code>relax</code> 在每次运行前都实际检查一次：</p>
 <ul>
-  <li>macOS：<code>/usr/bin/sandbox-exec</code> 存在且可执行。</li>
+  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。</li>
   <li>Linux：会话 PATH 里有 <code>bwrap</code>；claude-code 与 pi 还要有 <code>socat</code>。然后执行一次 <code>bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent -- /bin/true</code>，最多等 5 秒。耗时通常是毫秒级。</li>
   <li>codex 用它自己的沙箱，不做 <code>bwrap</code> 检查。codex 沙箱启动失败时怎么发现，待实测，见<a href="pending.html">待定</a>。</li>
 </ul>
@@ -52,22 +52,23 @@
 <p>jsonl 格式不加额外的行，由 <code>start</code> 事件的 <code>sandbox</code> 与 <code>network.enforced</code> 字段记录。理由：<code>relax</code> 不打断运行，但事后能查出这次运行没有隔离。</p>
 
 <h2>三个运行时怎么关进沙箱</h2>
-<p>三者在沙箱里都只能写工作目录（<code>--cwd</code>）与会话临时目录（见<a href="session.html#tmpdir">会话临时目录</a>），pi 另外能写它的状态目录。读不受限制。</p>
+<p>三者在沙箱里都只能写工作目录（<code>--cwd</code>）与会话临时目录（见<a href="session.html#tmpdir">会话临时目录</a>），pi 另外能写用户的 pi 登录文件。读不受限制。</p>
 <table>
   <thead>
     <tr><th>运行时</th><th>沙箱打开时</th><th>沙箱没有运行时</th></tr>
   </thead>
   <tbody>
     <tr><td>claude-code</td><td>用 claude-code 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加 <code>socat</code>），由 <code>--settings</code> 打开。只作用于 Bash 命令：命令只能写两个目录、不能联网，沙箱里的命令自动放行，不允许沙箱外执行命令。Edit 与 Write 不经过沙箱，改用权限模式 <code>dontAsk</code> 加按路径放行的规则，只放行写两个目录</td><td>权限模式 <code>auto</code>，每条 Bash 命令由 claude-code 的分类器判断</td></tr>
-    <tr><td>codex</td><td><code>--sandbox workspace-write</code>，关闭网络，<code>/tmp</code> 与 <code>$TMPDIR</code> 不自动可写，会话临时目录作为额外可写目录显式给出</td><td><code>--sandbox danger-full-access</code></td></tr>
-    <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。可写目录另加 pi 的状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>）。网络见下一节</td><td>不包裹</td></tr>
+    <tr><td>codex</td><td>codex 自己的沙箱，用一个自定义权限配置：整个文件系统可读，工作目录与会话临时目录可写，<code>/tmp</code> 与 <code>$TMPDIR</code> 不可写，网络关闭</td><td>内置权限配置 <code>:danger-full-access</code></td></tr>
+    <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。另外只放行用户 pi 登录文件 <code>auth.json</code> 这一个文件。网络见下一节</td><td>不包裹</td></tr>
   </tbody>
 </table>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
-  <li>pi 的状态目录必须可写：pi 刷新令牌时要改写其中的 <code>auth.json</code> 并加锁，否则刷新会失败。目录不存在时 agentrun 先创建它（新建的每一级权限 0700），因为 <code>bwrap</code> 绑定不存在的路径会失败。</li>
+  <li>pi 只放行登录文件，不放行整个状态目录：pi 刷新令牌时原地改写 <code>auth.json</code>，锁目录建在私有状态目录里，所以一个文件就够；状态目录里有 pi 的启动脚本与扩展，不能让沙箱里的 agent 改写，见<a href="session.html#runtime-home">私有配置目录</a>。Linux 上用 <code>--bind</code> 单独绑定这个文件；用户没有登录文件时不放行。</li>
+  <li>codex 用 <code>default_permissions</code> 选择自定义权限配置，不传 <code>--sandbox</code>。理由：传了 <code>--sandbox</code> 时权限配置不生效；显式选择内置的 <code>:workspace</code> 时 codex 忽略 <code>sandbox_workspace_write</code> 的各项，<code>/tmp</code> 与 <code>$TMPDIR</code> 仍可写（codex 0.159.2 实测与源码）。</li>
   <li>pi 的包裹不加 <code>--unshare-pid</code> 与 <code>--new-session</code>，以保持<a href="session.html#signals">进程组与信号</a>的规则。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
-  <li>macOS 上 Seatbelt 按真实路径匹配，<code>/tmp</code> 与 <code>/var</code> 指向 <code>/private</code>，所以三个可写路径先解析符号链接再写进配置。</li>
+  <li>macOS 上 Seatbelt 按真实路径匹配，<code>/tmp</code> 与 <code>/var</code> 指向 <code>/private</code>，所以可写路径先解析符号链接再写进配置。</li>
   <li>沙箱打开时 claude-code 用 <code>dontAsk</code>，不用 <code>auto</code>。理由：Edit 与 Write 在 claude 进程里执行，不经过沙箱；auto 模式会放行写到工作目录以外的请求，即使放行规则只列了工作目录（claude 2.1.289 云端实测，Write 写成了 <code>$HOME</code> 与 <code>/tmp</code> 下的文件）。<code>dontAsk</code> 拒绝放行规则以外的所有调用，被拒绝的调用交还模型，Bash 仍由沙箱自动放行。被拒绝的调用记为 <code>tool</code> 事件的 <code>denied</code>。</li>
   <li>被沙箱拦下的写入或联网不算 <code>failed</code>，也不设 <code>tool</code> 事件的 <code>denied</code>。<code>denied</code> 只表示运行时权限机制的拒绝。理由：命令失败的结果会交还模型，由模型决定下一步，和其他命令出错一样。</li>
 </ul>
@@ -101,7 +102,7 @@
 <svg class="diagram" viewBox="0 0 600 370" style="max-width:600px" role="img" aria-label="沙箱内进程经过滤代理访问网络"><defs><marker id="arr-net" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="20" y="10" width="560" height="84" rx="10" style="fill:none;stroke-dasharray:6 4"/><text class="note" x="34" y="30" text-anchor="start">沙箱</text><rect x="110" y="34" width="380" height="44" rx="8"/><text x="300.0" y="61.0" text-anchor="middle">agent 进程：运行时与它执行的命令</text><path d="M300,78 L300,138" marker-end="url(#arr-net)"/><text class="note" x="312" y="113" text-anchor="start">只能连接 127.0.0.1 上的随机端口</text><rect x="130" y="140" width="340" height="44" rx="8"/><text x="300.0" y="167.0" text-anchor="middle">过滤代理：在 agentrun 进程里，沙箱外</text><path d="M300,184 C300,214 100,214 100,248" marker-end="url(#arr-net)"/><path d="M300,184 L300,248" marker-end="url(#arr-net)"/><path d="M300,184 C300,214 500,214 500,248" marker-end="url(#arr-net)"/><rect x="20" y="250" width="160" height="60" rx="8"/><text x="100.0" y="276.0" text-anchor="middle">放行</text><text x="100.0" y="294.0" text-anchor="middle">经上游代理或直连</text><rect x="220" y="250" width="160" height="60" rx="8"/><text x="300.0" y="276.0" text-anchor="middle">拒绝</text><text x="300.0" y="294.0" text-anchor="middle">not_allowed</text><rect x="420" y="250" width="160" height="60" rx="8"/><text x="500.0" y="276.0" text-anchor="middle">拒绝</text><text x="500.0" y="294.0" text-anchor="middle">private_address</text><text class="note" x="100" y="330" text-anchor="middle">主机在放行列表里</text><text class="note" x="300" y="330" text-anchor="middle">主机不在放行列表里</text><text class="note" x="500" y="330" text-anchor="middle">解析到私有地址</text><text class="note" x="300" y="358" text-anchor="middle">每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 network 事件</text></svg>
 <figcaption>沙箱里的进程只能连到过滤代理，由代理按主机决定放行或拒绝。</figcaption>
 </figure>
-<p>没有直接用各运行时自带的网络设置，因为三者能力不一致：claude-code 沙箱的 <code>allowedDomains</code> 不接受单独的 <code>*</code>，表达不了 full（claude 2.1.289）；codex 的网络设置只有开与关；pi 没有任何网络控制。三套做法含义不同，也没有统一的连接记录可供排查。</p>
+<p>没有直接用各运行时自带的网络设置，因为三者能力不一致：claude-code 沙箱的 <code>allowedDomains</code> 不接受单独的 <code>*</code>，表达不了 full（claude 2.1.289）；codex 按主机放行要开启它自带的实验性代理，而且这个代理拒绝解析到私有网段的主机；pi 没有任何网络控制。三套做法含义不同，也没有统一的连接记录可供排查。</p>
 
 <h3>各运行时的做法</h3>
 <table>
@@ -110,7 +111,7 @@
   </thead>
   <tbody>
     <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
-    <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：<code>sandbox_workspace_write.network_access=true</code>，直接联网，不经过代理，没有 <code>network</code> 事件。custom：待实测 codex 能否把沙箱流量交给外部代理，不能时按「限制无法执行」处理</td><td>full：打开网页搜索。custom：关闭</td></tr>
+    <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：权限配置的网络打开，直接联网，不经过代理，没有 <code>network</code> 事件。custom：开启 codex 自带的代理，放行 <code>--allow-host</code> 列出的主机；codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，codex 的代理把放行的请求转给它，过滤代理按同一份列表再判断一次并输出 <code>network</code> 事件。codex 的代理关闭 SOCKS5，因为 SOCKS5 的连接不经过上游。codex 访问模型的请求也经过过滤代理，过滤代理另外放行 <code>chatgpt.com</code> 与 <code>ab.chatgpt.com</code>（ChatGPT 登录，macOS 实测）</td><td>full：<code>web_search="live"</code>。none 与 custom：<code>web_search="disabled"</code></td></tr>
     <tr><td>pi</td><td>包裹断开网络，只能连代理，代理只放行模型服务</td><td>同 none，代理按取值放行</td><td>pi 没有网页工具，靠 bash 里的 <code>curl</code></td></tr>
   </tbody>
 </table>
@@ -136,8 +137,8 @@
 <p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
   <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，不保存会话，每次传一个新生成的会话 id。</li>
-  <li>codex：不读用户的 codex 配置与规则文件，只使用其中的登录信息；不读工作目录里的 <code>AGENTS.md</code>，不加载技能说明，会话不落盘。具体做法待实测，见<a href="pending.html">待定</a>。</li>
-  <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。</li>
+  <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#runtime-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
+  <li>pi：使用私有状态目录，只带入登录文件、自定义模型与默认模型设置；不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。</li>
 </ul>
 <p>账号由登录方式决定。会话环境按运行时删除会改变登录方式的变量，容器里的凭据由环境变量写入登录文件，见<a href="session.html">会话环境</a>。</p>
 
@@ -148,8 +149,8 @@
   </thead>
   <tbody>
     <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
-    <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
-    <tr><td>pi</td><td>能读用户可读的任何文件；能改写 pi 自己的状态目录，包括它的设置文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
+    <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
+    <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户的 pi 登录文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>
 </table>
 <p>不走代理的程序在沙箱里连不上网。例如 <code>git clone git@github.com:...</code> 走 SSH，即使用了 <code>--network full</code> 也会失败；改用 HTTPS 地址可以成功。</p>
