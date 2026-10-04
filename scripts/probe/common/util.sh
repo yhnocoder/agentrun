@@ -48,6 +48,10 @@ real_dir() {
   (cd "$1" 2>/dev/null && pwd -P)
 }
 
+real_file() {
+  perl -MCwd=realpath -e 'print realpath($ARGV[0])' "$1"
+}
+
 env_names() {
   awk 'BEGIN { for (k in ENVIRON) print k }' | sort
 }
@@ -317,6 +321,8 @@ write_env_txt() {
     echo "AGENTRUN_CODEX_AUTH: $CODEX_AUTH_WRITTEN"
     echo "AGENTRUN_PI_AUTH: $PI_AUTH_WRITTEN"
     echo "pi state dir: $PI_STATE_DIR $(if [ -d "$PI_STATE_DIR" ]; then echo exists; else echo missing; fi)"
+    echo "pi auth.json target: ${PI_AUTH_TARGET:-none}"
+    echo "codex auth.json target: ${CODEX_AUTH_TARGET:-none}"
     echo "pi default provider: ${PI_PROVIDER:-unknown} -> host ${PI_MODEL_HOST:-unknown}"
     for rt in claude codex pi; do
       if have "$rt"; then

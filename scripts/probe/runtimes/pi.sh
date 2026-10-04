@@ -1,6 +1,7 @@
 # shellcheck shell=bash disable=SC2034
 
 PI_TOOLS="read,bash,edit,write,grep,find,ls"
+PI_INVALID_AUTH=0
 
 pi_bin() {
   echo pi
@@ -25,8 +26,46 @@ pi_supports() {
   return 0
 }
 
+pi_prepare_agent_dir() {
+  local dir="$SESSION_TMP/pi-agent"
+  make_private_dirs "$dir"
+  rm -f "$dir/auth.json" "$dir/models.json"
+  if [ "$PI_INVALID_AUTH" = 1 ]; then
+    (umask 077 && printf '{"%s":{"type":"api_key","key":"invalid"}}\n' "$PI_PROVIDER" > "$dir/auth.json")
+    PI_INVALID_AUTH=0
+  elif [ -n "$PI_AUTH_TARGET" ]; then
+    ln -s "$PI_AUTH_TARGET" "$dir/auth.json"
+  fi
+  [ -f "$PI_STATE_DIR/models.json" ] && ln -s "$(real_file "$PI_STATE_DIR/models.json")" "$dir/models.json"
+  for b in fd rg; do
+    if [ -f "$PI_STATE_DIR/bin/$b" ]; then
+      make_private_dirs "$dir/bin"
+      ln -sfn "$(real_file "$PI_STATE_DIR/bin/$b")" "$dir/bin/$b"
+    fi
+  done
+  node -e '
+const fs = require("fs");
+let s = {};
+try { s = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (e) {}
+const out = {};
+for (const k of ["defaultProvider", "defaultModel"]) if (s[k] !== undefined) out[k] = s[k];
+fs.writeFileSync(process.argv[2], JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
+' "$PI_STATE_DIR/settings.json" "$dir/settings.json"
+  RUN_ENV+=("PI_CODING_AGENT_DIR=$dir")
+}
+
+pi_auth_link_state() {
+  local f="$SESSION_TMP/pi-agent/auth.json"
+  if [ -z "$PI_AUTH_TARGET" ]; then echo none
+  elif [ -L "$f" ]; then echo intact
+  elif [ -e "$f" ]; then echo replaced-by-file
+  else echo missing
+  fi
+}
+
 pi_build_cmd() {
   local prompt=$1 mode=$2
+  pi_prepare_agent_dir
   printf '%s' "$prompt" > "$CHECK_DIR/prompt.txt"
   STDIN_FILE=/dev/null
   CMD=(pi -p --mode json --no-session --no-extensions --no-skills --no-prompt-templates --no-themes \
@@ -53,10 +92,10 @@ pi_summary() {
   local info
   info=$(pi_last_end 'JSON.stringify({stopReason: e[e.length-1].message.stopReason, model: e[e.length-1].message.provider + "/" + e[e.length-1].message.model, ends: e.length, errorMessage: (e[e.length-1].message.errorMessage || "").slice(0, 160) || undefined})')
   if [ -z "$info" ]; then
-    echo "exit=$LAST_RC no assistant message_end; events: $(event_types); stderr: $(stderr_head)"
+    echo "exit=$LAST_RC no assistant message_end; auth_link=$(pi_auth_link_state); events: $(event_types); stderr: $(stderr_head)"
     return
   fi
-  echo "exit=$LAST_RC last_end=$info"
+  echo "exit=$LAST_RC last_end=$info auth_link=$(pi_auth_link_state)"
 }
 
 pi_result_text() {
@@ -82,6 +121,7 @@ pi_add_invalid_arg() {
 }
 
 pi_set_invalid_credentials() {
+  PI_INVALID_AUTH=1
   RUN_ENV+=(DEEPSEEK_API_KEY=invalid ANTHROPIC_API_KEY=invalid OPENAI_API_KEY=invalid)
 }
 

@@ -88,6 +88,11 @@ mkdir -m 0700 "$PRIVATE_ROOT" || exit 1
 write_credentials
 unset AGENTRUN_CODEX_AUTH AGENTRUN_PI_AUTH
 
+PI_AUTH_TARGET=""
+[ -f "$PI_STATE_DIR/auth.json" ] && PI_AUTH_TARGET=$(real_file "$PI_STATE_DIR/auth.json")
+CODEX_AUTH_TARGET=""
+[ -f "${CODEX_HOME:-$HOME/.codex}/auth.json" ] && CODEX_AUTH_TARGET=$(real_file "${CODEX_HOME:-$HOME/.codex}/auth.json")
+
 cleanup() {
   stop_proxy
   [ -n "$SESSION_TMP" ] && rm -rf "$SESSION_TMP"

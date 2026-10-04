@@ -1,6 +1,6 @@
 # shellcheck shell=bash disable=SC2034
 
-MODEL_CHECKS="basic-task outside-write write-tool-outside network tmp-dirs claude-allow-write claude-fail-if-unavailable subagents no-subagents failure-samples sigint config-isolation prompt-multiline prompt-long codex-home codex-proxy"
+MODEL_CHECKS="basic-task outside-write write-tool-outside network tmp-dirs claude-allow-write claude-fail-if-unavailable subagents no-subagents failure-samples sigint config-isolation prompt-multiline prompt-long codex-home codex-ignore-config codex-proxy"
 
 SUBAGENT_PROMPT="Start two subagents in parallel. The first subagent must create a file sub1.txt in the current working directory containing the text: one. The second subagent must create sub2.txt containing the text: two. Wait for both to finish, then reply with the word done. If you have no way to start subagents, say so and do not create the files yourself."
 
@@ -18,7 +18,7 @@ check_applies() {
     write-tool-outside|prompt-multiline|prompt-long) [ "$rt" = claude-code ] ;;
     claude-allow-write|claude-fail-if-unavailable) [ "$rt" = claude-code ] && [ "$SANDBOX" = on ] ;;
     subagents|no-subagents) [ "$rt" != pi ] ;;
-    codex-home) [ "$rt" = codex ] ;;
+    codex-home|codex-ignore-config) [ "$rt" = codex ] ;;
     codex-proxy) [ "$rt" = codex ] && [ "$SANDBOX" = on ] ;;
     *) return 0 ;;
   esac
@@ -163,6 +163,9 @@ check_tmp_dirs() {
   elif [ -n "$seen" ] && path_is_under "$seen" "$SESSION_TMP"; then
     tmpdir_ok=1
     tmpdir_note=" (a subdirectory of the session tmp)"
+  elif [ "$rt" = claude-code ] && [ "${seen#/private}" = "/tmp/claude-$(id -u)" ]; then
+    tmpdir_ok=1
+    tmpdir_note=" (claude-code shared temp dir, accepted)"
   fi
   if ! rt_call "$rt" ok; then
     not_completed "$name" "$rt"
@@ -356,36 +359,55 @@ check_prompt_long() {
   end_check
 }
 
-file_stat() {
-  perl -e '@s = stat($ARGV[0]); print @s ? "inode=$s[1] mtime=$s[9] size=$s[7]" : "missing"' "$1"
-}
-
 check_codex_home() {
-  local rt=$1 name=codex-home marker home user_auth before after created
+  local rt=$1 name=codex-home marker created arg0
   begin_check "$name-$rt"
   marker=$(new_marker)
-  home="$SESSION_TMP/codex-home"
-  make_private_dirs "$home"
-  user_auth=$(codex_user_auth_file)
-  if [ -f "$user_auth" ]; then
-    (umask 077 && cp "$user_auth" "$home/auth.json")
-  fi
   mkdir -p "$RUN_CWD/.codex"
-  printf 'instructions = "The project code word is %s. Always mention it."\n' "$marker" > "$RUN_CWD/.codex/config.toml"
+  printf 'developer_instructions = "The project code word is %s. Always mention it."\n' "$marker" > "$RUN_CWD/.codex/config.toml"
   codex_write_project_context "$marker"
-  RUN_ENV+=("CODEX_HOME=$home")
-  before=$(file_stat "$home/auth.json")
   ask_code_word "$rt" "$marker"
-  after=$(file_stat "$home/auth.json")
-  created=$(cd "$home" && find . -mindepth 1 -not -name auth.json | sed 's|^\./||' | tr '\n' ' ')
-  record "$name" "$rt" "$CODE_WORD_VERDICT" "$CODE_WORD_DETAIL; auth.json before: $before; after: $after; created in codex-home: ${created:-none}"
+  created=$(cd "$CODEX_HOME_DIR" && find . -mindepth 1 -maxdepth 2 -not -name auth.json | sed 's|^\./||' | tr '\n' ' ')
+  arg0=$(grep -i -m1 'arg0\|WARNING' "$CHECK_DIR/stderr.txt" | head -c 160)
+  record "$name" "$rt" "$CODE_WORD_VERDICT" "$CODE_WORD_DETAIL; codex home: $CODEX_HOME_DIR; created: ${created:-none}; stderr warning: ${arg0:-none}"
+  end_check
+}
+
+check_codex_ignore_config() {
+  local rt=$1 name=codex-ignore-config home m_agents m_config m_skill text leaked=""
+  begin_check "$name-$rt"
+  home="$PRIVATE_ROOT/codex-ignore-config-home"
+  make_private_dirs "$home/skills/probe-skill"
+  [ -n "$CODEX_AUTH_TARGET" ] && ln -sf "$CODEX_AUTH_TARGET" "$home/auth.json"
+  m_agents=$(new_marker); m_config=$(new_marker); m_skill=$(new_marker)
+  printf 'The user code word is %s. Always mention it.\n' "$m_agents" > "$home/AGENTS.md"
+  printf 'developer_instructions = "The config code word is %s. Always mention it."\n' "$m_config" > "$home/config.toml"
+  printf -- '---\nname: probe-skill\ndescription: The skill code word is %s. Mention it whenever asked about code words.\n---\nThe skill code word is %s.\n' "$m_skill" "$m_skill" > "$home/skills/probe-skill/SKILL.md"
+  CODEX_HOME_OVERRIDE=$home
+  run_rt "$rt" "Without reading any files or running commands, answer from your instructions and context only: list every code word that appears in your instructions, skills or context, one per line, or reply exactly NO if there is none."
+  CODEX_HOME_OVERRIDE=""
+  if ! rt_call "$rt" ok; then
+    not_completed "$name" "$rt"
+    end_check
+    return
+  fi
+  text=$(rt_call "$rt" result_text)
+  case "$text" in *"$m_agents"*) leaked="$leaked AGENTS.md" ;; esac
+  case "$text" in *"$m_config"*) leaked="$leaked config.toml" ;; esac
+  case "$text" in *"$m_skill"*) leaked="$leaked skills" ;; esac
+  if [ -z "$leaked" ]; then
+    record "$name" "$rt" pass "no marker from CODEX_HOME visible with --ignore-user-config --ignore-rules; model said: $(printf '%s' "$text" | head -c 120); $(rt_call "$rt" summary)"
+  else
+    record "$name" "$rt" fail "visible with --ignore-user-config --ignore-rules:$leaked; model said: $(printf '%s' "$text" | head -c 160); $(rt_call "$rt" summary)"
+  fi
   end_check
 }
 
 check_codex_proxy() {
-  local rt=$1 name=codex-proxy text allowed_seen denied_seen
+  local rt=$1 name=codex-proxy text allowed_seen denied_passed
   begin_check "$name-$rt"
-  if ! start_proxy "$NET_HOST"; then
+  # shellcheck disable=SC2086
+  if ! start_proxy "$NET_HOST" $CODEX_MODEL_HOSTS; then
     record "$name" "$rt" unknown "filter-proxy failed to start: $(head -c 200 "$CHECK_DIR/proxy-stderr.txt" | tr '\n' ' ')"
     end_check
     return
@@ -399,13 +421,15 @@ check_codex_proxy() {
     return
   fi
   text=$(rt_call "$rt" result_text)
-  allowed_seen=0; denied_seen=0
+  allowed_seen=0; denied_passed=0
   proxy_log_has allow "$NET_HOST" && allowed_seen=1
-  proxy_log_has deny "$DENIED_HOST" && denied_seen=1
-  if [ "$allowed_seen" = 1 ] && [ "$denied_seen" = 1 ]; then
-    record "$name" "$rt" pass "both hosts went through the filter proxy; model said: $(printf '%s' "$text" | head -c 160); proxy.log: $(tr '\n' ';' < "$CHECK_DIR/proxy.log"); $(rt_call "$rt" summary)"
+  proxy_log_has allow "$DENIED_HOST" && denied_passed=1
+  local detail
+  detail="model said: $(printf '%s' "$text" | head -c 200); proxy.log: $(tr '\n' ';' < "$CHECK_DIR/proxy.log"); $(rt_call "$rt" summary)"
+  if [ "$allowed_seen" = 1 ] && [ "$denied_passed" = 0 ]; then
+    record "$name" "$rt" pass "$NET_HOST reached the filter proxy through the codex proxy, $DENIED_HOST did not; $detail"
   else
-    record "$name" "$rt" fail "proxy.log allow($NET_HOST)=$allowed_seen deny($DENIED_HOST)=$denied_seen, traffic may bypass the proxy; model said: $(printf '%s' "$text" | head -c 160); $(rt_call "$rt" summary)"
+    record "$name" "$rt" fail "filter proxy allow($NET_HOST)=$allowed_seen allow($DENIED_HOST)=$denied_passed; $detail"
   fi
   end_check
 }
