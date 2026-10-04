@@ -24,6 +24,26 @@
     <div class="card-body"><strong>agentrun 设计</strong><span>命令行界面、各环境的隔离方式、凭据与会话环境、统一事件流、doctor 检查和退出码。</span>
     <div class="card-tags"><i>cli</i><i>sandbox</i><i>草稿</i></div></div>
   </a></li>
+  <li><a class="card" href="pages/claudecode.jsonl.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><b>$</b><span class="pv-a">claude -p --output-format stream-json</span></div>
+      <div class="pv-line pv-a pv-s2">{"type":"system","subtype":"init"}</div>
+      <div class="pv-line pv-a pv-s3">{"type":"assistant","message":{...}}</div>
+      <div class="pv-line pv-a pv-s4">{"type":"result","is_error":false}</div>
+    </div>
+    <div class="card-body"><strong>claude-code 事件流</strong><span>stream-json 输出的每种事件、字段、运行顺序、subagent 嵌套、错误与退出码。</span>
+    <div class="card-tags"><i>claude-code</i><i>jsonl</i><i>字段参考</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/pi.jsonl.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><b>$</b><span class="pv-a">pi -p --mode json</span></div>
+      <div class="pv-line pv-a pv-s2">{"type":"session","version":3}</div>
+      <div class="pv-line pv-a pv-s3">{"type":"message_end","message":{...}}</div>
+      <div class="pv-line pv-a pv-s4">{"type":"agent_settled"}</div>
+    </div>
+    <div class="card-body"><strong>pi 事件流</strong><span>--mode json 输出的每种事件、消息角色、内容块、usage、错误与退出码、与 0.73.1 的差异。</span>
+    <div class="card-tags"><i>pi</i><i>jsonl</i><i>字段参考</i></div></div>
+  </a></li>
 </ul>
 </main>
 </body>

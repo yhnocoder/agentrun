@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-code 事件流</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a></p>
+<h1>claude-code 事件流 <span class="tag">字段参考</span></h1>
+<p class="lead">本文是 <code>claude -p --output-format stream-json --verbose</code> 输出的事件流的字段参考：每种事件何时出现、有哪些字段、字段的类型与含义、典型运行的顺序、subagent 的嵌套方式、错误与退出码。写给要为这条流写解析器的人，<mark>不依赖 agentrun 的其他文档</mark>。依据是 claude-code 2.1.288 与 2.1.289 在 Linux 容器里的实测输出，字段表中标出了每一项的来源。</p>
+
+<blockquote>
+  <p>读这条流的三条规则：每行一个 JSON 对象，按 <code>type</code> 与 <code>subtype</code> 分发，不认识的类型跳过；一次运行可能有多个 <code>result</code> 事件，以最后一个为准；成败看最后一个 <code>result</code> 的 <code>is_error</code>，退出码只区分启动失败与运行时的限额失败。</p>
+</blockquote>
+
+<h2>怎样产生这条流</h2>
+<pre><code class="language-bash">claude -p "提示词" \
+  --output-format stream-json --verbose \
+  --model sonnet --session-id "$(uuidgen)" --no-session-persistence \
+  --permission-mode auto --setting-sources "" --strict-mcp-config</code></pre>
+<p><code>-p</code>（<code>--print</code>）让 claude 处理一个提示词后退出；<code>--output-format stream-json</code> 选择逐行 JSON 输出；<code>--verbose</code> 是必需的，缺少它时进程不输出任何事件，在标准错误打印 <code>Error: When using --print, --output-format=stream-json requires --verbose</code>，退出码 1。提示词也可以从标准输入传入。</p>
+<p>事件流写到标准输出，标准输出里只有 JSON 行。诊断信息写到标准错误，例如模型名不存在时的 <code>[claude-code:unrecognized_model] {"model":"...","query_source":"sdk"}</code>。</p>
+<p>以下选项与环境变量改变流里出现的事件：</p>
+<table>
+  <thead>
+    <tr><th>选项</th><th>对流的影响</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--include-partial-messages</code><br>环境变量 <code>CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES=true</code></td><td>加入 <code>stream_event</code> 事件，每个模型调用的逐字输出都会出现。见「stream_event 事件」。本文的部分样本来自设置了该环境变量的环境，显式选项的效果以帮助文本为依据</td></tr>
+    <tr><td><code>--include-hook-events</code></td><td>加入 <code>system</code> 的 <code>hook_started</code> 与 <code>hook_response</code> 子类型。没有配置 hook 时不会出现</td></tr>
+    <tr><td><code>--json-schema JSON</code></td><td>模型通过一个名为 <code>StructuredOutput</code> 的工具调用给出结构化结果，<code>result</code> 事件多出 <code>structured_output</code> 字段</td></tr>
+    <tr><td><code>--max-turns N</code></td><td>超过 N 轮时结束，<code>result.subtype</code> 为 <code>error_max_turns</code>，退出码 1</td></tr>
+    <tr><td><code>--max-budget-usd AMOUNT</code></td><td>花费超过上限时结束，<code>result.subtype</code> 为 <code>error_max_budget_usd</code>，退出码 1</td></tr>
+    <tr><td><code>--permission-mode MODE</code>、<code>--permission-prompts none</code></td><td>需要确认而无人确认的工具调用被拒绝，出现 <code>system</code> 的 <code>permission_denied</code> 子类型，<code>result.permission_denials</code> 非空。<code>--permission-prompts</code> 可选值为 <code>host</code> 与 <code>none</code>，<code>-p</code> 模式下没有确认界面时效果与 <code>none</code> 相同</td></tr>
+    <tr><td><code>--forward-subagent-text</code></td><td>帮助文本说明它把 subagent 的文字与 thinking 以 <code>parent_tool_use_id</code> 标记后转发到流里。未实测</td></tr>
+    <tr><td><code>--input-format stream-json</code>、<code>--replay-user-messages</code></td><td>从标准输入读取 JSON 消息并回显用户消息。本文只写输入为文本的情况</td></tr>
+    <tr><td><code>--model</code>、<code>--setting-sources</code>、<code>--strict-mcp-config</code>、<code>--settings</code>、<code>--tools</code></td><td>改变 <code>system/init</code> 里的 <code>model</code>、<code>tools</code>、<code>mcp_servers</code>、<code>skills</code>、<code>slash_commands</code> 等列表，不改变事件类型</td></tr>
+  </tbody>
+</table>
+
+<h2>每行的格式</h2>
+<p>每行是一个 JSON 对象，以 LF 结尾，没有空行，没有非 JSON 行。每个对象都有 <code>type</code>；<code>type</code> 为 <code>system</code> 与 <code>result</code> 的对象还有 <code>subtype</code>。下面的字段出现在多种事件上：</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>出现在</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>type</code></td><td>string</td><td>事件类型</td><td>所有事件</td></tr>
+    <tr><td><code>subtype</code></td><td>string</td><td>子类型</td><td><code>system</code>、<code>result</code></td></tr>
+    <tr><td><code>uuid</code></td><td>string</td><td>这一行的唯一编号</td><td>除 <code>system/api_retry</code> 以外的所有观测到的事件都有</td></tr>
+    <tr><td><code>session_id</code></td><td>string</td><td>会话 id，等于 <code>--session-id</code> 给出的值。subagent 的事件与主 agent 相同</td><td>所有事件</td></tr>
+    <tr><td><code>parent_tool_use_id</code></td><td>string 或 null</td><td>主 agent 的事件为 null；subagent 内部的事件是启动它的那次 <code>Agent</code> 工具调用的 id。见「subagent 与后台任务」</td><td><code>assistant</code>、<code>user</code>、<code>stream_event</code></td></tr>
+    <tr><td><code>timestamp</code></td><td>string</td><td>ISO 8601，UTC，毫秒。只有 <code>assistant</code> 与 <code>user</code> 事件带时间戳，其他事件没有</td><td><code>assistant</code>、<code>user</code></td></tr>
+  </tbody>
+</table>
+<p>字符串里可能有换行（<code>\n</code>）与 Unicode 行分隔符，按 LF 切行后再解析 JSON，不能按通用的行分隔符切行。</p>
+
+<h2>有哪些事件</h2>
+<p>「来源」一列：「观测」表示在样本中出现过；「帮助文本」表示只在 <code>claude --help</code> 中有描述。</p>
+<table>
+  <thead>
+    <tr><th>type / subtype</th><th>何时出现</th><th>需要的条件</th><th>来源</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>active_goal</code></td><td>启动时，在 <code>system/init</code> 之前</td><td>只在 Claude 云端容器里观测到，见「版本与环境说明」</td><td>观测</td></tr>
+    <tr><td><code>autocompact_state</code></td><td>启动时，在 <code>system/init</code> 之前</td><td>同上</td><td>观测</td></tr>
+    <tr><td><code>rate_limit_event</code></td><td>启动时，在 <code>system/init</code> 前后都可能</td><td>同上</td><td>观测</td></tr>
+    <tr><td><code>system/init</code></td><td>每次运行的开头一次；后台任务完成触发新一轮时再次出现</td><td>总是</td><td>观测</td></tr>
+    <tr><td><code>system/status</code></td><td>每次向模型发请求之前</td><td>总是</td><td>观测</td></tr>
+    <tr><td><code>system/task_summary</code></td><td>工具调用前后，给出一句当前动作的描述</td><td>总是</td><td>观测</td></tr>
+    <tr><td><code>system/post_turn_summary</code></td><td>一轮结束、<code>result</code> 之前</td><td>总是</td><td>观测</td></tr>
+    <tr><td><code>system/thinking_tokens</code></td><td>模型输出 thinking 块的过程中</td><td>模型使用了 thinking</td><td>观测</td></tr>
+    <tr><td><code>system/api_retry</code></td><td>API 请求失败后重试之前</td><td>API 返回错误</td><td>观测</td></tr>
+    <tr><td><code>system/permission_denied</code></td><td>一次工具调用被权限规则拒绝时</td><td>见上一节的权限选项</td><td>观测</td></tr>
+    <tr><td><code>system/hook_started</code>、<code>system/hook_response</code></td><td>每个 hook 命令开始与结束</td><td><code>--include-hook-events</code> 且配置了 hook</td><td>观测</td></tr>
+    <tr><td><code>system/task_started</code>、<code>task_progress</code>、<code>task_updated</code>、<code>task_notification</code></td><td>subagent、Workflow 与后台 Bash 命令的生命周期</td><td>agent 启动了这类任务</td><td>观测</td></tr>
+    <tr><td><code>system/background_tasks_changed</code></td><td>后台任务列表变化时</td><td>agent 启动了后台任务</td><td>观测</td></tr>
+    <tr><td><code>assistant</code></td><td>模型每输出一个内容块（文字、thinking、工具调用）</td><td>总是</td><td>观测</td></tr>
+    <tr><td><code>user</code></td><td>每个工具结果；subagent 收到的提示词；中断提示；注入的技能说明</td><td>总是</td><td>观测</td></tr>
+    <tr><td><code>stream_event</code></td><td>模型调用的逐字输出</td><td><code>--include-partial-messages</code> 或对应环境变量</td><td>观测</td></tr>
+    <tr><td><code>result</code></td><td>一轮对话结束时；可能多次</td><td>总是，除非进程被 SIGTERM 终止或在启动前失败</td><td>观测</td></tr>
+  </tbody>
+</table>
+
+<h2>一次运行的顺序</h2>
+<p>下面是一次「写文件、读回、回答」的运行，没有开启逐字输出。缩进只为阅读，流里每行一个事件。</p>
+<div class="term"><span class="dim">启动</span>
+active_goal
+autocompact_state
+rate_limit_event
+system/init
+<span class="dim">第 1 次模型调用：一个 Write 工具调用</span>
+system/status
+assistant            <span class="dim">content: tool_use Write</span>
+system/task_summary
+user                 <span class="dim">content: tool_result</span>
+<span class="dim">第 2 次模型调用：thinking 之后一个 Read 工具调用</span>
+system/status
+assistant            <span class="dim">content: thinking</span>
+assistant            <span class="dim">content: tool_use Read</span>
+user                 <span class="dim">content: tool_result</span>
+<span class="dim">第 3 次模型调用：文字回答</span>
+system/status
+assistant            <span class="dim">content: text</span>
+system/post_turn_summary
+result               <span class="dim">subtype success, num_turns 3</span>
+system/task_summary</div>
+<p>要点：</p>
+<ul>
+  <li>一次模型调用返回几个内容块，就有几个 <code>assistant</code> 事件，它们的 <code>message.id</code> 相同。每个事件的 <code>message.content</code> 只含当前这一个块。</li>
+  <li>每个工具调用对应一个 <code>user</code> 事件，<code>message.content[0].tool_use_id</code> 对应 <code>assistant</code> 事件里 <code>tool_use</code> 块的 <code>id</code>。一次调用里有多个工具调用时，<code>user</code> 事件按完成顺序出现，可能与调用顺序不同。</li>
+  <li><code>result</code> 之后还可能有 <code>system/task_summary</code>，所以 <code>result</code> 不一定是最后一行。</li>
+  <li>后台任务（后台 Bash 命令、Workflow）完成时，进程继续运行，再输出一次 <code>system/init</code>、新一轮的 <code>assistant</code> 与一个新的 <code>result</code>。两个 <code>result</code> 用 <code>result_index</code>（0、1）区分，第二个带 <code>origin</code>。进程在所有后台任务结束后退出。</li>
+</ul>
+<p>开启逐字输出后，每次模型调用周围多出 <code>stream_event</code>，<code>assistant</code> 事件出现在对应内容块的 <code>content_block_stop</code> 之前：</p>
+<div class="term">system/status
+stream_event   message_start
+stream_event   content_block_start      <span class="dim">index 0, tool_use</span>
+stream_event   content_block_delta  ×N  <span class="dim">input_json_delta</span>
+assistant                                <span class="dim">content: tool_use（完整参数）</span>
+stream_event   content_block_stop       <span class="dim">index 0</span>
+stream_event   message_delta            <span class="dim">stop_reason, usage</span>
+stream_event   message_stop
+system/task_summary
+user                                     <span class="dim">tool_result</span></div>
+
+<h2>system 事件</h2>
+<h3>init</h3>
+<p>运行开始时输出一次，描述这次会话的配置。字段多，解析器一般只需要 <code>model</code>、<code>tools</code>、<code>permissionMode</code>、<code>claude_code_version</code>、<code>cwd</code>。</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>cwd</code></td><td>string</td><td>工作目录</td><td></td></tr>
+    <tr><td><code>model</code></td><td>string</td><td>主模型 id，例如 <code>claude-sonnet-5-5</code>。模型名不存在时原样给出传入的名字</td><td></td></tr>
+    <tr><td><code>permissionMode</code></td><td>string</td><td>权限模式，例如 <code>auto</code>、<code>default</code></td><td></td></tr>
+    <tr><td><code>tools</code></td><td>string[]</td><td>可用工具名。启动 subagent 的工具在这里叫 <code>Task</code>，在 <code>tool_use</code> 块里叫 <code>Agent</code></td><td></td></tr>
+    <tr><td><code>agents</code></td><td>string[]</td><td>可用的 subagent 类型，例如 <code>general-purpose</code>、<code>Explore</code>、<code>Plan</code></td><td></td></tr>
+    <tr><td><code>mcp_servers</code></td><td>array</td><td>已加载的 MCP 服务器</td><td>观测值为空数组</td></tr>
+    <tr><td><code>skills</code>、<code>slash_commands</code>、<code>terminal_slash_commands</code></td><td>string[]</td><td>技能与斜杠命令名</td><td></td></tr>
+    <tr><td><code>plugins</code></td><td>object[]</td><td>每项 <code>{name, path, source}</code></td><td></td></tr>
+    <tr><td><code>apiKeySource</code></td><td>string</td><td>API key 的来源：<code>none</code>（订阅登录）或 <code>ANTHROPIC_API_KEY</code></td><td></td></tr>
+    <tr><td><code>claude_code_version</code></td><td>string</td><td>版本号，例如 <code>2.1.288</code></td><td></td></tr>
+    <tr><td><code>output_style</code>、<code>view_mode</code></td><td>string</td><td>观测值都是 <code>default</code></td><td></td></tr>
+    <tr><td><code>capabilities</code></td><td>string[]</td><td>协议能力标识</td><td></td></tr>
+    <tr><td><code>memory_paths</code></td><td>object</td><td><code>{auto, team}</code> 两个目录</td><td></td></tr>
+    <tr><td><code>scratchpad_path</code>、<code>messaging_socket_path</code></td><td>string</td><td>临时目录与进程间通信 socket 的路径</td><td></td></tr>
+    <tr><td><code>fast_mode_state</code>、<code>fast_mode_disabled_reason</code></td><td>string</td><td>观测值 <code>off</code>、<code>sdk_opt_in_required</code></td><td></td></tr>
+    <tr><td><code>per_turn_effort_active</code>、<code>analytics_disabled</code>、<code>product_feedback_disabled</code></td><td>boolean</td><td>开关状态</td><td></td></tr>
+    <tr><td><code>startup_timing</code></td><td>object</td><td>启动各阶段耗时，键名以 <code>_ms</code> 结尾</td><td>诊断用，键集随版本变化</td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"system","subtype":"init","cwd":"/work/repo","session_id":"SESSION_ID",
+ "tools":["Task","Bash","Edit","Glob","Grep","Read","Write","WebFetch","WebSearch"],
+ "mcp_servers":[],"model":"claude-sonnet-5-5","permissionMode":"auto",
+ "slash_commands":["compact","init"],"terminal_slash_commands":["doctor"],
+ "apiKeySource":"none","claude_code_version":"2.1.288","output_style":"default",
+ "agents":["Explore","general-purpose","Plan"],"skills":[],"plugins":[],
+ "capabilities":["msg_lifecycle_v1"],"analytics_disabled":false,"product_feedback_disabled":false,
+ "uuid":"UUID","memory_paths":{"auto":"/tmp/claude/memory/","team":"/tmp/claude/memory/team/"},
+ "scratchpad_path":"/tmp/.../scratchpad","messaging_socket_path":"/tmp/.../cc-socks/1.sock",
+ "fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required",
+ "per_turn_effort_active":true,"view_mode":"default","startup_timing":{"phases":{"node_boot_ms":146}}}</code></pre>
+
+<h3>status、task_summary、post_turn_summary、thinking_tokens、api_retry</h3>
+<table>
+  <thead>
+    <tr><th>subtype</th><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>status</code></td><td><code>status</code></td><td>string</td><td>观测值只有 <code>requesting</code>，表示正在向模型发请求</td></tr>
+    <tr><td><code>task_summary</code></td><td><code>detail</code></td><td>string 或 null</td><td>当前动作的一句描述，例如 <code>Writing probe-r1.txt</code>；<code>result</code> 之后的那一次为 null</td></tr>
+    <tr><td rowspan="4"><code>post_turn_summary</code></td><td><code>summarizes_uuid</code></td><td>string</td><td>被总结的那个 <code>assistant</code> 事件的 <code>uuid</code></td></tr>
+    <tr><td><code>status_category</code></td><td>string</td><td>观测值 <code>completed</code>、<code>review_ready</code></td></tr>
+    <tr><td><code>status_detail</code></td><td>string</td><td>一句话结果</td></tr>
+    <tr><td><code>needs_action</code></td><td>string</td><td>需要用户做的事，观测值为空字符串</td></tr>
+    <tr><td rowspan="2"><code>thinking_tokens</code></td><td><code>estimated_tokens</code></td><td>integer</td><td>到目前为止 thinking 的估计 token 数</td></tr>
+    <tr><td><code>estimated_tokens_delta</code></td><td>integer</td><td>与上一次相比的增量</td></tr>
+    <tr><td rowspan="5"><code>api_retry</code></td><td><code>attempt</code></td><td>integer</td><td>第几次重试，从 1 开始</td></tr>
+    <tr><td><code>max_retries</code></td><td>integer</td><td>最多重试次数，观测值 300</td></tr>
+    <tr><td><code>retry_delay_ms</code></td><td>integer</td><td>重试前等待的毫秒数</td></tr>
+    <tr><td><code>error_status</code></td><td>integer</td><td>HTTP 状态码，例如 401</td></tr>
+    <tr><td><code>error</code></td><td>string</td><td>错误类别，例如 <code>authentication_failed</code></td></tr>
+  </tbody>
+</table>
+<p><code>api_retry</code> 没有 <code>uuid</code>。认证失败时观测到重试两次后放弃，流程见「错误、中断与退出码」。</p>
+
+<h3>permission_denied</h3>
+<p>一次工具调用需要确认而没有人能确认时出现，随后的 <code>user</code> 事件带 <code>is_error: true</code> 的 <code>tool_result</code>，同一段文字作为工具结果交给模型。</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>tool_name</code></td><td>string</td><td>被拒绝的工具名</td></tr>
+    <tr><td><code>tool_use_id</code></td><td>string</td><td>被拒绝的 <code>tool_use</code> 块的 id</td></tr>
+    <tr><td><code>decision_reason_type</code></td><td>string</td><td>拒绝原因的类别，观测值 <code>asyncAgent</code></td></tr>
+    <tr><td><code>decision_reason</code></td><td>string</td><td>一句话原因</td></tr>
+    <tr><td><code>message</code></td><td>string</td><td>交给模型的完整说明</td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":"toolu_01A",
+ "decision_reason_type":"asyncAgent",
+ "decision_reason":"no approval surface in this session; permission request denied automatically",
+ "message":"Permission for this tool use was denied. ...","uuid":"UUID","session_id":"SESSION_ID"}</code></pre>
+
+<h3>hook_started、hook_response</h3>
+<p>需要 <code>--include-hook-events</code>。每个 hook 命令先后产生两个事件，用 <code>hook_id</code> 关联。</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>出现在</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>hook_id</code></td><td>string</td><td>这次 hook 执行的 id</td><td>两者</td></tr>
+    <tr><td><code>hook_name</code></td><td>string</td><td><code>事件:匹配器</code>，例如 <code>PreToolUse:Bash</code></td><td>两者</td></tr>
+    <tr><td><code>hook_event</code></td><td>string</td><td>hook 事件名，例如 <code>PreToolUse</code>、<code>PostToolUse</code></td><td>两者</td></tr>
+    <tr><td><code>output</code>、<code>stdout</code>、<code>stderr</code></td><td>string</td><td>hook 命令的输出</td><td><code>hook_response</code></td></tr>
+    <tr><td><code>exit_code</code></td><td>integer</td><td>hook 命令的退出码</td><td><code>hook_response</code></td></tr>
+    <tr><td><code>outcome</code></td><td>string</td><td>观测值 <code>success</code></td><td><code>hook_response</code></td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"system","subtype":"hook_started","hook_id":"HOOK_ID","hook_name":"PreToolUse:Bash","hook_event":"PreToolUse","uuid":"UUID","session_id":"SESSION_ID"}
+{"type":"system","subtype":"hook_response","hook_id":"HOOK_ID","hook_name":"PreToolUse:Bash","hook_event":"PreToolUse","output":"","stdout":"","stderr":"","exit_code":0,"outcome":"success","uuid":"UUID","session_id":"SESSION_ID"}</code></pre>
+
+<h3>background_tasks_changed</h3>
+<p>后台任务列表变化时输出完整的当前列表。<code>tasks</code> 是数组，每项 <code>{task_id, task_type, description}</code>，<code>task_type</code> 观测值 <code>local_bash</code>、<code>local_workflow</code>。列表为空时 <code>tasks</code> 为 <code>[]</code>。</p>
+
+<h2>assistant 事件</h2>
+<p>模型的每个内容块一个事件。顶层字段：</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>message</code></td><td>object</td><td>Anthropic Messages API 的消息对象，见下表</td><td></td></tr>
+    <tr><td><code>parent_tool_use_id</code></td><td>string 或 null</td><td>见「每行的格式」</td><td></td></tr>
+    <tr><td><code>request_id</code></td><td>string</td><td>API 请求 id，<code>req_</code> 开头</td><td></td></tr>
+    <tr><td><code>timestamp</code></td><td>string</td><td>ISO 8601</td><td></td></tr>
+    <tr><td><code>wire_tool_inputs</code></td><td>object</td><td>键是 <code>tool_use</code> 块的 id，值是发送给工具的参数对象</td><td>只在含 <code>tool_use</code> 块的事件上；subagent 的事件上未观测到</td></tr>
+    <tr><td><code>thinking_duration_ms</code></td><td>integer</td><td>thinking 块的耗时</td><td>只在含 <code>thinking</code> 块的事件上</td></tr>
+    <tr><td><code>subagent_type</code>、<code>task_description</code></td><td>string</td><td>subagent 的类型与任务描述</td><td>只在 subagent 内部的事件上</td></tr>
+    <tr><td><code>error</code></td><td>string</td><td>API 错误类别，例如 <code>authentication_failed</code>、<code>model_not_found</code></td><td>只在 API 错误的合成消息上</td></tr>
+    <tr><td><code>is_api_error_message</code></td><td>boolean</td><td>为 true 时这条消息是 claude-code 合成的错误说明，<code>message.model</code> 为 <code>&lt;synthetic&gt;</code></td><td>同上</td></tr>
+  </tbody>
+</table>
+<h3>message 对象</h3>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>id</code></td><td>string</td><td>消息 id，<code>msg_</code> 开头。同一次模型调用的各个块相同</td><td>合成消息是一个 uuid</td></tr>
+    <tr><td><code>type</code></td><td>string</td><td><code>message</code></td><td></td></tr>
+    <tr><td><code>role</code></td><td>string</td><td><code>assistant</code></td><td></td></tr>
+    <tr><td><code>model</code></td><td>string</td><td>实际响应的模型 id；合成消息为 <code>&lt;synthetic&gt;</code></td><td></td></tr>
+    <tr><td><code>content</code></td><td>object[]</td><td>只含一个内容块，见下表</td><td></td></tr>
+    <tr><td><code>stop_reason</code></td><td>string 或 null</td><td>正常块为 null；合成消息为 <code>stop_sequence</code>。整次调用的 stop_reason 在 <code>stream_event</code> 的 <code>message_delta</code> 与 <code>result.stop_reason</code> 里</td><td></td></tr>
+    <tr><td><code>stop_sequence</code>、<code>stop_details</code>、<code>container</code>、<code>context_management</code>、<code>diagnostics</code></td><td>null</td><td>观测值都是 null</td><td></td></tr>
+    <tr><td><code>input_transformations</code></td><td>array</td><td>观测值为空数组</td><td>合成消息上没有</td></tr>
+    <tr><td><code>usage</code></td><td>object</td><td>这次模型调用的用量，见下表。同一次调用的各个块相同，累加时按 <code>message.id</code> 去重</td><td></td></tr>
+  </tbody>
+</table>
+<h3>usage 对象</h3>
+<p>出现在 <code>assistant.message.usage</code>、<code>stream_event</code> 的 <code>message_start</code> 与 <code>message_delta</code>、<code>result.usage</code>、Agent 工具结果的 <code>tool_use_result.usage</code>。各处字段集略有不同，备注里写出。</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>input_tokens</code></td><td>integer</td><td>未命中缓存的输入 token</td><td>命中缓存时很小，例如 2</td></tr>
+    <tr><td><code>output_tokens</code></td><td>integer</td><td>输出 token，含 thinking</td><td></td></tr>
+    <tr><td><code>cache_read_input_tokens</code></td><td>integer</td><td>从提示缓存读取的输入 token</td><td></td></tr>
+    <tr><td><code>cache_creation_input_tokens</code></td><td>integer</td><td>写入提示缓存的输入 token</td><td></td></tr>
+    <tr><td><code>cache_creation</code></td><td>object</td><td><code>{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}</code>，按缓存保留时长拆分</td><td></td></tr>
+    <tr><td><code>service_tier</code></td><td>string 或 null</td><td>观测值 <code>standard</code></td><td></td></tr>
+    <tr><td><code>inference_geo</code></td><td>string 或 null</td><td>观测值 <code>not_available</code>、空字符串</td><td></td></tr>
+    <tr><td><code>output_tokens_details</code></td><td>object 或 null</td><td><code>{thinking_tokens}</code></td><td><code>result</code> 与 <code>message_delta</code> 上有，<code>assistant</code> 上没有</td></tr>
+    <tr><td><code>server_tool_use</code></td><td>object</td><td><code>{web_search_requests, web_fetch_requests}</code></td><td><code>result</code> 与合成消息上有</td></tr>
+    <tr><td><code>iterations</code></td><td>object[] 或 null</td><td>每项是一次迭代的用量，含 <code>type: "message"</code> 与上面的 token 字段</td><td><code>result</code> 与 <code>message_delta</code> 上有</td></tr>
+    <tr><td><code>speed</code>、<code>fallback_credit</code></td><td>string 或 null、null</td><td>观测值 <code>standard</code>、null</td><td><code>result</code> 上有</td></tr>
+  </tbody>
+</table>
+<h3>内容块</h3>
+<table>
+  <thead>
+    <tr><th>type</th><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>text</code></td><td><code>text</code></td><td>string</td><td>一段文字</td></tr>
+    <tr><td rowspan="2"><code>thinking</code></td><td><code>thinking</code></td><td>string</td><td>thinking 正文。观测值都是空字符串，正文没有输出到流里</td></tr>
+    <tr><td><code>signature</code></td><td>string</td><td>签名，base64</td></tr>
+    <tr><td rowspan="4"><code>tool_use</code></td><td><code>id</code></td><td>string</td><td>工具调用 id，<code>toolu_</code> 开头</td></tr>
+    <tr><td><code>name</code></td><td>string</td><td>工具名，例如 <code>Bash</code>、<code>Read</code>、<code>Write</code>、<code>Edit</code>、<code>Agent</code>、<code>Skill</code>、<code>Workflow</code>、<code>StructuredOutput</code></td></tr>
+    <tr><td><code>input</code></td><td>object</td><td>工具参数。Bash：<code>command</code>、<code>description</code>、<code>timeout</code>、<code>run_in_background</code>；Read：<code>file_path</code>；Write：<code>file_path</code>、<code>content</code>；Edit：<code>file_path</code>、<code>old_string</code>、<code>new_string</code>、<code>replace_all</code>；Agent：<code>description</code>、<code>prompt</code>、<code>subagent_type</code>、<code>run_in_background</code>；Skill：<code>skill</code>；Workflow：<code>script</code>；StructuredOutput：由 <code>--json-schema</code> 决定</td></tr>
+    <tr><td><code>caller</code></td><td>object</td><td><code>{type: "direct"}</code></td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"assistant","message":{"model":"claude-sonnet-5-5","id":"msg_01A","type":"message","role":"assistant",
+ "content":[{"type":"tool_use","id":"toolu_01A","name":"Bash","input":{"command":"cargo test","description":"Run tests"},"caller":{"type":"direct"}}],
+ "container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,
+ "usage":{"input_tokens":2,"cache_creation_input_tokens":4950,"cache_read_input_tokens":28275,
+          "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":4950},
+          "output_tokens":16,"service_tier":"standard","inference_geo":"not_available"},
+ "input_transformations":[],"diagnostics":null,"context_management":null},
+ "parent_tool_use_id":null,"session_id":"SESSION_ID","uuid":"UUID","timestamp":"2026-10-03T15:29:17.247Z",
+ "request_id":"req_01A","wire_tool_inputs":{"toolu_01A":{"command":"cargo test","description":"Run tests"}}}</code></pre>
+<p>API 错误时的合成消息：</p>
+<pre><code class="language-json">{"type":"assistant","message":{"id":"UUID","model":"&lt;synthetic&gt;","role":"assistant","type":"message",
+ "stop_reason":"stop_sequence","stop_sequence":"","container":null,"stop_details":null,
+ "usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,
+          "cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},
+          "server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},
+          "service_tier":null,"inference_geo":null,"iterations":null,"speed":null,"fallback_credit":null,"output_tokens_details":null},
+ "content":[{"type":"text","text":"Authentication error · This may be a temporary network issue, please try again"}],
+ "context_management":null,"diagnostics":null},
+ "parent_tool_use_id":null,"session_id":"SESSION_ID","uuid":"UUID","timestamp":"2026-10-03T15:31:59.550Z",
+ "error":"authentication_failed","request_id":"req_01A","is_api_error_message":true}</code></pre>
+
+<h2>user 事件</h2>
+<p>工具结果与若干种注入的用户消息都用 <code>user</code> 事件表示。顶层字段：</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>message</code></td><td>object</td><td><code>{role: "user", content: [...]}</code>，<code>content</code> 只含一个块</td><td></td></tr>
+    <tr><td><code>parent_tool_use_id</code></td><td>string 或 null</td><td>见「每行的格式」</td><td></td></tr>
+    <tr><td><code>timestamp</code></td><td>string</td><td>ISO 8601</td><td></td></tr>
+    <tr><td><code>tool_use_result</code></td><td>object 或 string</td><td>工具的原始结果。失败时是以 <code>Error: </code> 开头的字符串；成功时的结构随工具而异，见下表</td><td>只在工具结果事件上</td></tr>
+    <tr><td><code>tool_result_meta</code></td><td>object[]</td><td>每项 <code>{id, non_execution_kind}</code>，标记没有实际执行的工具调用，观测值 <code>permission-rule</code></td><td>只在被拒绝的工具结果上</td></tr>
+    <tr><td><code>subagent_type</code>、<code>task_description</code></td><td>string</td><td>subagent 的类型与任务描述</td><td>只在 subagent 内部的事件上</td></tr>
+    <tr><td><code>isSynthetic</code></td><td>boolean</td><td>为 true 时这条消息由 claude-code 注入，例如 <code>Skill</code> 工具加载的技能说明</td><td></td></tr>
+  </tbody>
+</table>
+<h3>tool_result 块</h3>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>type</code></td><td>string</td><td><code>tool_result</code></td></tr>
+    <tr><td><code>tool_use_id</code></td><td>string</td><td>对应的 <code>tool_use</code> 块的 id</td></tr>
+    <tr><td><code>content</code></td><td>string 或 object[]</td><td>交给模型的结果。多数工具是字符串；Agent 工具是 <code>[{type: "text", text}]</code> 数组</td></tr>
+    <tr><td><code>is_error</code></td><td>boolean</td><td>工具失败时为 true。成功时多数没有这个字段，少数为 false</td></tr>
+  </tbody>
+</table>
+<p>Bash 命令退出码非 0 时 <code>is_error</code> 为 true，<code>content</code> 以 <code>Exit code N</code> 开头。被 claude-code 自身拦截的命令（例如本环境拦截单独的 <code>sleep</code>）的 <code>content</code> 包在 <code>&lt;tool_use_error&gt;</code> 标签里。</p>
+<h3>tool_use_result 按工具</h3>
+<table>
+  <thead>
+    <tr><th>工具</th><th>字段</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Bash</td><td><code>stdout</code>、<code>stderr</code>（string）、<code>interrupted</code>、<code>isImage</code>、<code>noOutputExpected</code>（boolean）；后台运行时另有 <code>backgroundTaskId</code></td></tr>
+    <tr><td>Read</td><td><code>type: "text"</code>，<code>file: {filePath, content, numLines, startLine, totalLines}</code></td></tr>
+    <tr><td>Write</td><td><code>type: "create"</code>，<code>filePath</code>、<code>content</code>、<code>structuredPatch</code>（array）、<code>originalFile</code>（null）、<code>userModified</code>（boolean）</td></tr>
+    <tr><td>Edit</td><td><code>filePath</code>、<code>oldString</code>、<code>newString</code>、<code>originalFile</code>（string）、<code>replaceAll</code>、<code>userModified</code>、<code>structuredPatch</code>：每项 <code>{oldStart, oldLines, newStart, newLines, lines}</code>，<code>lines</code> 是统一 diff 的行</td></tr>
+    <tr><td>Agent</td><td>见「subagent 与后台任务」</td></tr>
+    <tr><td>Skill</td><td><code>commandName</code>（技能名）、<code>content</code>（string，技能说明全文）</td></tr>
+    <tr><td>Workflow</td><td><code>status</code>（观测值 <code>async_launched</code>）、<code>taskId</code>、<code>taskType</code>（<code>local_workflow</code>）、<code>workflowName</code>、<code>runId</code>、<code>summary</code>、<code>transcriptDir</code>、<code>scriptPath</code></td></tr>
+    <tr><td>StructuredOutput</td><td>字符串 <code>Structured output provided successfully</code></td></tr>
+    <tr><td>失败的调用</td><td>字符串，<code>Error: </code> 加上 <code>content</code> 的内容</td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01A","type":"tool_result","content":"1\thello probe"}]},
+ "parent_tool_use_id":null,"session_id":"SESSION_ID","uuid":"UUID","timestamp":"2026-10-03T15:29:18.596Z",
+ "tool_use_result":{"type":"text","file":{"filePath":"/work/repo/probe-r1.txt","content":"hello probe","numLines":1,"startLine":1,"totalLines":1}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Exit code 1\n/bin/bash: line 1: /root/x: Read-only file system","is_error":true,"tool_use_id":"toolu_01B"}]},
+ "parent_tool_use_id":null,"session_id":"SESSION_ID","uuid":"UUID","timestamp":"2026-10-03T15:33:14.034Z",
+ "tool_use_result":"Error: Exit code 1\n/bin/bash: line 1: /root/x: Read-only file system"}</code></pre>
+<h3>文字类的 user 消息</h3>
+<p><code>message.content[0].type</code> 为 <code>text</code> 的 <code>user</code> 事件有三种：subagent 收到的提示词（带 <code>parent_tool_use_id</code>，文字等于 Agent 调用的 <code>prompt</code>）；SIGINT 中断时的 <code>[Request interrupted by user]</code>；<code>isSynthetic: true</code> 的注入内容。这些事件没有 <code>tool_use_result</code>。</p>
+
+<h2>stream_event 事件</h2>
+<p>需要 <code>--include-partial-messages</code>，或把环境变量 <code>CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES</code> 设为 <code>true</code>。每个事件包一个 Anthropic Messages API 的流式事件。顶层字段：</p>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>event</code></td><td>object</td><td>API 的流式事件，<code>event.type</code> 见下表</td><td></td></tr>
+    <tr><td><code>parent_tool_use_id</code></td><td>string 或 null</td><td>观测值都是 null，subagent 的模型调用没有产生 <code>stream_event</code></td><td></td></tr>
+    <tr><td><code>ttft_ms</code></td><td>integer</td><td>首个 token 的延迟</td><td>只在 <code>message_start</code> 上</td></tr>
+    <tr><td><code>thinking_display</code></td><td>string</td><td>观测值 <code>updates</code></td><td><code>message_start</code> 与 thinking 块的事件上</td></tr>
+  </tbody>
+</table>
+<table>
+  <thead>
+    <tr><th>event.type</th><th>event 的字段</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>message_start</code></td><td><code>message</code></td><td>一次模型调用开始。<code>message</code> 与 <code>assistant.message</code> 同构，<code>content</code> 为空数组，<code>usage</code> 里已有输入侧的 token 数</td></tr>
+    <tr><td><code>content_block_start</code></td><td><code>index</code>、<code>content_block</code></td><td>第 <code>index</code> 个内容块开始。<code>content_block</code> 是空的块：<code>{type: "text", text: ""}</code>、<code>{type: "thinking", thinking: "", signature: ""}</code> 或 <code>{type: "tool_use", id, name, input: {}, caller}</code></td></tr>
+    <tr><td><code>content_block_delta</code></td><td><code>index</code>、<code>delta</code></td><td>块的增量，<code>delta.type</code> 见下表</td></tr>
+    <tr><td><code>content_block_stop</code></td><td><code>index</code></td><td>块结束。完整的块在此之前已作为 <code>assistant</code> 事件输出</td></tr>
+    <tr><td><code>message_delta</code></td><td><code>delta</code>、<code>usage</code>、<code>context_management</code></td><td>调用结束前的汇总。<code>delta</code> 含 <code>stop_reason</code>（<code>end_turn</code> 或 <code>tool_use</code>）、<code>stop_sequence</code>、<code>stop_details</code>、<code>container</code>；<code>usage</code> 是这次调用的最终用量，含 <code>output_tokens_details</code> 与 <code>iterations</code>；<code>context_management</code> 为 <code>{applied_edits: []}</code></td></tr>
+    <tr><td><code>message_stop</code></td><td>无</td><td>调用结束</td></tr>
+  </tbody>
+</table>
+<table>
+  <thead>
+    <tr><th>delta.type</th><th>字段</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>text_delta</code></td><td><code>text</code></td><td>文字增量</td></tr>
+    <tr><td><code>thinking_delta</code></td><td><code>thinking</code>、<code>estimated_tokens</code></td><td>thinking 增量。观测到 <code>thinking</code> 为空字符串，<code>estimated_tokens</code> 为整数或 null</td></tr>
+    <tr><td><code>signature_delta</code></td><td><code>signature</code></td><td>thinking 块的签名</td></tr>
+    <tr><td><code>input_json_delta</code></td><td><code>partial_json</code></td><td>工具参数 JSON 的片段，拼接后是 <code>tool_use.input</code>。第一个片段可能是空字符串</td></tr>
+  </tbody>
+</table>
+<p>解析器可以只用 <code>assistant</code> 事件得到完整的块，用 <code>stream_event</code> 做实时显示。中断时流可能停在任意一个 <code>content_block_delta</code> 之后，没有对应的 <code>assistant</code> 事件。</p>
+<pre><code class="language-json">{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"msg_01A","type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":2,"cache_creation_input_tokens":4950,"cache_read_input_tokens":28275,"output_tokens":16,"service_tier":"standard"}}},"session_id":"SESSION_ID","parent_tool_use_id":null,"uuid":"UUID","ttft_ms":521,"thinking_display":"updates"}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01A","name":"Bash","input":{},"caller":{"type":"direct"}}},"session_id":"SESSION_ID","parent_tool_use_id":null,"uuid":"UUID"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\": \"cargo"}},"session_id":"SESSION_ID","parent_tool_use_id":null,"uuid":"UUID"}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0},"session_id":"SESSION_ID","parent_tool_use_id":null,"uuid":"UUID"}
+{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":2,"cache_creation_input_tokens":4950,"cache_read_input_tokens":28275,"output_tokens":108,"output_tokens_details":{"thinking_tokens":0},"iterations":[{"input_tokens":2,"output_tokens":108,"cache_read_input_tokens":28275,"cache_creation_input_tokens":4950,"type":"message"}]},"context_management":{"applied_edits":[]}},"session_id":"SESSION_ID","parent_tool_use_id":null,"uuid":"UUID"}
+{"type":"stream_event","event":{"type":"message_stop"},"session_id":"SESSION_ID","parent_tool_use_id":null,"uuid":"UUID"}</code></pre>
+
+<h2>result 事件</h2>
+<p>一轮对话结束时输出。<code>subtype</code> 与 <code>is_error</code> 合起来判断成败：</p>
+<table>
+  <thead>
+    <tr><th>subtype</th><th>is_error</th><th>terminal_reason</th><th>情形</th><th>退出码</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>success</code></td><td>false</td><td><code>completed</code></td><td>正常完成。工具失败、权限被拒都不改变这个状态</td><td>0</td></tr>
+    <tr><td><code>success</code></td><td>true</td><td><code>api_error</code></td><td>API 返回错误（认证失败、模型不存在），<code>api_error_status</code> 是 HTTP 状态码，<code>result</code> 是合成的错误文字</td><td>1</td></tr>
+    <tr><td><code>error_during_execution</code></td><td>true</td><td><code>aborted_streaming</code></td><td>SIGINT 中断。<code>errors</code> 含诊断字符串，<code>stop_reason</code> 为 null</td><td>0</td></tr>
+    <tr><td><code>error_max_turns</code></td><td>true</td><td><code>max_turns</code></td><td>超过 <code>--max-turns</code>。<code>errors</code> 为 <code>["Reached maximum number of turns (N)"]</code>，没有 <code>result</code> 字段</td><td>1</td></tr>
+    <tr><td><code>error_max_budget_usd</code></td><td>true</td><td><code>budget_exhausted</code></td><td>超过 <code>--max-budget-usd</code>。<code>errors</code> 为 <code>["Reached maximum budget ($N)"]</code>，没有 <code>result</code> 字段</td><td>1</td></tr>
+  </tbody>
+</table>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th><th>备注</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>subtype</code></td><td>string</td><td>见上表</td><td></td></tr>
+    <tr><td><code>is_error</code></td><td>boolean</td><td>这一轮是否失败</td><td></td></tr>
+    <tr><td><code>result</code></td><td>string</td><td>主 agent 最后一段文字；<code>--json-schema</code> 时是结构化结果的 JSON 文本</td><td>限额失败时没有</td></tr>
+    <tr><td><code>structured_output</code></td><td>object</td><td>按 <code>--json-schema</code> 校验过的结果对象</td><td>只在给了 <code>--json-schema</code> 时</td></tr>
+    <tr><td><code>errors</code></td><td>string[]</td><td>错误说明</td><td>只在失败时</td></tr>
+    <tr><td><code>terminal_reason</code></td><td>string</td><td>结束原因，见上表</td><td></td></tr>
+    <tr><td><code>api_error_status</code></td><td>integer 或 null</td><td>API 错误的 HTTP 状态码</td><td>限额失败与中断时没有这个字段</td></tr>
+    <tr><td><code>stop_reason</code></td><td>string 或 null</td><td>最后一次模型调用的 stop_reason：<code>end_turn</code>、<code>tool_use</code>、<code>stop_sequence</code>；中断时为 null</td><td></td></tr>
+    <tr><td><code>num_turns</code></td><td>integer</td><td>这一轮里模型调用的次数（含失败的）</td><td></td></tr>
+    <tr><td><code>duration_ms</code>、<code>duration_api_ms</code></td><td>integer</td><td>总耗时与等待 API 的耗时</td><td></td></tr>
+    <tr><td><code>total_cost_usd</code></td><td>number</td><td>按 <code>modelUsage</code> 各项 <code>costUSD</code> 求和的费用</td><td></td></tr>
+    <tr><td><code>usage</code></td><td>object</td><td>主 agent 模型调用的用量合计，不含 subagent。见「usage 对象」</td><td>中断与限额失败时可能全为 0</td></tr>
+    <tr><td><code>modelUsage</code></td><td>object</td><td>键是模型 id，值见下表。包含 subagent 的用量</td><td></td></tr>
+    <tr><td><code>permission_denials</code></td><td>object[]</td><td>每项 <code>{tool_name, tool_use_id, tool_input}</code></td><td>无拒绝时为 <code>[]</code></td></tr>
+    <tr><td><code>subagent_stats</code></td><td>object</td><td>见下表</td><td></td></tr>
+    <tr><td><code>result_index</code></td><td>integer</td><td>这次运行里第几个 <code>result</code>，从 0 开始</td><td></td></tr>
+    <tr><td><code>origin</code></td><td>object</td><td>触发这一轮的来源，观测值 <code>{kind: "task-notification", producer: "session-task"}</code></td><td>只在后台任务触发的轮次上</td></tr>
+    <tr><td><code>queued_turn_count</code></td><td>integer</td><td>排队中的轮次数，观测值 0</td><td></td></tr>
+    <tr><td><code>fast_mode_state</code>、<code>fast_mode_disabled_reason</code></td><td>string</td><td>同 <code>init</code></td><td></td></tr>
+    <tr><td><code>ttft_ms</code>、<code>ttft_stream_ms</code>、<code>first_content_frame_ms</code>、<code>time_to_request_ms</code>、<code>time_to_request_phases_ms</code>、<code>time_to_request_cpu_ms</code>、<code>time_to_request_loop_lag_ms</code>、<code>time_to_request_major_faults</code>、<code>time_to_request_from_spawn_ms</code>、<code>time_origin_ms</code>、<code>input_attachments_detail</code>、<code>turn_start_resume_kind</code>、<code>process_turn_index</code>、<code>warm_spare_claimed</code>、<code>flag_fetch_kick</code></td><td>各异</td><td>启动与首个 token 的计时诊断</td><td>只在正常完成的 <code>result</code> 上；键集随版本变化，解析器不应依赖</td></tr>
+  </tbody>
+</table>
+<h3>modelUsage 的值</h3>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>inputTokens</code>、<code>outputTokens</code>、<code>cacheReadInputTokens</code>、<code>cacheCreationInputTokens</code></td><td>integer</td><td>这个模型的 token 合计</td></tr>
+    <tr><td><code>thinkingTokens</code></td><td>integer</td><td>thinking token</td></tr>
+    <tr><td><code>webSearchRequests</code></td><td>integer</td><td>网页搜索次数</td></tr>
+    <tr><td><code>costUSD</code></td><td>number</td><td>费用</td></tr>
+    <tr><td><code>costBasis</code></td><td>string</td><td>观测值 <code>list</code>，按定价表计费</td></tr>
+    <tr><td><code>provider</code></td><td>string</td><td>观测值 <code>firstParty</code></td></tr>
+    <tr><td><code>canonicalModel</code></td><td>string</td><td>规范模型名，例如 <code>claude-haiku-4-5</code></td></tr>
+    <tr><td><code>contextWindow</code>、<code>maxOutputTokens</code></td><td>integer</td><td>模型的上下文窗口与最大输出</td></tr>
+  </tbody>
+</table>
+<p>每次运行的 <code>modelUsage</code> 里都有一个 <code>claude-haiku-4-5-*</code> 项，约一千个输入 token，流里没有对应的 <code>assistant</code> 事件。这是 claude-code 内部的辅助调用（例如 auto 权限模式的分类器），统计费用时要计入，统计主模型用量时要排除。</p>
+<h3>subagent_stats</h3>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>spawned</code>、<code>completed</code>、<code>failed</code></td><td>integer</td><td>启动、完成、失败的 subagent 数</td></tr>
+    <tr><td><code>requested</code></td><td>object</td><td><code>{background, foreground, unset}</code>，按请求的运行方式计数</td></tr>
+    <tr><td><code>started_in_background</code>、<code>spawned_by_subagents</code>、<code>max_depth</code></td><td>integer</td><td>后台启动数、由 subagent 启动的数、最大嵌套深度</td></tr>
+    <tr><td><code>killed</code></td><td>object</td><td><code>{parent, user, system}</code></td></tr>
+    <tr><td><code>refused</code></td><td>object</td><td><code>{depth_limit, concurrency_limit, budget}</code></td></tr>
+    <tr><td><code>by_type</code></td><td>object</td><td>键是 subagent 类型，值是数量，例如 <code>{"general-purpose": 2}</code></td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"result","subtype":"success","is_error":false,"result":"The file `probe-r1.txt` contains: `hello probe`",
+ "stop_reason":"end_turn","terminal_reason":"completed","api_error_status":null,"num_turns":3,
+ "duration_ms":5256,"duration_api_ms":3915,"total_cost_usd":0.0436916,
+ "usage":{"input_tokens":6,"cache_creation_input_tokens":5300,"cache_read_input_tokens":94923,"output_tokens":248,
+          "output_tokens_details":{"thinking_tokens":32},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},
+          "service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":5300,"ephemeral_5m_input_tokens":0},
+          "inference_geo":"not_available","iterations":[{"input_tokens":2,"output_tokens":23,"cache_read_input_tokens":33423,"cache_creation_input_tokens":152,"type":"message"}],
+          "speed":"standard","fallback_credit":null},
+ "modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":925,"outputTokens":18,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.001015,"contextWindow":200000,"maxOutputTokens":32000,"thinkingTokens":0,"canonicalModel":"claude-haiku-4-5","provider":"firstParty","costBasis":"list"},
+               "claude-sonnet-5-5":{"inputTokens":6,"outputTokens":248,"cacheReadInputTokens":94923,"cacheCreationInputTokens":5300,"webSearchRequests":0,"costUSD":0.0426766,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":32,"canonicalModel":"claude-sonnet-5-5","provider":"firstParty","costBasis":"list"}},
+ "permission_denials":[],
+ "subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},
+ "fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required",
+ "session_id":"SESSION_ID","uuid":"UUID","result_index":0,"queued_turn_count":0,"ttft_ms":2249}</code></pre>
+
+<h2>subagent 与后台任务</h2>
+<p>主 agent 用名为 <code>Agent</code> 的工具启动 subagent（<code>system/init</code> 的 <code>tools</code> 列表里这个工具叫 <code>Task</code>，<code>--tools</code> 与 <code>--disallowedTools</code> 也用 <code>Task</code> 这个名字）。一次 subagent 的完整事件序列：</p>
+<div class="term">assistant                       <span class="dim">tool_use Agent，id 为 toolu_P，input: {description, prompt, subagent_type, run_in_background}</span>
+system/task_started             <span class="dim">task_id, tool_use_id: toolu_P</span>
+user                            <span class="dim">parent_tool_use_id: toolu_P，content: text（subagent 收到的 prompt）</span>
+system/task_progress            <span class="dim">usage: {total_tokens, tool_uses, duration_ms}</span>
+assistant                       <span class="dim">parent_tool_use_id: toolu_P，subagent 的工具调用</span>
+user                            <span class="dim">parent_tool_use_id: toolu_P，subagent 的工具结果</span>
+assistant                       <span class="dim">parent_tool_use_id: toolu_P，tool_use SubagentHandback（subagent 交回报告）</span>
+user                            <span class="dim">parent_tool_use_id: toolu_P，SubagentHandback 的结果</span>
+system/task_updated             <span class="dim">patch: {status: "completed", end_time}</span>
+system/task_notification        <span class="dim">status: "completed"，usage</span>
+user                            <span class="dim">parent_tool_use_id: null，content[0].tool_use_id: toolu_P，主 agent 收到的 Agent 工具结果</span></div>
+<p>要点：</p>
+<ul>
+  <li>subagent 内部的 <code>assistant</code> 与 <code>user</code> 事件都带 <code>parent_tool_use_id</code>，值等于 Agent 调用的 <code>tool_use</code> id；还带 <code>subagent_type</code> 与 <code>task_description</code>。主 agent 的事件 <code>parent_tool_use_id</code> 为 null。</li>
+  <li>多个 subagent 并行时，它们的事件与主 agent 的事件交错出现，用 <code>parent_tool_use_id</code> 归属。subagent 再启动 subagent 时嵌套规则相同，<code>task_started.spawn_depth</code> 给出深度。观测到的最大深度为 1。</li>
+  <li>subagent 内部的 <code>assistant.message.usage</code> 是它自己每次模型调用的用量；<code>result.usage</code> 不包含它们，<code>result.modelUsage</code> 包含。</li>
+  <li>subagent 的模型调用没有产生 <code>stream_event</code>，也没有 <code>system/status</code>。</li>
+  <li>subagent 最后通过 <code>SubagentHandback</code> 工具交回报告，报告正文在主 agent 收到的工具结果的 <code>tool_use_result.handbackReport.text</code> 里。</li>
+</ul>
+<h3>task_* 事件的字段</h3>
+<table>
+  <thead>
+    <tr><th>subtype</th><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td rowspan="9"><code>task_started</code></td><td><code>task_id</code></td><td>string</td><td>任务 id，subagent 的 id 也是它的 <code>agentId</code></td></tr>
+    <tr><td><code>tool_use_id</code></td><td>string</td><td>启动它的工具调用 id</td></tr>
+    <tr><td><code>task_type</code></td><td>string</td><td><code>local_agent</code>（subagent）、<code>local_workflow</code>（Workflow 工具）、<code>local_bash</code>（后台 Bash 命令）</td></tr>
+    <tr><td><code>description</code></td><td>string</td><td>任务描述</td></tr>
+    <tr><td><code>prompt</code></td><td>string</td><td>subagent 的提示词或 Workflow 脚本；后台 Bash 没有</td></tr>
+    <tr><td><code>subagent_type</code></td><td>string</td><td>subagent 类型；只有 <code>local_agent</code> 有</td></tr>
+    <tr><td><code>is_backgrounded</code></td><td>boolean</td><td>是否后台运行；<code>local_workflow</code> 没有</td></tr>
+    <tr><td><code>spawn_depth</code></td><td>integer</td><td>嵌套深度，直接由主 agent 启动时为 1；只有 <code>local_agent</code> 有</td></tr>
+    <tr><td><code>workflow_name</code></td><td>string</td><td>只有 <code>local_workflow</code> 有</td></tr>
+    <tr><td rowspan="7"><code>task_progress</code></td><td><code>task_id</code>、<code>tool_use_id</code></td><td>string</td><td>同上</td></tr>
+    <tr><td><code>description</code></td><td>string</td><td>当前进度的一句描述</td></tr>
+    <tr><td><code>subagent_type</code></td><td>string</td><td>只有 <code>local_agent</code> 有</td></tr>
+    <tr><td><code>usage</code></td><td>object</td><td><code>{total_tokens, tool_uses, duration_ms}</code>，到目前为止的累计</td></tr>
+    <tr><td><code>last_tool_name</code></td><td>string</td><td>最近调用的工具名</td></tr>
+    <tr><td><code>summary</code></td><td>string</td><td>只有 <code>local_workflow</code> 有</td></tr>
+    <tr><td><code>workflow_progress</code></td><td>object[]</td><td>只有 <code>local_workflow</code> 有。每项 <code>type</code> 为 <code>workflow_phase</code>（<code>index</code>、<code>title</code>）或 <code>workflow_agent</code>（<code>index</code>、<code>label</code>、<code>phaseIndex</code>、<code>phaseTitle</code>、<code>agentId</code>、<code>model</code>、<code>state</code>、<code>attempt</code>、<code>queuedAt</code>、<code>startedAt</code>、<code>lastProgressAt</code>、<code>durationMs</code>、<code>tokens</code>、<code>toolCalls</code>、<code>lastToolName</code>、<code>lastToolSummary</code>、<code>promptPreview</code>、<code>promptFramed</code>、<code>resultPreview</code>）。<code>state</code> 观测值 <code>start</code>、<code>progress</code>、<code>done</code></td></tr>
+    <tr><td rowspan="2"><code>task_updated</code></td><td><code>task_id</code></td><td>string</td><td></td></tr>
+    <tr><td><code>patch</code></td><td>object</td><td><code>{status, end_time}</code>，<code>status</code> 观测值 <code>completed</code>、<code>killed</code>，<code>end_time</code> 是毫秒时间戳</td></tr>
+    <tr><td rowspan="5"><code>task_notification</code></td><td><code>task_id</code>、<code>tool_use_id</code></td><td>string</td><td>同上</td></tr>
+    <tr><td><code>status</code></td><td>string</td><td>观测值 <code>completed</code>、<code>stopped</code></td></tr>
+    <tr><td><code>summary</code></td><td>string</td><td>一句话结果</td></tr>
+    <tr><td><code>output_file</code></td><td>string</td><td>任务输出文件的路径，可能为空字符串</td></tr>
+    <tr><td><code>usage</code></td><td>object</td><td><code>{total_tokens, tool_uses, duration_ms}</code>，这个任务的最终用量。<code>total_tokens</code> 是该 subagent 所有模型调用的 token 总和；后台 Bash 没有这个字段</td></tr>
+  </tbody>
+</table>
+<pre><code class="language-json">{"type":"system","subtype":"task_started","task_id":"AGENT_ID","tool_use_id":"toolu_01P","description":"Create sub1.txt","subagent_type":"general-purpose","is_backgrounded":false,"spawn_depth":1,"task_type":"local_agent","prompt":"Create a file named sub1.txt ...","uuid":"UUID","session_id":"SESSION_ID"}
+{"type":"system","subtype":"task_progress","task_id":"AGENT_ID","tool_use_id":"toolu_01P","description":"Writing sub1.txt","subagent_type":"general-purpose","usage":{"total_tokens":24591,"tool_uses":1,"duration_ms":1262},"last_tool_name":"Write","uuid":"UUID","session_id":"SESSION_ID"}
+{"type":"system","subtype":"task_updated","task_id":"AGENT_ID","patch":{"status":"completed","end_time":1791041391076},"uuid":"UUID","session_id":"SESSION_ID"}
+{"type":"system","subtype":"task_notification","task_id":"AGENT_ID","tool_use_id":"toolu_01P","status":"completed","output_file":"/tmp/.../tasks/AGENT_ID.output","summary":"This agent's report was delivered to you as a message from \"AGENT_ID\" ...","usage":{"total_tokens":24865,"tool_uses":2,"duration_ms":4473},"uuid":"UUID","session_id":"SESSION_ID"}</code></pre>
+<h3>Agent 工具结果的 tool_use_result</h3>
+<table>
+  <thead>
+    <tr><th>字段</th><th>类型</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>status</code></td><td>string</td><td>观测值 <code>completed</code></td></tr>
+    <tr><td><code>agentId</code>、<code>agentType</code></td><td>string</td><td>subagent 的 id（等于 <code>task_id</code>）与类型</td></tr>
+    <tr><td><code>prompt</code></td><td>string</td><td>subagent 收到的提示词</td></tr>
+    <tr><td><code>handback</code></td><td>string</td><td>报告交回方式，观测值 <code>send</code></td></tr>
+    <tr><td><code>handbackReport</code></td><td>object</td><td><code>{text}</code>，subagent 的报告正文</td></tr>
+    <tr><td><code>content</code></td><td>object[]</td><td>交给主 agent 的文字块</td></tr>
+    <tr><td><code>resolvedModel</code></td><td>string</td><td>subagent 使用的模型</td></tr>
+    <tr><td><code>totalDurationMs</code>、<code>totalTokens</code>、<code>totalToolUseCount</code></td><td>integer</td><td>耗时、token 总数、工具调用数</td></tr>
+    <tr><td><code>usage</code></td><td>object</td><td>subagent 最后一次模型调用的用量，结构同「usage 对象」。它只是最后一次调用，累计量看 <code>totalTokens</code></td></tr>
+    <tr><td><code>toolStats</code></td><td>object</td><td><code>{readCount, searchCount, bashCount, editFileCount, linesAdded, linesRemoved, otherToolCount}</code></td></tr>
+    <tr><td><code>harnessNoteCount</code>、<code>harnessTailCount</code>、<code>harnessSectionHash</code></td><td>integer、integer、string</td><td>内部字段</td></tr>
+  </tbody>
+</table>
+<h3>后台 Bash 命令与 Workflow</h3>
+<p>Bash 工具带 <code>run_in_background: true</code> 时，工具结果立即返回，<code>tool_use_result.backgroundTaskId</code> 给出任务 id，随后出现 <code>background_tasks_changed</code>、<code>task_started</code>（<code>task_type: local_bash</code>，<code>is_backgrounded: true</code>）。命令结束后出现 <code>task_notification</code>（没有 <code>usage</code>）、<code>background_tasks_changed</code>、<code>task_updated</code>，然后 claude-code 开始新一轮：再输出 <code>system/init</code>，模型处理通知，输出新的 <code>result</code>。</p>
+<p>Workflow 工具（<code>task_type: local_workflow</code>）按脚本启动多个 subagent。它的内部 agent 不产生带 <code>parent_tool_use_id</code> 的 <code>assistant</code> 与 <code>user</code> 事件，进度只在 <code>task_progress.workflow_progress</code> 里。</p>
+
+<h2>错误、中断与退出码</h2>
+<table>
+  <thead>
+    <tr><th>情形</th><th>退出码</th><th>流里的表现</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>正常完成</td><td>0</td><td>最后一个 <code>result</code> 的 <code>is_error</code> 为 false</td></tr>
+    <tr><td>工具失败（命令退出码非 0、文件不存在）</td><td>0</td><td><code>user</code> 事件的 <code>tool_result.is_error</code> 为 true，模型继续，<code>result</code> 正常</td></tr>
+    <tr><td>权限被拒</td><td>0</td><td><code>system/permission_denied</code>，<code>result.permission_denials</code> 非空，<code>is_error</code> 为 false</td></tr>
+    <tr><td>认证失败（401）</td><td>1</td><td><code>system/api_retry</code> 两次，一个合成的 <code>assistant</code>（<code>error: authentication_failed</code>），<code>result</code> 的 <code>is_error</code> 为 true、<code>api_error_status</code> 为 401、<code>terminal_reason</code> 为 <code>api_error</code>。观测耗时约 120 秒</td></tr>
+    <tr><td>模型不存在（404）</td><td>1</td><td>标准错误一行 <code>[claude-code:unrecognized_model] {...}</code>；流里是合成的 <code>assistant</code>（<code>error: model_not_found</code>）与 <code>api_error_status</code> 为 404 的 <code>result</code>，没有 <code>api_retry</code></td></tr>
+    <tr><td>超过 <code>--max-turns</code></td><td>1</td><td><code>result.subtype</code> 为 <code>error_max_turns</code></td></tr>
+    <tr><td>超过 <code>--max-budget-usd</code></td><td>1</td><td><code>result.subtype</code> 为 <code>error_max_budget_usd</code></td></tr>
+    <tr><td>未知命令行选项</td><td>1</td><td>标准输出为空，标准错误 <code>error: unknown option '--xxx'</code></td></tr>
+    <tr><td>缺少 <code>--verbose</code></td><td>1</td><td>标准输出为空，标准错误 <code>Error: When using --print, --output-format=stream-json requires --verbose</code></td></tr>
+    <tr><td>SIGINT</td><td>0</td><td>流停在当前位置，然后输出一个 <code>user</code> 事件（<code>[Request interrupted by user]</code>）与 <code>subtype</code> 为 <code>error_during_execution</code>、<code>terminal_reason</code> 为 <code>aborted_streaming</code> 的 <code>result</code>。正在流式输出的内容块没有 <code>assistant</code> 事件。如果中断时有后台任务，另外出现 <code>status: stopped</code> 的 <code>task_notification</code> 与 <code>status: killed</code> 的 <code>task_updated</code></td></tr>
+    <tr><td>SIGTERM</td><td>143</td><td>流停在当前位置，没有任何收尾事件，也没有 <code>result</code>。标准错误为空</td></tr>
+  </tbody>
+</table>
+<p>判定规则：退出码非 0 一定失败；退出码为 0 时看最后一个 <code>result</code> 的 <code>is_error</code>；没有 <code>result</code> 时按被终止处理。启动前失败（选项错误、缺少 <code>--verbose</code>）的标准输出为空，认证与模型错误则会走完 <code>init</code> 到 <code>result</code> 的完整流程。</p>
+<pre><code class="language-json">{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"parent_tool_use_id":null,"session_id":"SESSION_ID","uuid":"UUID","timestamp":"2026-10-03T15:32:10.443Z"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming","stop_reason":null,"num_turns":2,
+ "errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+ "duration_ms":9169,"duration_api_ms":648,"total_cost_usd":0.001024,
+ "usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"iterations":[]},
+ "modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":954,"outputTokens":14,"costUSD":0.001024}},
+ "permission_denials":[],"session_id":"SESSION_ID","uuid":"UUID","result_index":0,"queued_turn_count":0}</code></pre>
+
+<h2>版本与环境说明</h2>
+<ul>
+  <li>样本来自 claude-code 2.1.288 与 2.1.289，两者的事件类型与字段集没有发现差异。</li>
+  <li><code>active_goal</code>、<code>autocompact_state</code>、<code>rate_limit_event</code> 三种事件只在 Claude 云端容器里观测到。<code>autocompact_state.value.source</code> 为 <code>env</code>，说明它来自环境变量配置；<code>rate_limit_event.rate_limit_info</code> 含 <code>status</code>、<code>resetsAt</code>、<code>rateLimitType</code>、<code>overageStatus</code>、<code>overageDisabledReason</code>、<code>isUsingOverage</code>、<code>unifiedWindows.{five_hour, seven_day}.{utilization, resetsAt}</code>，描述订阅的用量窗口；<code>active_goal.value</code> 观测值为 null。其他环境里是否出现未验证，解析器应把它们当作可选事件。</li>
+  <li><code>system/init</code> 的 <code>tools</code>、<code>skills</code>、<code>slash_commands</code>、<code>plugins</code> 列表和 <code>startup_timing</code>、<code>result</code> 的计时字段随环境与版本变化，本文只列出键名，不保证完整。</li>
+  <li>thinking 块的正文在样本里都是空字符串，只有签名与 token 估计；这可能是账号或模型的设置，解析器不应假设 thinking 正文可读。</li>
+  <li>未实测的选项：<code>--forward-subagent-text</code>、<code>--input-format stream-json</code>、<code>--replay-user-messages</code>、<code>--fallback-model</code>、MCP 工具（<code>mcp__</code> 前缀的工具名）与上下文压缩（compact）过程中的事件。</li>
+</ul>
+</main>
+</body>
+</html>
