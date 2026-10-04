@@ -44,7 +44,7 @@
   <li>codex 用它自己的沙箱，不做 <code>bwrap</code> 检查。codex 沙箱启动失败时怎么发现，待实测，见<a href="pending.html">待定</a>。</li>
 </ul>
 <p>启动前发现的沙箱问题按 <code>rejected</code> 处理（退出码 2）；运行中才发现的，例如 pi 的包裹命令启动失败，按 <code>failed</code> 处理（退出码 1）。<code>--dry-run</code> 也做这些检查，<code>--debug</code> 写出每项检查的结果。</p>
-<p>agentrun 不自动安装 <code>bwrap</code> 与 <code>socat</code>。理由：安装需要 root 和各发行版不同的包管理器，运行一次 agent 顺带改系统也不容易查。报错信息与 <code>agentrun doctor</code> 给出安装命令。</p>
+<p>agentrun 不自动安装 <code>bwrap</code> 与 <code>socat</code>。理由：安装需要 root 和各发行版不同的包管理器，运行 agent 时修改系统，出了问题不容易查清原因。报错信息与 <code>agentrun doctor</code> 给出安装命令。</p>
 
 <h3>没有沙箱时的提示</h3>
 <p><code>relax</code> 下沙箱没有运行、或者 <code>off</code> 时，text 与 rich 格式在第一行输出：</p>
