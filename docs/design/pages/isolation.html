@@ -48,7 +48,7 @@
 
 <h3>没有沙箱时的提示</h3>
 <p><code>relax</code> 下沙箱没有运行、或者 <code>off</code> 时，text 与 rich 格式在第一行输出：</p>
-<div class="term" style="white-space: pre-wrap"><span class="warn">[note] 沙箱未启用（--sandbox relax：bwrap 无法启动：No permissions to create new namespace）。agent 的写入与联网不受 agentrun 限制</span></div>
+<div class="term" style="white-space: pre-wrap"><span class="warn">[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent writes or which hosts it reaches</span></div>
 <p>jsonl 格式不加额外的行，由 <code>start</code> 事件的 <code>sandbox</code> 与 <code>network.enforced</code> 字段记录。理由：<code>relax</code> 不打断运行，但事后能查出这次运行没有隔离。</p>
 
 <h2>三个运行时怎么关进沙箱</h2>

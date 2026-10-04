@@ -51,7 +51,14 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--dry-run</code></td><td>完成命令行解析与启动前检查，把将执行的命令、会话 PATH 与变量名打印到标准输出后以 0 退出。不创建临时目录，不写凭据，不输出事件</td><td>不开</td></tr>
   </tbody>
 </table>
-<p>任何输出都只写变量名，不写变量的值，PATH 除外。提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里；<code>--dry-run</code> 与 <code>--debug</code> 把它写成 <code>&lt;提示词 N 字节&gt;</code>。</p>
+<p>任何输出都只写变量名，不写变量的值，PATH 除外。提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里；<code>--dry-run</code> 与 <code>--debug</code> 把它写成 <code>&lt;prompt N bytes&gt;</code>。</p>
+<p>agentrun 自己写出的文字都用英文：<code>detail</code>、标准错误里的说明、text 与 rich 格式里的固定词、<code>[note]</code> 提示与 doctor 的输出。运行时与模型给出的内容（提示词、模型的文字、运行时的错误信息）原样输出。理由：命令行解析使用现成的库，它的错误信息是英文，全部输出用同一种语言。</p>
+<p>启动前检查失败时，写到标准错误的一行是 <code>agentrun: </code> 加 <code>detail</code>。<code>--dry-run</code> 写到标准输出、<code>--debug</code> 写到标准错误，每项一行，格式是 <code>项目名: 值</code>，<code>--debug</code> 的每行前面另加 <code>[debug] </code>。命令的每个参数按 shell 规则加引号。</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --sandbox off --env GH_TOKEN --dry-run --prompt "修复测试"
+command: /usr/local/bin/pi -p --mode json --no-session ... -- '&lt;prompt 12 bytes&gt;'
+PATH: /usr/local/bin:/usr/bin:/bin
+set: GH_TOKEN
+removed: (none)</div>
 
 <p>另外有 <code>agentrun doctor</code>。在 <a href="#doctor_check">后文</a> 详细描述。</p>
 
@@ -87,19 +94,19 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><th>检查项</th><th>通过条件</th></tr>
   </thead>
   <tbody>
-    <tr><td>可执行文件</td><td>在会话 PATH 里找到</td></tr>
-    <tr><td>登录</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时按令牌登录检查，不要求登录文件。pi 报告它实际选中的服务商与模型：给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败</td></tr>
-    <tr><td>沙箱</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、文件写出、目录外写不进去；pi 还要在包裹下实际启动一次 pi 与 node。检查结束后删除该目录，给了 <code>--debug</code> 时保留。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
-    <tr><td>网络</td><td>只在 <code>--network full|custom</code> 时检查：启动过滤代理，在该运行时实际使用的沙箱里请求一个允许的主机确认能连上，再请求一个不允许的主机确认被拒绝</td></tr>
+    <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到</td></tr>
+    <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时按令牌登录检查，不要求登录文件。pi 报告它实际选中的服务商与模型：给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败</td></tr>
+    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、文件写出、目录外写不进去；pi 还要在包裹下实际启动一次 pi 与 node。检查结束后删除该目录，给了 <code>--debug</code> 时保留。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
+    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查：启动过滤代理，在该运行时实际使用的沙箱里请求一个允许的主机确认能连上，再请求一个不允许的主机确认被拒绝</td></tr>
   </tbody>
 </table>
 <p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒。默认输出每项一行；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor
-[ok]   claude-code  可执行文件  /usr/local/bin/claude
-[ok]   claude-code  登录        CLAUDE_CODE_OAUTH_TOKEN
-<span class="warn">[fail] claude-code  沙箱        bwrap 无法启动：没有用户命名空间。在 docker 容器里用 --sandbox off</span>
-[ok]   pi           登录        deepseek/deepseek-flash（来自 pi 设置）
-<span class="warn">[fail] pi           沙箱        bwrap 无法启动：没有用户命名空间。在 docker 容器里用 --sandbox off</span>
+[ok]   claude-code  executable  /usr/local/bin/claude
+[ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
+<span class="warn">[fail] claude-code  sandbox     bwrap cannot start: no user namespaces. In a docker container use --sandbox off</span>
+[ok]   pi           login       deepseek/deepseek-flash (from pi settings)
+<span class="warn">[fail] pi           sandbox     bwrap cannot start: no user namespaces. In a docker container use --sandbox off</span>
 <span class="dim">...</span></div>
 
 <h2 id="exit-codes">退出码</h2>
@@ -208,7 +215,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 <ol>
   <li>最后一个 result 的 <code>is_error</code> 为 true：取它的 <code>result</code> 文字。例如无效模型（同时退出码 1、标准错误有 <code>[claude-code:unrecognized_model]</code>）、无效凭据（退出码 1）。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。例如未知选项，没有任何事件。</li>
-  <li>退出码 0 但没有 result：<code>运行时退出（退出码 N）时没有输出 result 事件</code>。</li>
+  <li>退出码 0 但没有 result：<code>runtime exited with code N without a result event</code>。</li>
 </ol>
 <p>收到 SIGINT 时 claude-code 约 0.4 秒退出，退出码 0，最后的 result 为 <code>is_error: true</code>、subtype <code>error_during_execution</code>；SIGTERM 时退出码 143、没有 result。两种情况都由 agentrun 记为 <code>interrupted</code>。</p>
 <p>auto 模式的分类器会拒绝部分命令。实测稳定被拒绝的是读取凭据的命令，例如 <code>cat ~/.ssh/id_rsa</code>；用 curl 把文件外发会触发模型的安全拦截，整次运行以 API Error 失败。</p>
@@ -230,7 +237,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 
 <h3>模型检查</h3>
 <p><code>--model</code> 必须写成 <code>服务商/模型</code>，可以带 <code>:推理强度</code> 后缀；没有 <code>/</code> 或任一侧为空时是用法错误。理由：pi 对模型名做模糊匹配，能匹配上的未知模型名会被换成别的服务商的模型，退出码仍为 0。例如环境里有 <code>AWS_</code> 变量时，<code>deepseek/deepseek-v4-flash</code>（1.0.1 已改名为 <code>deepseek-flash</code>）被换成了 Amazon Bedrock 上的模型。</p>
-<p>给了 <code>--model</code> 时，agentrun 在第一个 assistant 的 <code>message_start</code>（此时还没有请求模型）比较它的 <code>provider</code> 与 <code>model</code>，区分大小写，不做别名处理。不一致时向进程组发 SIGKILL，判为 <code>failed</code>，<code>detail</code> 为 <code>pi 实际使用 &lt;provider&gt;/&lt;model&gt;，与 --model &lt;值&gt; 不符</code>。</p>
+<p>给了 <code>--model</code> 时，agentrun 在第一个 assistant 的 <code>message_start</code>（此时还没有请求模型）比较它的 <code>provider</code> 与 <code>model</code>，区分大小写，不做别名处理。不一致时向进程组发 SIGKILL，判为 <code>failed</code>，<code>detail</code> 为 <code>pi uses &lt;provider&gt;/&lt;model&gt;, which does not match --model &lt;值&gt;</code>。</p>
 <p>没给 <code>--model</code> 时不传，pi 用它 <code>settings.json</code> 里的默认模型。设置里的模型不存在、或者没有设置文件时，pi 同样会不提示地改用环境里其他可用的服务商。这种情况由 doctor 的登录检查发现：它报告 pi 实际选中的服务商与模型，与设置不一致时失败。</p>
 
 <h3>输出映射</h3>
@@ -254,7 +261,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   <li>模型检查不通过。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。</li>
   <li>最后一条 assistant 消息的 <code>stopReason</code> 为 <code>error</code> 或 <code>aborted</code>：取 <code>errorMessage</code> 的前 500 个字符，没有时写 <code>stopReason: 值</code>。</li>
-  <li>退出码 0 但没有 assistant 的 <code>message_end</code>：<code>pi 没有输出模型回复</code>。</li>
+  <li>退出码 0 但没有 assistant 的 <code>message_end</code>：<code>pi produced no model reply</code>。</li>
 </ol>
 <table>
   <thead>
@@ -308,7 +315,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   <li><code>turn.failed</code>：取最后一个的 <code>error.message</code> 前 500 个字符。</li>
   <li><code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。若 codex 在能自行恢复时也输出 <code>error</code>，改为只在没有 <code>turn.completed</code> 时生效（待实测）。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。</li>
-  <li>退出码 0 但没有 <code>turn.completed</code>：<code>codex 没有输出 turn.completed</code>。</li>
+  <li>退出码 0 但没有 <code>turn.completed</code>：<code>codex produced no turn.completed</code>。</li>
 </ol>
 </main>
 </body>
