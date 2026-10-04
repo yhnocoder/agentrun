@@ -297,3 +297,181 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
     assert!(command.contains("--permission-mode dontAsk"), "{command}");
     assert!(std::fs::read_dir(env.tmp()).unwrap().next().is_none());
 }
+
+const CURL_CLAUDE: &str = r#"#!/bin/sh
+read -r line
+prev=""
+settings=""
+for arg in "$@"; do
+  if [ "$prev" = "--settings" ]; then settings="$arg"; fi
+  prev="$arg"
+done
+port=$(printf '%s' "$settings" | sed -n 's/.*"httpProxyPort":\([0-9]*\).*/\1/p')
+if [ -n "$port" ]; then
+  code=$(curl -sS -x "http://127.0.0.1:$port" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cat "$PWD/port")/" 2>/dev/null || echo failed)
+else
+  code=noproxy
+fi
+cat <<LINES
+{"type":"system","subtype":"init","tools":["Bash"],"permissionMode":"dontAsk"}
+{"type":"user","isReplay":true,"message":{"role":"user","content":"fetch"},"parent_tool_use_id":null}
+{"type":"assistant","message":{"id":"msg_1","model":"claude-sonnet-5-5","content":[{"type":"text","text":"code=$code socat=${SOCAT_DEFAULT_LISTEN_IP-unset} proxy=${HTTPS_PROXY-unset}"}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"parent_tool_use_id":null}
+{"type":"result","subtype":"success","is_error":false,"result":"done","modelUsage":{}}
+LINES
+"#;
+
+fn text_of(events: &[Value]) -> String {
+    events
+        .iter()
+        .find(|event| event["type"] == "text")
+        .map(|event| event["text"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no text event in {events:?}"))
+}
+
+fn network_events(events: &[Value]) -> Vec<Value> {
+    events
+        .iter()
+        .filter(|event| event["type"] == "network")
+        .cloned()
+        .collect()
+}
+
+fn option_value(argv: &Value, name: &str) -> String {
+    let argv = argv.as_array().unwrap();
+    let index = argv.iter().position(|arg| arg == name).unwrap();
+    argv[index + 1].as_str().unwrap().to_string()
+}
+
+fn network_settings(argv: &Value) -> Value {
+    let settings: Value = serde_json::from_str(&option_value(argv, "--settings")).unwrap();
+    settings["sandbox"]["network"].clone()
+}
+
+#[test]
+fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
+    if !support::bwrap_available() {
+        return;
+    }
+    let server = support::WebServer::start();
+    let env = Env::new(CURL_CLAUDE);
+    std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
+
+    let output = env.run(&["--network", "full", "--prompt", "fetch"], "");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let full = events(&output);
+    let start = &full[0];
+    assert_eq!(
+        start["network"],
+        json!({"mode": "full", "allow": [], "enforced": true})
+    );
+    assert_eq!(start["env"], json!([]));
+    let network = network_settings(&start["argv"]);
+    let port = network["httpProxyPort"].as_u64().unwrap();
+    assert!(port > 0);
+    assert_eq!(
+        network,
+        json!({"allowedDomains": [], "httpProxyPort": port, "socksProxyPort": port})
+    );
+    assert_eq!(
+        option_value(&start["argv"], "--tools"),
+        "Read,Edit,Write,Glob,Grep,Bash,Task,WebFetch,WebSearch"
+    );
+    assert!(
+        option_value(&start["argv"], "--allowedTools").ends_with(",Task,WebFetch,WebSearch"),
+        "{}",
+        option_value(&start["argv"], "--allowedTools")
+    );
+    assert_eq!(text_of(&full), "code=403 socat=4 proxy=unset");
+    assert_eq!(
+        network_events(&full),
+        [
+            json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": false, "reason": "private_address"})
+        ]
+    );
+
+    let port_rule = format!("127.0.0.1:{}", server.port);
+    let output = env.run(
+        &[
+            "--network",
+            "custom",
+            "--allow-host",
+            &port_rule,
+            "--allow-host",
+            "*.example.com:8443",
+            "--prompt",
+            "fetch",
+        ],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let custom = events(&output);
+    let start = &custom[0];
+    assert_eq!(
+        start["network"],
+        json!({"mode": "custom", "allow": [port_rule, "*.example.com:8443"], "enforced": true})
+    );
+    let network = network_settings(&start["argv"]);
+    assert!(network["httpProxyPort"].is_u64(), "{network}");
+    assert_eq!(network["httpProxyPort"], network["socksProxyPort"]);
+    assert_eq!(
+        option_value(&start["argv"], "--tools"),
+        "Read,Edit,Write,Glob,Grep,Bash,Task,WebFetch"
+    );
+    assert!(
+        option_value(&start["argv"], "--allowedTools")
+            .ends_with(",Task,WebFetch(domain:127.0.0.1),WebFetch(domain:*.example.com)"),
+        "{}",
+        option_value(&start["argv"], "--allowedTools")
+    );
+    assert_eq!(text_of(&custom), "code=200 socat=4 proxy=unset");
+    assert_eq!(
+        network_events(&custom),
+        [
+            json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": true, "reason": null})
+        ]
+    );
+
+    let output = env.run(&["--prompt", "fetch"], "");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let none = events(&output);
+    let start = &none[0];
+    assert_eq!(
+        start["network"],
+        json!({"mode": "none", "allow": [], "enforced": true})
+    );
+    assert_eq!(
+        network_settings(&start["argv"]),
+        json!({"allowedDomains": []})
+    );
+    assert_eq!(
+        option_value(&start["argv"], "--tools"),
+        "Read,Edit,Write,Glob,Grep,Bash,Task"
+    );
+    assert_eq!(text_of(&none), "code=noproxy socat=4 proxy=unset");
+    assert!(network_events(&none).is_empty());
+
+    let output = env.run(
+        &["--sandbox", "off", "--network", "full", "--prompt", "fetch"],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let open = events(&output);
+    let start = &open[0];
+    assert_eq!(
+        start["network"],
+        json!({"mode": "full", "allow": [], "enforced": false})
+    );
+    assert!(
+        !start["argv"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("--settings"))
+    );
+    assert_eq!(
+        option_value(&start["argv"], "--allowedTools"),
+        "Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch"
+    );
+    assert_eq!(text_of(&open), "code=noproxy socat=unset proxy=unset");
+    assert_eq!(server.served(), 1);
+    assert!(std::fs::read_dir(env.tmp()).unwrap().next().is_none());
+}

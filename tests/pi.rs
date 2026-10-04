@@ -370,3 +370,167 @@ fn dry_run_creates_no_state_dir_and_lists_no_state_variable() {
     assert!(!stdout.contains("PI_CODING_AGENT_DIR"), "{stdout}");
     assert!(env.leftover_tempdirs().is_empty());
 }
+
+const CURL_PI: &str = r#"#!/bin/sh
+port=$(cat "$PWD/port")
+code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || echo failed)
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"code=%s proxy=%s https=%s all=%s noproxy=%s/%s"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}\n' \
+  "$code" "$http_proxy" "$HTTPS_PROXY" "$ALL_PROXY" "${NO_PROXY-unset}" "${no_proxy-unset}"
+"#;
+
+fn text_of(events: &[Value]) -> String {
+    events
+        .iter()
+        .find(|event| event["type"] == "text")
+        .map(|event| event["text"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no text event in {events:?}"))
+}
+
+fn network_events(events: &[Value]) -> Vec<Value> {
+    events
+        .iter()
+        .filter(|event| event["type"] == "network")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
+    if !support::bwrap_available() {
+        return;
+    }
+    let server = support::WebServer::start();
+    let env = Env::new(CURL_PI);
+    std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
+    let model = ["--model", "deepseek/deepseek-flash", "--prompt", "fetch"];
+
+    let mut args = vec!["--network", "none"];
+    args.extend(model);
+    let output = env.run(&args);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let first = events(&output);
+    assert_eq!(
+        first[0]["network"],
+        json!({"mode": "none", "allow": [], "enforced": true})
+    );
+    assert_eq!(first[0]["env"], json!([]));
+    let text = text_of(&first);
+    assert!(
+        text.starts_with("code=403 proxy=http://127.0.0.1:"),
+        "{text}"
+    );
+    let proxy = text.split(' ').nth(1).unwrap();
+    let address = proxy.strip_prefix("proxy=").unwrap();
+    assert_eq!(
+        text,
+        format!("code=403 proxy={address} https={address} all={address} noproxy=/")
+    );
+    assert_eq!(
+        network_events(&first),
+        [
+            json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": false, "reason": "not_allowed"})
+        ]
+    );
+
+    let port_rule = format!("127.0.0.1:{}", server.port);
+    let mut args = vec!["--network", "custom", "--allow-host", &port_rule];
+    args.extend(model);
+    let output = env.run(&args);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let second = events(&output);
+    assert_eq!(
+        second[0]["network"],
+        json!({"mode": "custom", "allow": [port_rule], "enforced": true})
+    );
+    assert!(
+        text_of(&second).starts_with("code=200 "),
+        "{}",
+        text_of(&second)
+    );
+    assert_eq!(
+        network_events(&second),
+        [
+            json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": true, "reason": null})
+        ]
+    );
+
+    let mut args = vec!["--format", "text", "--network", "full"];
+    args.extend(model);
+    let output = env.run(&args);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!(
+            "[main] net denied 127.0.0.1:{} (private_address)\n",
+            server.port
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("code=403 "), "{stdout}");
+    assert_eq!(server.served(), 1);
+    assert!(env.leftover_tempdirs().is_empty());
+}
+
+#[test]
+fn sandboxed_pi_with_unknown_provider_needs_an_allowed_host() {
+    if !support::bwrap_available() {
+        return;
+    }
+    let env = Env::new(CURL_PI);
+    env.write_user_file("settings.json", "{\"defaultProvider\":\"acme\"}");
+    let output = env.run(&["--prompt", "hi"]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let end = events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
+    );
+    assert!(env.leftover_tempdirs().is_empty());
+}
+
+const SOCKET_REMOVING_PI: &str = r#"#!/bin/sh
+rm -f "$TMPDIR/proxy.sock"
+echo "removed=$(test -e "$TMPDIR/proxy.sock" && echo no || echo yes)" > "$PWD/state.txt"
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}'
+"#;
+
+#[test]
+fn run_ends_after_the_sandboxed_agent_removes_the_proxy_socket() {
+    if !support::bwrap_available() {
+        return;
+    }
+    let env = Env::new(SOCKET_REMOVING_PI);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agentrun"))
+        .arg("pi")
+        .arg("--cwd")
+        .arg(env.work())
+        .args(["--model", "deepseek/deepseek-flash", "--prompt", "hi"])
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", env.bin().display()))
+        .env("TMPDIR", env.tmp())
+        .env("HOME", env.home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("agentrun did not end after the proxy socket was removed");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(env.work().join("state.txt")).unwrap(),
+        "removed=yes\n"
+    );
+    let end = events(&output).pop().unwrap();
+    assert_eq!(end["type"], "end");
+    assert_eq!(end["status"], "finished");
+    assert!(env.leftover_tempdirs().is_empty());
+}

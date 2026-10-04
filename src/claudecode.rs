@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -6,9 +7,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::adapter::{Adapter, Launch, Record};
-use crate::cli::Runtime;
+use crate::cli::{NetworkMode, Runtime};
 use crate::event::SubagentStatus;
 use crate::json::{first_line, joined_text, optional_string, string};
+use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::run::Invocation;
 use crate::usage::{TokenCounts, Usage};
 
@@ -16,6 +18,10 @@ const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
 const ALLOWED_WITH_SANDBOX: [&str; 3] = ["Read", "Glob", "Grep"];
 const PATH_TOOLS: [&str; 2] = ["Edit", "Write"];
+const WEB_FETCH_TOOL: &str = "WebFetch";
+const WEB_SEARCH_TOOL: &str = "WebSearch";
+const SOCAT_LISTEN_VARIABLE: &str = "SOCAT_DEFAULT_LISTEN_IP";
+const SOCAT_LISTEN_IPV4: &str = "4";
 const SUBAGENT_TOOL: &str = "Task";
 const SUBAGENT_TOOL_NAMES: [&str; 2] = ["Agent", "Task"];
 const HANDBACK_TOOL: &str = "SubagentHandback";
@@ -80,6 +86,10 @@ struct FilesystemSettings<'a> {
 #[serde(rename_all = "camelCase")]
 struct NetworkSettings {
     allowed_domains: [&'static str; 0],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    http_proxy_port: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    socks_proxy_port: Option<Value>,
 }
 
 impl Default for ClaudeCode {
@@ -299,6 +309,17 @@ impl Adapter for ClaudeCode {
             tools.retain(|tool| *tool != SUBAGENT_TOOL);
             allowed.retain(|tool| tool != SUBAGENT_TOOL);
         }
+        match invocation.args.network {
+            NetworkMode::None => {}
+            NetworkMode::Full => {
+                tools.extend([WEB_FETCH_TOOL, WEB_SEARCH_TOOL]);
+                allowed.extend([WEB_FETCH_TOOL.to_string(), WEB_SEARCH_TOOL.to_string()]);
+            }
+            NetworkMode::Custom => {
+                tools.push(WEB_FETCH_TOOL);
+                allowed.extend(invocation.allow_hosts.iter().map(domain_rule));
+            }
+        }
         let mut argv = vec![
             executable.to_string_lossy().into_owned(),
             "-p".to_string(),
@@ -323,7 +344,11 @@ impl Adapter for ClaudeCode {
         ];
         if sandboxed {
             argv.push("--settings".to_string());
-            argv.push(sandbox_settings(&cwd, &tempdir));
+            argv.push(sandbox_settings(
+                &cwd,
+                &tempdir,
+                invocation.proxy.as_ref().map(proxy_port),
+            ));
         }
         if let Some(model) = &invocation.args.model {
             argv.push("--model".to_string());
@@ -338,11 +363,20 @@ impl Adapter for ClaudeCode {
             argv.push(max_turns.to_string());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
+        let env = if sandboxed {
+            vec![(
+                OsString::from(SOCAT_LISTEN_VARIABLE),
+                OsString::from(SOCAT_LISTEN_IPV4),
+            )]
+        } else {
+            Vec::new()
+        };
         Ok(Launch {
             argv,
             stdin: prompt_line(&invocation.prompt),
-            env: Vec::new(),
+            env,
             signal_wrapped_child: false,
+            service_hosts: Vec::new(),
         })
     }
 
@@ -402,7 +436,18 @@ fn path_rule(tool: &str, dir: &str) -> String {
     format!("{tool}(//{}/**)", dir.strip_prefix('/').unwrap_or(dir))
 }
 
-fn sandbox_settings(cwd: &str, tempdir: &str) -> String {
+fn domain_rule(rule: &HostRule) -> String {
+    format!("{WEB_FETCH_TOOL}(domain:{})", rule.pattern())
+}
+
+fn proxy_port(proxy: &ProxyEndpoint) -> Value {
+    match proxy.port {
+        Some(port) => Value::from(port),
+        None => Value::from(PORT_PLACEHOLDER),
+    }
+}
+
+fn sandbox_settings(cwd: &str, tempdir: &str, proxy_port: Option<Value>) -> String {
     serde_json::to_string(&Settings {
         sandbox: SandboxSettings {
             enabled: true,
@@ -414,6 +459,8 @@ fn sandbox_settings(cwd: &str, tempdir: &str) -> String {
             },
             network: NetworkSettings {
                 allowed_domains: [],
+                http_proxy_port: proxy_port.clone(),
+                socks_proxy_port: proxy_port,
             },
         },
     })
@@ -513,6 +560,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, SandboxMode};
     use crate::event::SandboxKind;
+    use crate::network;
     use crate::sandbox::Sandbox;
     use crate::session::Session;
 
@@ -535,10 +583,13 @@ mod tests {
                 },
                 reason: String::new(),
                 bwrap: None,
+                socat: None,
                 description: String::new(),
             },
             tempdir: PathBuf::from("/tmp/agentrun-abc"),
             session: Session::assemble(runtime, &[], &[], &[], &[]),
+            allow_hosts: Vec::new(),
+            proxy: None,
         }
     }
 
@@ -603,6 +654,129 @@ mod tests {
             ]
         );
         assert!(!argv.contains(&"--settings".to_string()));
+    }
+
+    fn proxied(sandboxed: bool, port: Option<u16>, extra: &[&str]) -> Launch {
+        let mut invocation = invocation(sandboxed, extra);
+        invocation.allow_hosts =
+            network::check_usage(invocation.args.network, &invocation.args.allow_host).unwrap();
+        invocation.proxy = port.map(|port| ProxyEndpoint {
+            port: Some(port),
+            socket: PathBuf::from("/tmp/agentrun-abc/proxy.sock"),
+        });
+        if extra.contains(&"--dry-run") && sandboxed && invocation.args.network != NetworkMode::None
+        {
+            invocation.proxy = Some(ProxyEndpoint {
+                port: None,
+                socket: PathBuf::from("/tmp/agentrun-abc/proxy.sock"),
+            });
+        }
+        ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap()
+    }
+
+    const SOCAT_IPV4: (&str, &str) = ("SOCAT_DEFAULT_LISTEN_IP", "4");
+
+    fn has_env(launch: &Launch, pair: (&str, &str)) -> bool {
+        launch
+            .env
+            .contains(&(OsString::from(pair.0), OsString::from(pair.1)))
+    }
+
+    #[test]
+    fn full_network_adds_web_tools_and_points_the_sandbox_at_the_proxy() {
+        let launch = proxied(true, Some(41234), &["--network", "full"]);
+        let argv = argv_without_session_id(&launch);
+        assert_eq!(
+            argv[16],
+            "Read,Edit,Write,Glob,Grep,Bash,Task,WebFetch,WebSearch"
+        );
+        assert_eq!(
+            argv[18],
+            "Read,Glob,Grep,Edit(//work/repo/**),Write(//work/repo/**),Edit(//tmp/agentrun-abc/**),Write(//tmp/agentrun-abc/**),Task,WebFetch,WebSearch"
+        );
+        assert!(
+            argv[20].ends_with(
+                r#""network":{"allowedDomains":[],"httpProxyPort":41234,"socksProxyPort":41234}}}"#
+            ),
+            "{}",
+            argv[20]
+        );
+        assert!(has_env(&launch, SOCAT_IPV4));
+        assert!(launch.service_hosts.is_empty());
+        let open = proxied(false, None, &["--network", "full"]);
+        let argv = argv_without_session_id(&open);
+        assert_eq!(
+            argv[16],
+            "Read,Edit,Write,Glob,Grep,Bash,Task,WebFetch,WebSearch"
+        );
+        assert_eq!(
+            argv[18],
+            "Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch"
+        );
+        assert!(!has_env(&open, SOCAT_IPV4));
+        assert!(open.env.is_empty());
+    }
+
+    #[test]
+    fn custom_network_allows_web_fetch_per_host_without_ports() {
+        let launch = proxied(
+            true,
+            Some(5000),
+            &[
+                "--network",
+                "custom",
+                "--allow-host",
+                "Example.com:8443",
+                "--allow-host",
+                "*.github.com",
+            ],
+        );
+        let argv = argv_without_session_id(&launch);
+        assert_eq!(argv[16], "Read,Edit,Write,Glob,Grep,Bash,Task,WebFetch");
+        assert!(
+            argv[18].ends_with(",Task,WebFetch(domain:example.com),WebFetch(domain:*.github.com)"),
+            "{}",
+            argv[18]
+        );
+        assert!(
+            argv[20].contains(r#""httpProxyPort":5000,"socksProxyPort":5000"#),
+            "{}",
+            argv[20]
+        );
+        assert!(has_env(&launch, SOCAT_IPV4));
+    }
+
+    #[test]
+    fn no_network_keeps_the_sandbox_settings_and_still_sets_the_socat_family() {
+        let launch = proxied(true, None, &[]);
+        let argv = argv_without_session_id(&launch);
+        assert!(
+            argv[20].ends_with(r#""network":{"allowedDomains":[]}}}"#),
+            "{}",
+            argv[20]
+        );
+        assert_eq!(
+            launch.env,
+            vec![(
+                OsString::from("SOCAT_DEFAULT_LISTEN_IP"),
+                OsString::from("4")
+            )]
+        );
+    }
+
+    #[test]
+    fn dry_run_with_network_writes_the_port_placeholder() {
+        let launch = proxied(true, None, &["--network", "full", "--dry-run"]);
+        let argv = argv_without_session_id(&launch);
+        assert!(
+            argv[20].ends_with(
+                r#""network":{"allowedDomains":[],"httpProxyPort":"<proxy port>","socksProxyPort":"<proxy port>"}}}"#
+            ),
+            "{}",
+            argv[20]
+        );
     }
 
     #[test]

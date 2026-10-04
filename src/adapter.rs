@@ -33,6 +33,7 @@ pub struct Launch {
     pub stdin: Vec<u8>,
     pub env: Vec<(OsString, OsString)>,
     pub signal_wrapped_child: bool,
+    pub service_hosts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -9,6 +9,7 @@ use crate::signal::Signals;
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const BWRAP_PREFIX: &str = "bwrap: ";
+const FORWARD_SCRIPT: &str = r#""$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2>/dev/null & shift 2; exec "$@""#;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sandbox {
@@ -16,6 +17,7 @@ pub struct Sandbox {
     pub kind: SandboxKind,
     pub reason: String,
     pub bwrap: Option<PathBuf>,
+    pub socat: Option<PathBuf>,
     pub description: String,
 }
 
@@ -28,6 +30,7 @@ impl Sandbox {
 struct Available {
     kind: SandboxKind,
     bwrap: Option<PathBuf>,
+    socat: Option<PathBuf>,
     description: String,
 }
 
@@ -68,6 +71,7 @@ pub fn check(
             kind: SandboxKind::None,
             reason: String::new(),
             bwrap: None,
+            socat: None,
             description: "none (--sandbox off)".to_string(),
         });
     }
@@ -77,6 +81,7 @@ pub fn check(
             kind: available.kind,
             reason: String::new(),
             bwrap: available.bwrap,
+            socat: available.socat,
             description: available.description,
         }),
         Err(unavailable) if mode == SandboxMode::On => Err(format!(
@@ -89,6 +94,7 @@ pub fn check(
             description: format!("none (--sandbox relax: {})", unavailable.reason),
             reason: unavailable.reason,
             bwrap: None,
+            socat: None,
         }),
     }
 }
@@ -138,6 +144,7 @@ mod bubblewrap {
             return Ok(Available {
                 kind: SandboxKind::Codex,
                 bwrap: None,
+                socat: None,
                 description: "codex".to_string(),
             });
         }
@@ -161,6 +168,7 @@ mod bubblewrap {
                 started.elapsed().as_millis()
             ),
             bwrap: Some(bwrap),
+            socat: Some(socat),
         })
     }
 
@@ -240,11 +248,18 @@ pub fn failure_reason(exit_code: Option<i32>, stderr: &str) -> String {
     }
 }
 
+pub struct ProxyForward<'a> {
+    pub socat: &'a Path,
+    pub port: &'a str,
+    pub socket: &'a Path,
+}
+
 pub fn wrap_pi(
     bwrap: &Path,
     cwd: &Path,
     tempdir: &Path,
     login_file: Option<&Path>,
+    forward: Option<&ProxyForward>,
     argv: &[String],
 ) -> Vec<String> {
     let text = |path: &Path| path.to_string_lossy().into_owned();
@@ -276,6 +291,16 @@ pub fn wrap_pi(
         ]
         .map(str::to_string),
     );
+    if let Some(forward) = forward {
+        wrapped.extend([
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            FORWARD_SCRIPT.to_string(),
+            text(forward.socat),
+            forward.port.to_string(),
+            text(forward.socket),
+        ]);
+    }
     wrapped.extend(argv.iter().cloned());
     wrapped
 }
@@ -384,6 +409,7 @@ mod tests {
                 kind: SandboxKind::None,
                 reason: String::new(),
                 bwrap: None,
+                socat: None,
                 description: "none (--sandbox off)".to_string(),
             }
         );
@@ -449,6 +475,7 @@ mod tests {
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
             Some(Path::new("/nonexistent/home/.pi/agent/auth.json")),
+            None,
             &argv,
         );
         assert_eq!(
@@ -484,6 +511,7 @@ mod tests {
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
             None,
+            None,
             &argv,
         );
         assert_eq!(
@@ -491,6 +519,39 @@ mod tests {
             2
         );
         assert_eq!(without_login.len(), with_login.len() - 3);
+    }
+
+    #[test]
+    fn wrapped_argv_with_forward_starts_socat_before_pi() {
+        let argv = strings(&["/usr/bin/pi", "-p", "hi"]);
+        let forward = ProxyForward {
+            socat: Path::new("/usr/bin/socat"),
+            port: "41234",
+            socket: Path::new("/nonexistent/tmp/agentrun-x/proxy.sock"),
+        };
+        let wrapped = wrap_pi(
+            Path::new("/usr/bin/bwrap"),
+            Path::new("/nonexistent/work"),
+            Path::new("/nonexistent/tmp/agentrun-x"),
+            None,
+            Some(&forward),
+            &argv,
+        );
+        let separator = wrapped.iter().position(|arg| arg == "--").unwrap();
+        assert_eq!(
+            wrapped[separator + 1..],
+            strings(&[
+                "/bin/sh",
+                "-c",
+                r#""$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2>/dev/null & shift 2; exec "$@""#,
+                "/usr/bin/socat",
+                "41234",
+                "/nonexistent/tmp/agentrun-x/proxy.sock",
+                "/usr/bin/pi",
+                "-p",
+                "hi",
+            ])
+        );
     }
 
     #[test]

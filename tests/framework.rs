@@ -1,10 +1,10 @@
+#[allow(dead_code)]
 mod support;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use agentrun::adapter::Adapter;
@@ -845,31 +845,9 @@ fn credential_write_failure_is_rejected_before_tempdir() {
     assert!(sandbox.leftover_tempdirs().is_empty());
 }
 
-fn bwrap_available() -> bool {
-    let available = Command::new("bwrap")
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--die-with-parent",
-            "--",
-            "/bin/true",
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
-    if !available {
-        eprintln!("skipped: bwrap is not available here");
-    }
-    available
-}
-
 #[test]
 fn start_event_records_bubblewrap_when_sandbox_is_on() {
-    if !bwrap_available() {
+    if !support::bwrap_available() {
         return;
     }
     let sandbox = Sandbox::with_output("");

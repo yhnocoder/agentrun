@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentrun::sandbox::{wrap_pi, wrapper_failure};
+use agentrun::sandbox::{ProxyForward, wrap_pi, wrapper_failure};
 use tempfile::TempDir;
 
 struct Wrapped {
@@ -85,6 +85,15 @@ impl Wrapped {
     }
 
     fn command(&self, body: &str, args: &[&str]) -> Command {
+        self.command_with_forward(body, args, None)
+    }
+
+    fn command_with_forward(
+        &self,
+        body: &str,
+        args: &[&str],
+        forward: Option<&ProxyForward>,
+    ) -> Command {
         std::fs::create_dir_all(self.state_dir()).unwrap();
         std::fs::write(self.login_file(), "{}").unwrap();
         let script = self.script(body);
@@ -95,6 +104,7 @@ impl Wrapped {
             &self.cwd(),
             &self.tempdir(),
             Some(&self.login_file()),
+            forward,
             &argv,
         );
         let mut command = Command::new(&wrapped[0]);
@@ -277,6 +287,7 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
         &wrapped.cwd(),
         &wrapped.tempdir(),
         Some(&missing),
+        None,
         &argv,
     );
     let output = Command::new(&bad[0]).args(&bad[1..]).output().unwrap();
@@ -286,4 +297,51 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
     assert!(detail.starts_with("sandbox failed to start: "), "{detail}");
     assert!(detail.contains("missing"), "{detail}");
     assert!(Path::new(&bad[0]).is_absolute());
+}
+
+#[test]
+fn forward_connects_the_sandbox_port_to_the_unix_socket() {
+    let Some(wrapped) = Wrapped::new() else {
+        return;
+    };
+    let socket = wrapped.tempdir().join("proxy.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let echo = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4];
+        stream.read_exact(&mut request).unwrap();
+        std::io::Write::write_all(&mut stream, b"pong").unwrap();
+        request
+    });
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+    let forward = ProxyForward {
+        socat: Path::new("/usr/bin/socat"),
+        port: &port,
+        socket: &socket,
+    };
+    let mut child = wrapped
+        .command_with_forward(
+            "for i in 1 2 3 4 5 6 7 8 9 10; do out=$(printf ping | socat -T 2 - \"TCP:127.0.0.1:$1\" 2>/dev/null) && break; sleep 0.1; done; echo \"$out\"\n",
+            &[&port],
+            Some(&forward),
+        )
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    unsafe {
+        libc::killpg(child.id() as i32, libc::SIGKILL);
+    }
+    child.wait().unwrap();
+    assert_eq!(line.trim(), "pong");
+    assert_eq!(&echo.join().unwrap(), b"ping");
 }
