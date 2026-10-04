@@ -1,0 +1,10 @@
+{"schema":1,"type":"prompt","text":"fix the tests"}
+{"schema":1,"type":"tool","id":"t1","parent":null,"name":"Read","summary":"Read: src/parse.rs","denied":false}
+{"schema":1,"type":"subagent_start","id":"s1","parent":null,"number":1,"kind":"Explore","model":"haiku","description":"find callers"}
+{"schema":1,"type":"tool","id":"t2","parent":"s1","name":"Grep","summary":"Grep: parse_line","denied":false}
+{"schema":1,"type":"usage","parent":"s1","model":"claude-haiku-4-5","input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"context_tokens":14120}
+{"schema":1,"type":"subagent_end","id":"s1","status":"finished","usage":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"by_model":{"claude-haiku-4-5":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}}}
+{"schema":1,"type":"tool","id":"t3","parent":null,"name":"Bash","summary":"Bash: cat ~/.ssh/id_rsa","denied":true}
+{"schema":1,"type":"text","parent":null,"text":"Tests pass."}
+{"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":15114,"output_tokens":827,"cache_read_tokens":32200,"cache_write_tokens":3900,"context_tokens":51214}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":18234,"output_tokens":912,"cache_read_tokens":42000,"cache_write_tokens":5100,"by_model":{"claude-haiku-4-5":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200},"claude-sonnet-5-5":{"input_tokens":15114,"output_tokens":827,"cache_read_tokens":32200,"cache_write_tokens":3900}}},"result":"Tests pass."}

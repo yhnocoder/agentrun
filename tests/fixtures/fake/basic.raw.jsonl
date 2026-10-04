@@ -1,0 +1,13 @@
+starting fake runtime
+{"record":"tool_start","id":"t1","parent":null,"name":"Read","summary":"Read: src/parse.rs"}
+{"record":"tool_end","id":"t1","denied":false}
+{"record":"subagent_start","id":"s1","parent":null,"kind":"Explore","model":"haiku","description":"find callers"}
+{"record":"tool_start","id":"t2","parent":"s1","name":"Grep","summary":"Grep: parse_line"}
+{"record":"tool_end","id":"t2","denied":false}
+{"record":"usage","parent":"s1","model":"claude-haiku-4-5","input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}
+{"record":"subagent_end","id":"s1","status":"finished"}
+{"record":"something_else"}
+{"record":"tool_start","id":"t3","parent":null,"name":"Bash","summary":"Bash: cat ~/.ssh/id_rsa"}
+{"record":"tool_end","id":"t3","denied":true}
+{"record":"text","parent":null,"text":"Tests pass."}
+{"record":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":15114,"output_tokens":827,"cache_read_tokens":32200,"cache_write_tokens":3900}
