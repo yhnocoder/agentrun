@@ -76,7 +76,7 @@
     <tr><td><code>--prompt TEXT</code></td><td>提示词</td><td>无</td></tr>
     <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词</td><td>无</td></tr>
     <tr><td>标准输入</td><td>前两项都没给时，从标准输入读提示词；三处都没有内容时报用法错误</td><td></td></tr>
-    <tr><td><code>--model ID</code></td><td>模型。pi 写成 <code>服务商/模型</code></td><td>claude-code 用 sonnet；codex 与 pi 不传，用运行时自己的默认模型</td></tr>
+    <tr><td><code>--model ID</code></td><td>模型。pi 写成 <code>服务商/模型</code></td><td>不传，用运行时自己的默认模型</td></tr>
     <tr><td><code>--effort LEVEL</code></td><td>推理强度，原样传给运行时对应的参数</td><td>不传，用运行时自己的默认推理强度</td></tr>
     <tr><td><code>--max-turns N</code></td><td>最多轮数。只有 claude-code 支持，其他运行时给出时报用法错误</td><td>不限</td></tr>
     <tr><td><code>--timeout SECONDS</code></td><td>超时后终止整个进程组</td><td>不限</td></tr>
@@ -128,7 +128,7 @@
   <li>codex：不读取用户的 codex 配置目录（只使用其中的登录信息）；忽略用户配置与规则文件，不读工作目录里的 <code>AGENTS.md</code>，不加载技能说明，会话不落盘；不请求批准，不用登录 shell，关闭网页搜索；允许启动 subagent（给出 <code>--no-subagents</code> 时关闭）；工作目录不是 git 仓库时也照常运行。</li>
   <li>pi：不加载扩展、技能、提示模板、上下文文件与自动发现的资源，禁止联网下载资源，不保存会话；只开放 read、bash、edit、write、grep、find、ls。不传 <code>--model</code> 时，pi 使用它自己 <code>settings.json</code> 里的默认服务商。</li>
 </ul>
-<p>claude-code 不传 <code>--model</code> 时工具传 <code>--model sonnet</code>。理由：以 haiku 作主模型时，claude-code 不提示地放弃 auto 模式，Bash 命令全部被拒绝，退出码仍为 0。</p>
+<p>claude-code 以 haiku 作主模型时，不提示地放弃 auto 模式，Bash 命令全部被拒绝，退出码仍为 0。工具不替调用方选模型；实测与验收用 sonnet。</p>
 <p>每次运行传新的会话 id 的理由：在 Claude Code 会话里运行 agentrun 时，claude-code 子进程会继承父会话的 id，不传就把记录写进父会话。</p>
 <p>pi 的 <code>settings.json</code> 里写的模型不存在，或没有设置文件时，pi 不提示地改用环境里其他可用的服务商，例如环境里有 <code>AWS_</code> 变量时改用 Amazon Bedrock。pi 升级时可能改模型名，例如 1.0.1 把 <code>deepseek-v4-flash</code> 改为 <code>deepseek-flash</code>。doctor 的登录检查因此要报告 pi 实际选中的服务商与模型。</p>
 
