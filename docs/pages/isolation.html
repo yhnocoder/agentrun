@@ -111,7 +111,7 @@
   </thead>
   <tbody>
     <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
-    <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：权限配置的网络打开，直接联网，不经过代理，没有 <code>network</code> 事件。custom：开启 codex 自带的代理，放行 <code>--allow-host</code> 列出的主机；codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，codex 的代理把放行的请求转给它，过滤代理按同一份列表再判断一次并输出 <code>network</code> 事件。codex 的代理关闭 SOCKS5，因为 SOCKS5 的连接不经过上游。codex 访问模型的请求也经过过滤代理，过滤代理另外放行 <code>chatgpt.com</code> 与 <code>ab.chatgpt.com</code>（ChatGPT 登录，macOS 实测）</td><td>full：<code>web_search="live"</code>。none 与 custom：<code>web_search="disabled"</code></td></tr>
+    <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：权限配置的网络打开，直接联网，不经过代理，没有 <code>network</code> 事件。custom：开启 codex 自带的代理，放行 <code>--allow-host</code> 列出的主机；codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，codex 的代理把放行的请求转给它，过滤代理按同一份列表再判断一次并输出 <code>network</code> 事件。codex 的代理关闭 SOCKS5，因为 SOCKS5 的连接不经过上游。codex 访问模型与刷新令牌的请求也经过过滤代理，过滤代理另外放行 codex 的服务主机，见模型服务的主机</td><td>full：<code>web_search="live"</code>。none 与 custom：<code>web_search="disabled"</code></td></tr>
     <tr><td>pi</td><td>包裹断开网络，只能连代理，代理只放行模型服务</td><td>同 none，代理按取值放行</td><td>pi 没有网页工具，靠 bash 里的 <code>curl</code></td></tr>
   </tbody>
 </table>
@@ -132,6 +132,18 @@
   </tbody>
 </table>
 <p>服务商不在表里时，agentrun 不知道该放行哪个主机。<code>none</code> 下启动前报错（退出码 2），提示改用 <code>--network custom --allow-host &lt;服务商主机&gt;</code>；<code>custom</code> 下只放行 <code>--allow-host</code> 列出的主机；<code>full</code> 不受影响。</p>
+<p>codex 的进程不在沙箱里，<code>none</code> 与 <code>full</code> 下它直接访问模型服务。<code>custom</code> 下 codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，它自己的请求也经过过滤代理，所以过滤代理另外放行下面四个主机，不看用户用哪种方式登录：</p>
+<table>
+  <thead>
+    <tr><th>codex 的请求</th><th>放行的主机</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>ChatGPT 登录时访问模型（macOS 实测）</td><td><code>chatgpt.com</code>、<code>ab.chatgpt.com</code></td></tr>
+    <tr><td>刷新 ChatGPT 登录的令牌</td><td><code>auth.openai.com</code></td></tr>
+    <tr><td>API key 登录时访问模型</td><td><code>api.openai.com</code></td></tr>
+  </tbody>
+</table>
+<p>后两个主机取自 codex 0.159.2 内置的地址，没有实测。只放行前两个时，令牌过期的那次运行刷新失败，API key 登录完全不能用。</p>
 
 <h2>配置与账号</h2>
 <p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
@@ -148,7 +160,7 @@
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
+    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
     <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户的 pi 登录文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>

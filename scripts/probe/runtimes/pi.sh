@@ -29,6 +29,7 @@ pi_supports() {
 pi_prepare_agent_dir() {
   local dir="$SESSION_TMP/pi-agent"
   make_private_dirs "$dir"
+  rm -f "$dir/auth.json" "$dir/models.json"
   if [ "$PI_INVALID_AUTH" = 1 ]; then
     (umask 077 && printf '{"%s":{"type":"api_key","key":"invalid"}}\n' "$PI_PROVIDER" > "$dir/auth.json")
     PI_INVALID_AUTH=0
@@ -36,6 +37,12 @@ pi_prepare_agent_dir() {
     ln -s "$PI_AUTH_TARGET" "$dir/auth.json"
   fi
   [ -f "$PI_STATE_DIR/models.json" ] && ln -s "$(real_file "$PI_STATE_DIR/models.json")" "$dir/models.json"
+  for b in fd rg; do
+    if [ -f "$PI_STATE_DIR/bin/$b" ]; then
+      make_private_dirs "$dir/bin"
+      ln -sfn "$(real_file "$PI_STATE_DIR/bin/$b")" "$dir/bin/$b"
+    fi
+  done
   node -e '
 const fs = require("fs");
 let s = {};

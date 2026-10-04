@@ -424,7 +424,8 @@ check_codex_proxy() {
   allowed_seen=0; denied_passed=0
   proxy_log_has allow "$NET_HOST" && allowed_seen=1
   proxy_log_has allow "$DENIED_HOST" && denied_passed=1
-  local detail="model said: $(printf '%s' "$text" | head -c 200); proxy.log: $(tr '\n' ';' < "$CHECK_DIR/proxy.log"); $(rt_call "$rt" summary)"
+  local detail
+  detail="model said: $(printf '%s' "$text" | head -c 200); proxy.log: $(tr '\n' ';' < "$CHECK_DIR/proxy.log"); $(rt_call "$rt" summary)"
   if [ "$allowed_seen" = 1 ] && [ "$denied_passed" = 0 ]; then
     record "$name" "$rt" pass "$NET_HOST reached the filter proxy through the codex proxy, $DENIED_HOST did not; $detail"
   else

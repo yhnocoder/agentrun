@@ -31,6 +31,7 @@ codex_prepare_home() {
   else
     CODEX_HOME_DIR="$PRIVATE_ROOT/codex-home-${CHECK_ID//\//-}"
     make_private_dirs "$CODEX_HOME_DIR"
+    rm -f "$CODEX_HOME_DIR/auth.json"
     if [ "$CODEX_INVALID_AUTH" = 1 ]; then
       (umask 077 && printf '{"OPENAI_API_KEY":"invalid"}\n' > "$CODEX_HOME_DIR/auth.json")
       CODEX_INVALID_AUTH=0
@@ -166,6 +167,7 @@ check_codex_sandbox() {
   make_private_dirs "$home"
   RUN_ENV+=("CODEX_HOME=$home")
   codex_permission_args none
+  # shellcheck disable=SC2016
   run_capture stdout.txt codex sandbox -P agentrun "${CODEX_PERM[@]:2}" -C "$RUN_CWD" -- sh -c 'echo "TMPDIR=$TMPDIR"; for f in "$@"; do if echo probe > "$f" 2>/dev/null; then echo "written: $f"; else echo "blocked: $f"; fi; done
 echo "direct: $(curl -sS -m 10 -o /dev/null -w "%{http_code}" "https://'"$NET_HOST"'/" 2>&1 | tr "\n" " ")"' sh "$RUN_CWD/inside.txt" "$SESSION_TMP/probe.txt" "$outside" "$other"
   local inside=missing tmp=missing h=blocked t=blocked seen
@@ -177,7 +179,7 @@ echo "direct: $(curl -sS -m 10 -o /dev/null -w "%{http_code}" "https://'"$NET_HO
   seen=$(sed -n 's/^TMPDIR=//p' "$CHECK_DIR/stdout.txt")
   net=$(sed -n 's/^direct: //p' "$CHECK_DIR/stdout.txt")
   local detail="cwd=$inside session-tmp=$tmp \$HOME=$h /tmp=$t TMPDIR=[$seen] direct: $net"
-  case "$net" in *200*) record $id codex fail "$detail"; end_check; return ;; esac
+  case "$net" in *000*) ;; *) record $id codex fail "$detail"; end_check; return ;; esac
   if [ "$inside" = written ] && [ "$tmp" = written ] && [ "$h" = blocked ] && [ "$t" = blocked ]; then
     record $id codex pass "$detail"
   else

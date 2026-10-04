@@ -28,7 +28,7 @@
   <li>按给出的顺序加载 <code>--env-file</code>。</li>
   <li>按给出的顺序应用 <code>--env</code>。</li>
   <li>读取 <code>AGENTRUN_</code> 开头的变量（<code>AGENTRUN_SANDBOX</code> 与两个凭据变量），然后从会话环境删除所有 <code>AGENTRUN_</code> 变量。</li>
-  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；网络经过滤代理时设置代理变量。</li>
+  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；pi 与 codex 的 <code>PI_CODING_AGENT_DIR</code> 与 <code>CODEX_HOME</code> 指向<a href="#runtime-home">私有配置目录</a>；网络经过滤代理时设置代理变量。</li>
 </ol>
 <table>
   <thead>
@@ -78,13 +78,15 @@ GREETING='hello world'</code></pre>
     <tr><th>运行时</th><th>位置</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td>pi</td><td>会话临时目录下的 <code>pi-agent/</code>，<code>PI_CODING_AGENT_DIR</code> 指向它</td><td><code>auth.json</code> 与 <code>models.json</code>：指向用户状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>）里同名文件的符号链接，用户没有该文件时不建。<code>settings.json</code>：只含用户设置里的 <code>defaultProvider</code> 与 <code>defaultModel</code></td></tr>
+    <tr><td>pi</td><td>会话临时目录下的 <code>pi-agent/</code>，<code>PI_CODING_AGENT_DIR</code> 指向它</td><td><code>auth.json</code> 与 <code>models.json</code>：指向用户状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>）里同名文件的符号链接，用户没有该文件时不建。<code>bin/fd</code> 与 <code>bin/rg</code>：指向用户状态目录 <code>bin/</code> 里同名文件的符号链接，用户没有该文件时不建。<code>settings.json</code>：只含用户设置里的 <code>defaultProvider</code> 与 <code>defaultModel</code></td></tr>
     <tr><td>codex</td><td>与会话临时目录同级的 <code>agentrun-&lt;同一后缀&gt;-codex/</code>，<code>CODEX_HOME</code> 指向它</td><td><code>auth.json</code>：指向用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）的符号链接。codex 运行中在这里写它自己的数据库与缓存</td></tr>
   </tbody>
 </table>
+<p>用户状态目录与用户登录文件的位置按应用 <code>--env-file</code> 与 <code>--env</code> 之后的会话环境计算。调用方给出的 <code>PI_CODING_AGENT_DIR</code> 与 <code>CODEX_HOME</code> 只决定从哪里带入文件，组装环境的最后一步把这两个变量改为指向私有目录。</p>
 <p>几个容易被改坏的决定：</p>
 <ul>
   <li>pi 不用用户的状态目录：那里有 pi 的启动脚本、安装目录与扩展。沙箱里的 agent 能写这个目录时，用户下次在沙箱外运行 pi 就会执行 agent 写进去的代码。用私有目录后，沙箱只需放行用户的 <code>auth.json</code> 这一个文件。</li>
+  <li>pi 的 <code>bin/</code> 只链接 <code>fd</code> 与 <code>rg</code>：pi 的 find 与 grep 工具先在 <code>&lt;状态目录&gt;/bin</code> 里找这两个程序，再找 PATH，都没有时下载；<code>--offline</code> 下不下载，工具直接报错（pi 1.0.1 源码，云端复现）。pi 下载过的 fd 与 rg 在用户的 <code>bin/</code> 里，macOS 默认没有这两个程序。不链接整个 <code>bin/</code>，因为 pi 把这个目录加到命令的 PATH 前面，里面还有 pi 自己的启动脚本。</li>
   <li>codex 不用用户的 <code>CODEX_HOME</code>：只加 <code>--ignore-user-config</code> 与 <code>--ignore-rules</code> 时，codex 仍读取 <code>CODEX_HOME</code> 里的 <code>AGENTS.md</code>、<code>.env</code> 与技能目录（codex 0.159.2 实测与源码）。</li>
   <li>登录文件用符号链接：两个运行时刷新 OAuth 令牌时都原地改写登录文件（pi 1.0.2 用 <code>writeFileSync</code>，codex 0.159.2 截断后重写，均为源码），新令牌经链接写回用户的文件。复制一份会让刷新后的令牌只留在私有目录里，服务商轮换刷新令牌后，用户原来的登录就失效了。运行时将来改为先写临时文件再重命名时，链接会被换成普通文件，这个做法随之失效。</li>
   <li>codex 的目录不放在会话临时目录里：<code>CODEX_HOME</code> 在会话的 <code>TMPDIR</code> 之下时，codex 不创建它执行 <code>apply_patch</code> 等命令所需的别名（codex 0.159.2 源码）。</li>
