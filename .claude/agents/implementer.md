@@ -39,4 +39,4 @@ isolation: worktree
 2. 如何验证的：运行了哪些命令、测试结果。
 3. 没做、跳过或不确定的部分。
 4. 如果判断过两处相近的逻辑是否应该合并，写明判断结果和理由。
-5. 改动了 `docs/design/` 时，附上 `uv run scripts/check_design.py` 的输出和截图目录，并写明看过哪些截图。
+5. 改动了 `docs/` 时，附上 `uv run scripts/check_design.py` 的输出和截图目录，并写明看过哪些截图。
