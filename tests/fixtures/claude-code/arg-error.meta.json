@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-461f0616/failure-samples-claude-code/arg", "exit_code": 1, "stderr": "error: unknown option '--no-such-flag-probe'\n"}

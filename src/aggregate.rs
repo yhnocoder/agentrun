@@ -162,7 +162,7 @@ impl Aggregator {
                 self.result = Some(text);
                 Vec::new()
             }
-            Record::Terminate => Vec::new(),
+            Record::Debug(_) | Record::Terminate => Vec::new(),
         }
     }
 

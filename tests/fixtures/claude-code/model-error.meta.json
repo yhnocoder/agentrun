@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-461f0616/failure-samples-claude-code/model", "exit_code": 1, "stderr": "[claude-code:unrecognized_model] {\"model\":\"no-such-model-probe\",\"query_source\":\"sdk\"}\n"}

@@ -1,0 +1,8 @@
+{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents."}
+{"schema":1,"type":"tool","id":"toolu_01W9NTdBoj6aAaxsr2YWr16h","parent":null,"name":"Write","summary":"Write: probe.txt","denied":false}
+{"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":16,"cache_read_tokens":9878,"cache_write_tokens":3982,"context_tokens":13862}
+{"schema":1,"type":"tool","id":"toolu_01Lamyv1PCYcwf1bfFzA7mmP","parent":null,"name":"Read","summary":"Read: probe.txt","denied":false}
+{"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":5,"cache_read_tokens":13860,"cache_write_tokens":190,"context_tokens":14052}
+{"schema":1,"type":"text","parent":null,"text":"`probe.txt` is in the current working directory. I read it back, and it contains:\n\n```\nhello probe\n```"}
+{"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":36,"cache_read_tokens":14050,"cache_write_tokens":147,"context_tokens":14199}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":928,"output_tokens":266,"cache_read_tokens":37788,"cache_write_tokens":4319,"by_model":{"claude-haiku-4-5-20251001":{"input_tokens":922,"output_tokens":14,"cache_read_tokens":0,"cache_write_tokens":0},"claude-sonnet-5-5":{"input_tokens":6,"output_tokens":252,"cache_read_tokens":37788,"cache_write_tokens":4319}}},"result":"`probe.txt` is in the current working directory. I read it back, and it contains:\n\n```\nhello probe\n```"}
