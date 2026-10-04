@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod aggregate;
+pub mod claudecode;
 pub mod cli;
 pub mod credential;
 pub mod event;

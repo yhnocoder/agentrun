@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::claudecode::ClaudeCode;
 use crate::cli::Runtime;
 use crate::event::SubagentStatus;
 use crate::run::Invocation;
@@ -9,10 +10,18 @@ use crate::usage::{TokenCounts, Usage};
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
-    fn launch(&self, executable: &Path, invocation: &Invocation) -> Launch;
+    fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String>;
     fn echoes_prompt(&self) -> bool;
     fn translate(&mut self, line: &Value) -> Vec<Record>;
+    fn after_exit(&mut self) -> Vec<Record>;
     fn failure(&self, exit_code: Option<i32>, stderr_tail: &str) -> Option<String>;
+}
+
+pub fn builtin(runtime: Runtime) -> Option<Box<dyn Adapter>> {
+    match runtime {
+        Runtime::ClaudeCode => Some(Box::new(ClaudeCode::new())),
+        Runtime::Codex | Runtime::Pi => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,5 +69,6 @@ pub enum Record {
     Result {
         text: String,
     },
+    Debug(String),
     Terminate,
 }

@@ -5,23 +5,91 @@ use std::time::Instant;
 
 use agentrun::adapter::Adapter;
 use agentrun::aggregate::Aggregator;
-use agentrun::run::{Exit, conclude, translate_line};
+use agentrun::cli::{Cli, Format, SandboxMode};
+use agentrun::event::SandboxKind;
+use agentrun::run::{Exit, Invocation, conclude, stderr_tail, translate_line};
+use agentrun::sandbox::Sandbox;
+use clap::Parser;
 use serde_json::Value;
+
+pub struct Meta {
+    pub cwd: PathBuf,
+    pub exit_code: Option<i32>,
+    pub stderr: String,
+}
+
+pub fn read_meta(path: &Path) -> Option<Meta> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&text).expect("meta fixture is JSON");
+    Some(Meta {
+        cwd: PathBuf::from(value["cwd"].as_str().expect("meta has cwd")),
+        exit_code: value["exit_code"].as_i64().map(|code| code as i32),
+        stderr: value["stderr"].as_str().unwrap_or_default().to_string(),
+    })
+}
+
+pub fn invocation(cwd: &Path, prompt: &str, sandboxed: bool) -> Invocation {
+    let cli = Cli::try_parse_from(["agentrun", "claude-code", "--prompt", prompt]).unwrap();
+    let (runtime, args) = cli.command.into_parts();
+    Invocation {
+        runtime,
+        args,
+        cwd: cwd.to_path_buf(),
+        prompt: prompt.to_string(),
+        format: Format::Jsonl,
+        sandbox: Sandbox {
+            mode: SandboxMode::On,
+            kind: if sandboxed {
+                SandboxKind::Bubblewrap
+            } else {
+                SandboxKind::None
+            },
+            reason: String::new(),
+            bwrap: None,
+            description: String::new(),
+        },
+        tempdir: PathBuf::from("/tmp/agentrun-replay"),
+    }
+}
 
 pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value> {
     let started = Instant::now();
     let content = std::fs::read(raw).expect("raw fixture is readable");
+    let meta = read_meta(
+        &raw.with_file_name(
+            raw.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .replace(".raw.jsonl", ".meta.json"),
+        ),
+    );
+    let (exit, stderr) = match &meta {
+        Some(meta) => {
+            adapter
+                .launch(Path::new("claude"), &invocation(&meta.cwd, prompt, true))
+                .unwrap();
+            let exit = Exit {
+                code: meta.exit_code,
+                signal: None,
+                timed_out: false,
+            };
+            (exit, stderr_tail(&meta.stderr))
+        }
+        None => {
+            let exit = Exit {
+                code: Some(0),
+                signal: None,
+                timed_out: false,
+            };
+            (exit, String::new())
+        }
+    };
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
     let mut events = aggregator.begin(prompt);
     for line in content.split(|byte| *byte == b'\n') {
-        events.extend(translate_line(line, adapter, &mut aggregator).0);
+        events.extend(translate_line(line, adapter, &mut aggregator).events);
     }
-    let exit = Exit {
-        code: Some(0),
-        signal: None,
-        timed_out: false,
-    };
-    let (rest, _) = conclude(aggregator, adapter, &exit, "", started);
+    let (rest, _) = conclude(aggregator, adapter, &exit, &stderr, started);
     events.extend(rest);
     events
         .iter()

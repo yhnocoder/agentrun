@@ -26,6 +26,12 @@ impl Env {
         env
     }
 
+    fn with_fake_pi() -> Env {
+        let env = Env::new();
+        env.install("pi", "#!/bin/sh\nexit 0\n");
+        env
+    }
+
     fn install(&self, name: &str, script: &str) {
         let path = self.bin().join(name);
         std::fs::write(&path, script).unwrap();
@@ -265,7 +271,7 @@ fn runtime_missing_from_path_is_rejected() {
 }
 
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
-const ADAPTER_MISSING: &str = "claude-code support is not implemented in this build";
+const ADAPTER_MISSING: &str = "pi support is not implemented in this build";
 
 fn assert_rejected_with_debug(output: &Output, debug_lines: &[&str]) -> String {
     assert_eq!(output.status.code(), Some(2));
@@ -299,15 +305,8 @@ fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
 
 #[test]
 fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
-    let env = Env::with_fake_claude();
-    let output = env.run(&[
-        "claude-code",
-        "--sandbox",
-        "relax",
-        "--debug",
-        "--prompt",
-        "hi",
-    ]);
+    let env = Env::with_fake_pi();
+    let output = env.run(&["pi", "--sandbox", "relax", "--debug", "--prompt", "hi"]);
     assert_eq!(
         assert_rejected_with_debug(
             &output,
@@ -363,27 +362,21 @@ fn missing_socat_is_rejected() {
 
 #[test]
 fn sandbox_variable_from_every_source_and_option_precedence() {
-    let env = Env::with_fake_claude();
+    let env = Env::with_fake_pi();
     let output = env
-        .command(&["claude-code", "--prompt", "hi"])
+        .command(&["pi", "--prompt", "hi"])
         .env("AGENTRUN_SANDBOX", "off")
         .output()
         .unwrap();
     assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
     let output = env
-        .command(&["claude-code", "--env", "AGENTRUN_SANDBOX", "--prompt", "hi"])
+        .command(&["pi", "--env", "AGENTRUN_SANDBOX", "--prompt", "hi"])
         .env("AGENTRUN_SANDBOX", "off")
         .output()
         .unwrap();
     assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
     assert_eq!(
-        assert_rejected(&env.run(&[
-            "claude-code",
-            "--env",
-            "AGENTRUN_SANDBOX=off",
-            "--prompt",
-            "hi"
-        ])),
+        assert_rejected(&env.run(&["pi", "--env", "AGENTRUN_SANDBOX=off", "--prompt", "hi"])),
         ADAPTER_MISSING
     );
     std::fs::write(
@@ -392,12 +385,12 @@ fn sandbox_variable_from_every_source_and_option_precedence() {
     )
     .unwrap();
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--env-file", "sandbox.env", "--prompt", "hi"])),
+        assert_rejected(&env.run(&["pi", "--env-file", "sandbox.env", "--prompt", "hi"])),
         ADAPTER_MISSING
     );
     assert_eq!(
         assert_rejected(&env.run(&[
-            "claude-code",
+            "pi",
             "--env-file",
             "sandbox.env",
             "--sandbox",
@@ -408,7 +401,7 @@ fn sandbox_variable_from_every_source_and_option_precedence() {
         format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
     );
     let output = env
-        .command(&["claude-code", "--prompt", "hi"])
+        .command(&["pi", "--prompt", "hi"])
         .env("AGENTRUN_SANDBOX", "maybe")
         .output()
         .unwrap();
@@ -458,10 +451,10 @@ fn real_bwrap_passes_the_sandbox_step() {
         eprintln!("skipped: bwrap is not installed");
         return;
     };
-    let env = Env::with_fake_claude();
+    let env = Env::with_fake_pi();
     let system = bwrap.parent().unwrap();
     let output = env
-        .command(&["claude-code", "--debug", "--prompt", "hi"])
+        .command(&["pi", "--debug", "--prompt", "hi"])
         .env(
             "PATH",
             format!("{}:{}", env.bin().display(), system.display()),
@@ -488,7 +481,7 @@ fn real_bwrap_passes_the_sandbox_step() {
         Some(format!("agentrun: {ADAPTER_MISSING}").as_str())
     );
     let output = env
-        .command(&["claude-code", "--network", "full", "--prompt", "hi"])
+        .command(&["pi", "--network", "full", "--prompt", "hi"])
         .env(
             "PATH",
             format!("{}:{}", env.bin().display(), system.display()),
@@ -503,10 +496,11 @@ fn real_bwrap_passes_the_sandbox_step() {
 
 #[test]
 fn missing_adapter_is_rejected_without_tempdir() {
-    let env = Env::with_fake_claude();
+    let env = Env::new();
+    env.install("pi", "#!/bin/sh\nexit 0\n");
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--sandbox", "off", "--prompt", "hi"])),
-        "claude-code support is not implemented in this build"
+        assert_rejected(&env.run(&["pi", "--sandbox", "off", "--prompt", "hi"])),
+        "pi support is not implemented in this build"
     );
     assert!(env.no_leftover_tempdirs());
 }
@@ -559,12 +553,13 @@ fn malformed_env_file_line_is_rejected_without_its_content() {
 
 #[test]
 fn runtime_is_found_through_path_option() {
-    let env = Env::with_fake_claude();
+    let env = Env::new();
+    env.install("pi", "#!/bin/sh\nexit 0\n");
     let empty = env.root.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
     let output = env
         .command(&[
-            "claude-code",
+            "pi",
             "--sandbox",
             "off",
             "--path",
@@ -577,14 +572,14 @@ fn runtime_is_found_through_path_option() {
         .unwrap();
     assert_eq!(
         assert_rejected(&output),
-        "claude-code support is not implemented in this build"
+        "pi support is not implemented in this build"
     );
     let output = env
-        .command(&["claude-code", "--sandbox", "off", "--prompt", "hi"])
+        .command(&["pi", "--sandbox", "off", "--prompt", "hi"])
         .env("PATH", &empty)
         .output()
         .unwrap();
-    assert_eq!(assert_rejected(&output), "claude not found in PATH");
+    assert_eq!(assert_rejected(&output), "pi not found in PATH");
 }
 
 #[test]

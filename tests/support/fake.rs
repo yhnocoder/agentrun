@@ -27,14 +27,14 @@ impl Adapter for FakeAdapter {
         Runtime::ClaudeCode
     }
 
-    fn launch(&self, executable: &Path, invocation: &Invocation) -> Launch {
+    fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
         argv.push(invocation.prompt.clone());
-        Launch {
+        Ok(Launch {
             argv,
             stdin: format!("{}\n", invocation.prompt).into_bytes(),
-        }
+        })
     }
 
     fn echoes_prompt(&self) -> bool {
@@ -106,6 +106,10 @@ impl Adapter for FakeAdapter {
             _ => return Vec::new(),
         };
         vec![record]
+    }
+
+    fn after_exit(&mut self) -> Vec<Record> {
+        Vec::new()
     }
 
     fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {

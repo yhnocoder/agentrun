@@ -33,6 +33,7 @@ const STDERR_TAIL_CHARS: usize = 500;
 const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
+const DRY_RUN_TEMPDIR: &str = "<tempdir>";
 
 pub type AdapterLookup = dyn Fn(Runtime) -> Option<Box<dyn Adapter>>;
 
@@ -92,12 +93,13 @@ pub struct Invocation {
     pub prompt: String,
     pub format: Format,
     pub sandbox: Sandbox,
+    pub tempdir: PathBuf,
 }
 
 struct Ready {
     invocation: Invocation,
     adapter: Box<dyn Adapter>,
-    launch: Launch,
+    executable: PathBuf,
     raw: Option<(PathBuf, File)>,
     session: Session,
 }
@@ -129,14 +131,22 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     let (runtime, args) = cli.command.into_parts();
     let format = args.format.unwrap_or(fallback_format);
     caller.signals.format(format);
-    let ready = match prepare(&mut caller, runtime, args, format, adapters) {
+    let mut ready = match prepare(&mut caller, runtime, args, format, adapters) {
         Ok(ready) => ready,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
-    let mut plan = plan_lines(&ready);
     if ready.invocation.args.dry_run {
+        ready.invocation.tempdir = PathBuf::from(DRY_RUN_TEMPDIR);
+        let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
+            Ok(launch) => launch,
+            Err(detail) => return reject(&mut caller, format, &detail, started),
+        };
         caller.signals.finishing();
-        caller.print_lines(&plan);
+        caller.print_lines(&plan_lines(
+            &launch,
+            &ready.session,
+            &ready.invocation.prompt,
+        ));
         return 0;
     }
     let credential = match write_session_credential(
@@ -147,7 +157,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         Ok(credential) => credential,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
-    plan.push(match credential {
+    let credential_line = match credential {
         Some(report) => format!(
             "credentials: {} -> {} ({})",
             report.variable,
@@ -155,7 +165,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
             report.status.name()
         ),
         None => "credentials: (none)".to_string(),
-    });
+    };
     if ready.invocation.runtime == Runtime::Pi
         && ready.invocation.sandbox.kind == SandboxKind::Bubblewrap
     {
@@ -172,7 +182,14 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     caller
         .signals
         .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
-    execute(caller, ready, plan, tempdir, started)
+    ready.invocation.tempdir = tempdir.path().to_path_buf();
+    let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
+        Ok(launch) => launch,
+        Err(detail) => return reject(&mut caller, format, &detail, started),
+    };
+    let mut plan = plan_lines(&launch, &ready.session, &ready.invocation.prompt);
+    plan.push(credential_line);
+    execute(caller, ready, launch, plan, tempdir, started)
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
@@ -240,12 +257,12 @@ fn prepare(
         prompt,
         format,
         sandbox,
+        tempdir: PathBuf::new(),
     };
-    let launch = adapter.launch(&executable, &invocation);
     Ok(Ready {
         invocation,
         adapter,
-        launch,
+        executable,
         raw,
         session,
     })
@@ -316,10 +333,8 @@ fn create_tempdir(caller: &Caller) -> Result<TempDir, String> {
         })
 }
 
-fn plan_lines(ready: &Ready) -> Vec<String> {
-    let prompt = &ready.invocation.prompt;
-    let command = ready
-        .launch
+fn plan_lines(launch: &Launch, session: &Session, prompt: &str) -> Vec<String> {
+    let command = launch
         .argv
         .iter()
         .map(|arg| {
@@ -331,7 +346,6 @@ fn plan_lines(ready: &Ready) -> Vec<String> {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    let session = &ready.session;
     vec![
         format!("command: {command}"),
         format!("PATH: {}", session.path.to_string_lossy()),
@@ -367,6 +381,7 @@ pub fn shell_quote(arg: &str) -> String {
 fn execute(
     mut caller: Caller,
     ready: Ready,
+    launch: Launch,
     plan: Vec<String>,
     tempdir: TempDir,
     started: Instant,
@@ -374,9 +389,9 @@ fn execute(
     let Ready {
         invocation,
         mut adapter,
-        launch,
         raw,
         session,
+        ..
     } = ready;
     let debug = invocation.args.debug;
     let raw = match raw {
@@ -496,21 +511,26 @@ fn execute(
             bytes.push(b'\n');
             let _ = file.write_all(&bytes);
         }
-        let (events, terminate) = translate_line(content, adapter.as_mut(), &mut aggregator);
-        for event in events {
+        let translated = translate_line(content, adapter.as_mut(), &mut aggregator);
+        for event in translated.events {
             caller.emit(&mut output, &event);
         }
-        terminate
+        if debug {
+            for line in translated.debug {
+                caller.print_error_line(&format!("[debug] {line}"));
+            }
+        }
+        translated.terminate
     });
 
     let tail = tail.lock().map(|tail| tail.clone()).unwrap_or_default();
-    let stderr_tail = tail_chars(String::from_utf8_lossy(&tail).trim_end(), STDERR_TAIL_CHARS);
+    let stderr_tail = stderr_tail(&String::from_utf8_lossy(&tail));
     let exit = Exit {
         code: exit_code,
         signal: caller.signals.first_signal(),
         timed_out: caller.signals.timed_out(),
     };
-    let (events, status) = conclude(aggregator, adapter.as_ref(), &exit, &stderr_tail, started);
+    let (events, status) = conclude(aggregator, adapter.as_mut(), &exit, &stderr_tail, started);
     for event in &events {
         caller.emit(&mut output, event);
     }
@@ -593,24 +613,38 @@ fn wait_child(mut child: Child, sender: &Sender<Message>) {
     }
 }
 
+pub struct Translated {
+    pub events: Vec<Event>,
+    pub debug: Vec<String>,
+    pub terminate: bool,
+}
+
 pub fn translate_line(
     line: &[u8],
     adapter: &mut dyn Adapter,
     aggregator: &mut Aggregator,
-) -> (Vec<Event>, bool) {
-    let Ok(value) = serde_json::from_slice::<Value>(line) else {
-        return (Vec::new(), false);
+) -> Translated {
+    let records = match serde_json::from_slice::<Value>(line) {
+        Ok(value) => adapter.translate(&value),
+        Err(_) => Vec::new(),
     };
-    let mut events = Vec::new();
-    let mut terminate = false;
-    for record in adapter.translate(&value) {
-        if record == Record::Terminate {
-            terminate = true;
-        } else {
-            events.extend(aggregator.push(record));
+    push_records(records, aggregator)
+}
+
+fn push_records(records: Vec<Record>, aggregator: &mut Aggregator) -> Translated {
+    let mut translated = Translated {
+        events: Vec::new(),
+        debug: Vec::new(),
+        terminate: false,
+    };
+    for record in records {
+        match record {
+            Record::Terminate => translated.terminate = true,
+            Record::Debug(line) => translated.debug.push(line),
+            record => translated.events.extend(aggregator.push(record)),
         }
     }
-    (events, terminate)
+    translated
 }
 
 fn forward_stderr(
@@ -640,6 +674,10 @@ fn forward_stderr(
     }
 }
 
+pub fn stderr_tail(stderr: &str) -> String {
+    tail_chars(stderr.trim_end(), STDERR_TAIL_CHARS)
+}
+
 fn tail_chars(text: &str, count: usize) -> String {
     let skip = text.chars().count().saturating_sub(count);
     text.chars().skip(skip).collect()
@@ -652,13 +690,15 @@ fn finish_tempdir(tempdir: TempDir, debug: bool) {
 }
 
 pub fn conclude(
-    aggregator: Aggregator,
-    adapter: &dyn Adapter,
+    mut aggregator: Aggregator,
+    adapter: &mut dyn Adapter,
     exit: &Exit,
     stderr_tail: &str,
     started: Instant,
 ) -> (Vec<Event>, EndStatus) {
-    let (mut events, summary) = aggregator.finish();
+    let mut events = push_records(adapter.after_exit(), &mut aggregator).events;
+    let (rest, summary) = aggregator.finish();
+    events.extend(rest);
     let (status, detail) = match (exit.signal, exit.timed_out) {
         (Some(signal), _) => (EndStatus::Interrupted(signal), String::new()),
         (None, true) => (EndStatus::Timeout, String::new()),
