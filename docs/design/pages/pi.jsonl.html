@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi 事件流</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+</head>
+<body>
+<main>
+<p class="nav"><a href="../index.html">返回索引</a></p>
+<h1>pi 事件流 <span class="tag">字段参考</span></h1>
+<p class="lead">本文是 <code>pi -p --mode json</code> 输出的事件流的字段参考：每种事件何时出现、有哪些字段、字段的类型与含义、典型运行的顺序、错误与退出码、与旧版本的差异。写给要为这条流写解析器的人，<mark>不依赖 agentrun 的其他文档</mark>。依据是 pi 1.0.1（npm 包 <code>@earendil-works/pi-coding-agent</code>）在 Linux 容器里的实测输出，以及随包安装的 <code>docs/json.md</code>、<code>docs/message-types.md</code>、<code>docs/session-format.md</code>、<code>docs/cli-integration.md</code> 与 <code>CHANGELOG.md</code>。字段表中标出了每一项的来源。</p>
+
+<blockquote>
+  <p>读这条流的三条规则：第一行是 <code>session</code> 头，之后每行一个事件，按 <code>type</code> 分发，不认识的类型跳过；<code>message_end</code> 里的 <code>message</code> 是权威的完整消息，<code>message_update</code> 只用于实时显示；成败看最后一个 assistant 消息的 <code>stopReason</code>，退出码只区分启动失败与被中断，模型调用失败时退出码仍是 0。</p>
+</blockquote>
+
+<h2>怎样产生这条流</h2>
+<pre><code class="language-bash">pi -p --mode json \
+  --no-session --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files \
+  --offline --tools read,bash,edit,write,grep,find,ls \
+  -- "提示词"</code></pre>
+<p><code>--mode json</code> 选择逐行 JSON 输出，处理完命令行给出的全部提示词后退出，运行中不接受新的输入。<code>-p</code>（<code>--print</code>）在 <code>--mode json</code> 下可以省略，加上它的效果相同。提示词也可以从标准输入管道传入。标准输出里只有 JSON 行，诊断信息写到标准错误。</p>
+<p>以下选项改变流的内容：</p>
+<table>
+  <thead>
+    <tr><th>选项</th><th>对流的影响</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--model &lt;pattern&gt;</code>、<code>--provider &lt;name&gt;</code></td><td>决定 assistant 消息的 <code>provider</code>、<code>model</code>、<code>api</code> 字段。模型名不存在时进程启动失败，见「错误、中断与退出码」</td></tr>
+    <tr><td><code>--thinking &lt;level&gt;</code></td><td><code>off</code>、<code>minimal</code>、<code>low</code>、<code>medium</code>、<code>high</code>、<code>xhigh</code>、<code>max</code>。决定 assistant 消息的 <code>thinkingLevel</code>，以及是否出现 thinking 内容块。也可以写成 <code>--model 名字:级别</code></td></tr>
+    <tr><td><code>--tools &lt;list&gt;</code></td><td>替换整个工具列表，决定 system 消息的 <code>toolsAdded</code> 与模型能调用的工具名。默认是 <code>read</code>、<code>bash</code>、<code>edit</code>、<code>write</code></td></tr>
+    <tr><td><code>--session-id &lt;id&gt;</code></td><td>决定 <code>session</code> 头的 <code>id</code>。不给时 pi 生成一个 UUID v7</td></tr>
+    <tr><td><code>--no-session</code></td><td>不把会话写到磁盘。流的内容不变，仍然输出 <code>session</code> 头</td></tr>
+    <tr><td><code>--no-extensions</code>、<code>--no-skills</code>、<code>--no-prompt-templates</code>、<code>--no-themes</code>、<code>--no-context-files</code></td><td>不加载对应的扩展与配置。关闭扩展后不会出现扩展产生的事件（<code>entry_appended</code>、自定义消息角色）；关闭上下文文件与技能后 system 消息的 <code>sections</code> 更短</td></tr>
+    <tr><td><code>--offline</code></td><td>不检查更新、不刷新模型目录。流的内容不变</td></tr>
+    <tr><td><code>--system-prompt</code>、<code>--append-system-prompt</code></td><td>改变 system 消息 <code>sections</code> 的内容。未实测</td></tr>
+  </tbody>
+</table>
+<p>模型 API 的凭据通过环境变量（例如 <code>DEEPSEEK_API_KEY</code>、<code>ANTHROPIC_API_KEY</code>）、<code>pi auth</code> 保存的登录信息或 <code>--api-key</code> 提供。本文样本使用 <code>deepseek</code> provider 的 <code>deepseek-flash</code> 模型，走 <code>openai-completions</code> API；其他 provider 的 <code>api</code> 值、<code>rawStopReason</code> 值与 thinking 块的签名形式会不同。</p>
+
+<h2>每行的格式</h2>
+<p>每行是一个 JSON 对象，以 LF 结尾。文档要求按 LF 切行，去掉行尾可选的 CR，不要把 Unicode 行分隔符（U+2028、U+2029）当作行界，它们可以合法地出现在 JSON 字符串里。每个对象都有 <code>type</code>。除 <code>type</code> 之外没有所有事件共有的字段：事件本身没有 id、时间戳和会话 id，时间戳在 <code>message</code> 对象上（<code>timestamp</code>，Unix 毫秒整数），会话 id 只在第一行的 <code>session</code> 头里。</p>
+<p>读取方必须持续消费标准输出。文档说明管道缓冲区满时 pi 会阻塞。</p>
+
+<h2>有哪些事件</h2>
+<p>「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述；「0.73.1 观测」表示在 0.73.1 的样本中出现过、1.0.1 的样本里没有遇到触发条件。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>session</code></td><td>第一行，一次</td><td>观测</td></tr>
+    <tr><td><code>agent_start</code></td><td>一次 agent 运行开始。正常运行一次；自动重试时每次尝试一次</td><td>观测</td></tr>
+    <tr><td><code>turn_start</code></td><td>每次模型调用之前</td><td>观测</td></tr>
+    <tr><td><code>message_start</code></td><td>每条消息开始：system、user、assistant、toolResult</td><td>观测</td></tr>
+    <tr><td><code>message_update</code></td><td>assistant 消息流式输出中的每个片段</td><td>观测</td></tr>
+    <tr><td><code>message_end</code></td><td>每条消息完成，<code>message</code> 为最终内容</td><td>观测</td></tr>
+    <tr><td><code>tool_execution_start</code></td><td>每次工具执行开始</td><td>观测</td></tr>
+    <tr><td><code>tool_execution_update</code></td><td>工具报告部分结果。样本中只有 <code>bash</code> 工具产生</td><td>观测</td></tr>
+    <tr><td><code>tool_execution_end</code></td><td>每次工具执行结束</td><td>观测</td></tr>
+    <tr><td><code>turn_end</code></td><td>一次模型调用及其工具结果全部完成</td><td>观测</td></tr>
+    <tr><td><code>agent_end</code></td><td>一次 agent 运行结束</td><td>观测</td></tr>
+    <tr><td><code>agent_settled</code></td><td>没有剩余的自动工作（重试、压缩恢复、排队消息），正常运行的最后一行</td><td>观测</td></tr>
+    <tr><td><code>auto_retry_start</code>、<code>auto_retry_end</code></td><td>模型调用失败后自动重试前后</td><td>0.73.1 观测</td></tr>
+    <tr><td><code>queue_update</code></td><td>steering 或 follow-up 队列变化。JSON 模式没有输入通道，正常情况不会出现</td><td>文档</td></tr>
+    <tr><td><code>entry_appended</code></td><td>扩展通过 <code>pi.appendEntry()</code> 追加自定义条目</td><td>文档</td></tr>
+    <tr><td><code>session_info_changed</code></td><td>会话显示名变化</td><td>文档</td></tr>
+    <tr><td><code>thinking_level_changed</code></td><td>thinking 级别变化</td><td>文档</td></tr>
+    <tr><td><code>compaction_start</code>、<code>compaction_end</code></td><td>上下文压缩开始与结束</td><td>文档</td></tr>
+    <tr><td><code>summarization_retry_scheduled</code>、<code>summarization_retry_attempt_start</code>、<code>summarization_retry_finished</code></td><td>压缩或分支摘要失败后的重试</td><td>文档</td></tr>
+    <tr><td><code>bash_execution_update</code>、<code>extension_error</code></td><td>只在 RPC 模式出现，JSON 模式没有</td><td>文档</td></tr>
+  </tbody>
+</table>
+
+<h2>一次运行的顺序</h2>
+<p>下面是一次「运行一条命令、回答结果」的运行。流里每行一个事件，缩进只为阅读。</p>
+<div class="term">session
+agent_start
+turn_start
+message_start            <span class="dim">role system（系统提示与工具定义）</span>
+message_end              <span class="dim">role system</span>
+message_start            <span class="dim">role user（提示词）</span>
+message_end              <span class="dim">role user</span>
+<span class="dim">第 1 次模型调用：thinking 之后一个 bash 工具调用</span>
+message_start            <span class="dim">role assistant，content []，stopReason pending</span>
+message_update  ×N       <span class="dim">thinking_start、thinking_delta…、toolcall_start、toolcall_delta…</span>
+message_update           <span class="dim">thinking_end（usage 从这里开始非零）</span>
+message_update           <span class="dim">toolcall_end</span>
+message_end              <span class="dim">role assistant，stopReason toolUse</span>
+tool_execution_start     <span class="dim">bash</span>
+tool_execution_update    <span class="dim">partialResult.content []</span>
+tool_execution_update    <span class="dim">partialResult.content 含输出</span>
+tool_execution_end       <span class="dim">result，isError false</span>
+message_start            <span class="dim">role toolResult</span>
+message_end              <span class="dim">role toolResult</span>
+turn_end                 <span class="dim">message 为 assistant 消息，toolResults 含 1 项</span>
+<span class="dim">第 2 次模型调用：文字回答</span>
+turn_start
+message_start            <span class="dim">role assistant</span>
+message_update  ×N       <span class="dim">thinking_*、text_start、text_delta…、text_end</span>
+message_end              <span class="dim">role assistant，stopReason stop</span>
+turn_end                 <span class="dim">toolResults []</span>
+agent_end                <span class="dim">messages 含以上全部消息，willRetry false</span>
+agent_settled</div>
+<p>要点：</p>
+<ul>
+  <li>system 与 user 消息的 <code>message_start</code> 与 <code>message_end</code> 内容相同，紧挨着出现。system 消息只在第一次 <code>turn_start</code> 之后出现一次。</li>
+  <li>一次模型调用返回多个工具调用时，所有 <code>tool_execution_start</code> 先出现，然后是各自的 <code>tool_execution_update</code> 与 <code>tool_execution_end</code>，再是每个工具一对 toolResult 的 <code>message_start</code> 与 <code>message_end</code>。样本中两个工具调用的 <code>tool_execution_start</code> 连续出现，说明工具是并行执行的。用 <code>toolCallId</code> 关联。</li>
+  <li><code>turn_end.message</code> 与前一个 assistant 消息的 <code>message_end.message</code> 相同；<code>turn_end.toolResults</code> 与这一轮各 toolResult 消息相同。<code>agent_end.messages</code> 包含本次运行产生的所有消息，从 system 消息开始。因此这些字段里的内容在流里会重复出现三次，只需在一处解析。</li>
+  <li><code>agent_settled</code> 是正常运行的最后一行。文档说明 <code>agent_end</code> 之后可能还有自动重试、溢出恢复、压缩重试，这时会再次出现 <code>agent_start</code>，直到 <code>agent_settled</code>。</li>
+</ul>
+
+<h2>类型总览</h2>
+<p>从本节开始，事件的字段用 TypeScript 类型定义描述。写法约定：<code>?</code> 表示字段可能缺失；字符串字面量的并集是观测到的全部取值；没有标注来源的定义都来自 1.0.1 的样本，注释里以「文档」开头的内容只有随包安装的 <code>docs/</code> 作依据，没有样本；「0.73.1 没有」标出与旧版本的差异。</p>
+<pre><code class="language-typescript">type PiLine = SessionHeader | PiEvent;   // 第一行是 SessionHeader，之后每行一个 PiEvent
+
+type PiEvent =
+  | AgentStart | TurnStart | MessageStart | MessageUpdate | MessageEnd
+  | ToolExecutionStart | ToolExecutionUpdate | ToolExecutionEnd
+  | TurnEnd | AgentEnd | AgentSettled
+  | AutoRetryStart | AutoRetryEnd                                   // 0.73.1 观测
+  | CompactionStart | CompactionEnd                                 // 文档
+  // 文档
+  | SummarizationRetryScheduled | SummarizationRetryAttemptStart | SummarizationRetryFinished
+  // 文档</code></pre>
+  | QueueUpdate | EntryAppended | SessionInfoChanged | ThinkingLevelChanged;
+
+<h2>session 头</h2>
+<p>与会话文件的第一行相同。</p>
+<pre><code class="language-typescript">interface SessionHeader {
+  type: "session";
+  version: 3;                           // 会话文件格式版本
+  id: string;                           // 会话 id，等于 --session-id 的值，否则是 pi 生成的 UUID
+  // ISO 8601，UTC，毫秒。message 对象上的时间戳是 Unix 毫秒整数，格式不同
+  timestamp: string;
+  cwd: string;                          // 工作目录的绝对路径
+  parentSession?: string;               // 文档：fork 或 clone 出来的会话指向原会话文件的路径
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "session",
+  "version": 3,
+  "id": "SESSION_ID",
+  "timestamp": "2026-10-03T16:15:48.217Z",
+  "cwd": "/work/project"
+}</code></pre>
+
+<h2>agent 与 turn 事件</h2>
+<pre><code class="language-typescript">interface AgentStart { type: "agent_start"; }      // 一次 agent 运行开始；自动重试时每次尝试一次
+interface TurnStart { type: "turn_start"; }        // 一次模型调用开始
+
+interface TurnEnd {
+  type: "turn_end";
+  message: AssistantMessage;            // 本轮的 assistant 消息，与 message_end.message 相同
+  toolResults: ToolResultMessage[];     // 本轮的 toolResult 消息，没有工具调用时为 []
+}
+
+interface AgentEnd {
+  type: "agent_end";
+  messages: Message[];                  // 本次运行产生的全部消息，按出现顺序，从 system 消息开始
+  // true 表示 pi 将自动重试，之后会有新的 agent_start。观测值都是 false。0.73.1 没有
+  willRetry: boolean;
+}
+
+interface AgentSettled { type: "agent_settled"; }  // pi 不会再自动继续，正常运行的最后一行。0.73.1 没有</code></pre>
+<pre><code class="language-json">{
+  "type": "turn_end",
+  "message": { "role": "assistant", "content": ["..."], "stopReason": "toolUse", "...": "..." },
+  "toolResults": [
+    {
+      "role": "toolResult",
+      "toolCallId": "call_01A",
+      "toolName": "bash",
+      "content": [{ "type": "text", "text": "200" }],
+      "isError": false,
+      "timestamp": 1791044150015
+    }
+  ]
+}
+{
+  "type": "agent_end",
+  "messages": [
+    { "role": "system", "...": "..." },
+    { "role": "user", "...": "..." },
+    { "role": "assistant", "...": "..." },
+    { "role": "toolResult", "...": "..." },
+    { "role": "assistant", "...": "..." }
+  ],
+  "willRetry": false
+}
+{ "type": "agent_settled" }</code></pre>
+
+<h2>message 事件</h2>
+<p><code>message_start</code> 与 <code>message_end</code> 只有一个字段 <code>message</code>。<code>message.role</code> 决定对象的其余字段。观测到四种角色：<code>system</code>、<code>user</code>、<code>assistant</code>、<code>toolResult</code>。文档另外定义了 <code>bashExecution</code>（RPC 的直接 shell 命令）、<code>custom</code>（扩展注入的上下文）、<code>branchSummary</code> 与 <code>compactionSummary</code>（压缩产生的摘要），解析器应容忍未知角色。</p>
+<pre><code class="language-typescript">interface MessageStart { type: "message_start"; message: Message; }
+interface MessageEnd { type: "message_end"; message: Message; }      // message 是权威的完整消息
+
+type Message =
+  | SystemMessage | UserMessage | AssistantMessage | ToolResultMessage
+  // 文档
+  | BashExecutionMessage | CustomMessage | BranchSummaryMessage | CompactionSummaryMessage;
+
+// 文档：以下四种角色没有样本
+interface BashExecutionMessage {
+  role: "bashExecution";
+  command: string; output: string; exitCode: number | undefined;
+  cancelled: boolean; truncated: boolean; fullOutputPath?: string; excludeFromContext?: boolean;
+  timestamp: number;
+}
+interface CustomMessage {
+  role: "custom";
+  customType: string; content: string | (TextContent | ImageContent)[]; display: boolean; details?: unknown;
+  timestamp: number;
+}
+interface BranchSummaryMessage { role: "branchSummary"; summary: string; fromId: string | null; timestamp: number; }
+interface CompactionSummaryMessage { role: "compactionSummary"; summary: string; tokensBefore: number; timestamp: number; }</code></pre>
+
+<h3>system 消息</h3>
+<p>第一次 <code>turn_start</code> 之后出现一次，声明系统提示与工具定义。<code>message_start</code> 与 <code>message_end</code> 的内容相同。0.73.1 没有这条消息。</p>
+<pre><code class="language-typescript">interface SystemMessage {
+  role: "system";
+  content: string | TextContent[];      // 观测值为空字符串 ""，正文在 sections 里
+  // 观测到 preamble、tools、rules、docs、cwd 五节，按顺序拼接得到系统提示
+  sections?: { [name: string]: string | null };
+  toolsAdded?: ToolDefinition[];        // 模型可用的工具定义
+  toolsRemoved?: unknown[];             // 文档：后续 system 消息移除的工具引用
+  // 文档：true 表示丢弃之前的 system 状态，以这条消息为新的基线
+  replace?: boolean;
+  timestamp: number;                    // Unix 毫秒
+}
+
+interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: object;                   // JSON Schema
+  constrainedSampling: { type: "json_schema"; strict: "prefer" };
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "message_start",
+  "message": {
+    "role": "system",
+    "content": "",
+    "sections": {
+      "preamble": "You are an expert coding assistant operating inside pi, ...",
+      "tools": "&lt;tools&gt;\n- read: Read file contents\n...",
+      "rules": "&lt;rules&gt;\n...",
+      "docs": "...",
+      "cwd": "Current working directory: /work/project"
+    },
+    "timestamp": 1791044136946,
+    "toolsAdded": [
+      {
+        "name": "read",
+        "description": "Read the contents of a file. ...",
+        "parameters": { "type": "object", "properties": { "...": "..." }, "required": ["path"] },
+        "constrainedSampling": { "type": "json_schema", "strict": "prefer" }
+      }
+    ]
+  }
+}</code></pre>
+
+<h3>user 消息</h3>
+<pre><code class="language-typescript">interface UserMessage {
+  role: "user";
+  // 观测值是 [{ type: "text", text: "提示词" }]；文档允许字符串与 image 块
+  content: string | (TextContent | ImageContent)[];
+  timestamp: number;
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "message_start",
+  "message": {
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "Run this shell command and reply with only the HTTP status code it prints: curl -sS -o /dev/null -w '%{http_code}' https://example.com/" }
+    ],
+    "timestamp": 1791044148273
+  }
+}</code></pre>
+
+<h3>assistant 消息</h3>
+<p><code>message_start</code> 里的 assistant 消息是空壳：<code>content</code> 为 <code>[]</code>，<code>usage</code> 全为 0，<code>stopReason</code> 为 <code>pending</code>，没有 <code>responseId</code>、<code>rawStopReason</code> 与 <code>thinkingLevel</code>。<code>message_end</code>、<code>turn_end.message</code> 与 <code>agent_end.messages</code> 里是完整消息。</p>
+<pre><code class="language-typescript">interface AssistantMessage {
+  role: "assistant";
+  content: (TextContent | ThinkingContent | ToolCall)[];   // 模型调用失败时为 []
+  api: string;                          // provider 的 API 协议，观测值 "openai-completions"
+  provider: string;                     // 观测值 "deepseek"
+  model: string;                        // 请求的模型 id，观测值 "deepseek-flash"
+  responseModel?: string;               // 文档：provider 实际返回的模型，与 model 不同时才有
+  // provider 的响应 id；pending 与 error 状态下缺失。0.73.1 没有
+  responseId?: string;
+  providerThinkingLevel?: string;       // 文档
+  diagnostics?: unknown[];              // 文档：provider 或运行时诊断
+  usage: Usage;                         // 这一次模型调用的用量
+  // 流式输出中、文字回答结束、要求调用工具、模型调用失败
+  stopReason: "pending" | "stop" | "toolUse" | "error"
+            | "length" | "aborted" | "deferred";         // 文档
+  // stopReason 为 "error" 时的错误文本，观测值以 HTTP 状态码开头，例如 "401: {...}"
+  errorMessage?: string;
+  // provider 原始的结束原因，观测值 "stop"、"tool_calls"；pending 与 error 状态下缺失。
+  // 0.73.1 没有
+  rawStopReason?: string;
+  // 本次调用的 thinking 级别，观测值 "high"；pending 状态下缺失。0.73.1 没有
+  thinkingLevel?: string;
+  deferred?: {                          // 文档：stopReason 为 "deferred" 时取回结果所需的句柄
+    provider: string; modelId: string; api: string; id: string;
+    expiresAt?: number; pollAfterMs?: number; data?: unknown;
+  };
+  endTurn?: boolean;                    // 文档
+  timestamp: number;                    // message_start 与 message_end 里的值相同，是消息开始的时间
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "message_start",
+  "message": {
+    "role": "assistant",
+    "content": [],
+    "api": "openai-completions",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "usage": {
+      "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
+      "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 }
+    },
+    "stopReason": "pending",
+    "timestamp": 1791044148299
+  }
+}
+{
+  "type": "message_end",
+  "message": {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "The user wants me to run a shell command.",
+        "thinkingSignature": "reasoning_content"
+      },
+      {
+        "type": "toolCall",
+        "id": "call_01A",
+        "name": "bash",
+        "arguments": { "command": "curl -sS -o /dev/null -w '%{http_code}' https://example.com/", "timeout": 30 }
+      }
+    ],
+    "api": "openai-completions",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "usage": {
+      "input": 1746,
+      "output": 94,
+      "cacheRead": 512,
+      "cacheWrite": 0,
+      "reasoning": 15,
+      "totalTokens": 2352,
+      "cost": { "input": 0.0005238, "output": 0.0001128, "cacheRead": 0.000003072, "cacheWrite": 0, "total": 0.000639672 }
+    },
+    "stopReason": "toolUse",
+    "timestamp": 1791044148299,
+    "responseId": "RESPONSE_ID",
+    "rawStopReason": "tool_calls",
+    "thinkingLevel": "high"
+  }
+}</code></pre>
+
+<h3>toolResult 消息</h3>
+<p>每次工具执行结束后一对 <code>message_start</code> 与 <code>message_end</code>，内容相同。</p>
+<pre><code class="language-typescript">interface ToolResultMessage {
+  role: "toolResult";
+  toolCallId: string;                   // 对应 assistant 消息里 ToolCall 的 id
+  toolName: string;
+  content: (TextContent | ImageContent)[];   // 返回给模型的内容，观测值都是一个 text 块
+  details?: object;                     // 工具自定义的附加数据，观测值为 {}，只在部分结果上出现
+  usage?: Usage;                        // 文档：工具内部调用模型的用量，不计入主模型调用
+  isError: boolean;
+  timestamp: number;
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "message_end",
+  "message": {
+    "role": "toolResult",
+    "toolCallId": "call_01A",
+    "toolName": "write",
+    "content": [{ "type": "text", "text": "EROFS: read-only file system, open '/root/x'" }],
+    "details": {},
+    "isError": true,
+    "timestamp": 1791074931228
+  }
+}</code></pre>
+<p>toolResult 消息的 <code>content</code> 与 <code>tool_execution_end</code> 的 <code>result.content</code> 相同；<code>tool_execution_end</code> 里的 <code>result.structuredContent</code> 不会出现在 toolResult 消息里。</p>
+
+<h3>message_update</h3>
+<p>只在 assistant 消息流式输出时出现。</p>
+<pre><code class="language-typescript">interface MessageUpdate {
+  type: "message_update";
+  // provider 到目前为止报告的累计用量。观测中 provider 在流结束时才报告，所以直到 *_end
+  // 之前都是 0，之后等于 message_end.message.usage
+  usage: Usage;
+  assistantMessageEvent: AssistantMessageEvent;   // 一个内容块的增量
+}
+
+type AssistantMessageEvent =
+  | { type: "thinking_start"; contentIndex: number }
+  | { type: "thinking_delta"; contentIndex: number; delta: string }
+  | { type: "thinking_end"; contentIndex: number; content: string }     // content 是完整文本
+  | { type: "text_start"; contentIndex: number }
+  | { type: "text_delta"; contentIndex: number; delta: string }
+  | { type: "text_end"; contentIndex: number; content: string }
+  // 这时已经知道调用 id 与工具名
+  | { type: "toolcall_start"; contentIndex: number; id: string; toolName: string }
+  // 序列化的参数片段，观测中可能是空字符串
+  | { type: "toolcall_delta"; contentIndex: number; delta: string }
+  | { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall } // 完整的 ToolCall
+  // 文档：正常 agent 循环把它翻译成 message_start，不作为 message_update 输出
+  | { type: "start" }
+  // 文档：同上，翻译成 message_end
+  | { type: "done"; reason: string; message: AssistantMessage }
+  | { type: "error"; reason: string; error: AssistantMessage };        // 文档：同上</code></pre>
+<p><code>contentIndex</code> 是内容块在 <code>message.content</code> 数组中的下标。实时显示时按 <code>contentIndex</code> 累积 <code>delta</code>，收到 <code>*_end</code> 时用其中的完整内容替换累积结果，收到 <code>message_end</code> 时用整条消息替换。1.0.1 的 <code>message_update</code> 不含累计的 <code>message</code> 对象，也不含 <code>assistantMessageEvent.partial</code>，见「版本说明」。</p>
+<pre><code class="language-json">{
+  "type": "message_update",
+  "usage": {
+    "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
+    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 }
+  },
+  "assistantMessageEvent": { "type": "thinking_start", "contentIndex": 0 }
+}
+{
+  "type": "message_update",
+  "usage": { "...": "..." },
+  "assistantMessageEvent": { "type": "thinking_delta", "contentIndex": 0, "delta": "The" }
+}
+{
+  "type": "message_update",
+  "usage": { "...": "..." },
+  "assistantMessageEvent": { "type": "toolcall_start", "contentIndex": 1, "id": "call_01A", "toolName": "bash" }
+}
+{
+  "type": "message_update",
+  "usage": { "...": "..." },
+  "assistantMessageEvent": { "type": "toolcall_delta", "contentIndex": 1, "delta": "" }
+}
+{
+  "type": "message_update",
+  "usage": {
+    "input": 1746, "output": 94, "cacheRead": 512, "cacheWrite": 0, "reasoning": 15, "totalTokens": 2352,
+    "cost": { "...": "..." }
+  },
+  "assistantMessageEvent": { "type": "thinking_end", "contentIndex": 0, "content": "The user wants me to run a shell command." }
+}
+{
+  "type": "message_update",
+  "usage": { "...": "..." },
+  "assistantMessageEvent": {
+    "type": "toolcall_end",
+    "contentIndex": 1,
+    "toolCall": { "type": "toolCall", "id": "call_01A", "name": "bash", "arguments": { "command": "pwd", "timeout": 10 } }
+  }
+}</code></pre>
+<p>注意顺序：观测中 thinking 块的 <code>thinking_end</code> 出现在 toolcall 块的 <code>toolcall_start</code> 与 <code>toolcall_delta</code> 之后，也就是说一个块的结束事件可能晚于下一个块的开始事件。解析器应按 <code>contentIndex</code> 归属事件，不按出现顺序。</p>
+
+<h2>内容块</h2>
+<p>出现在 assistant 消息的 <code>content</code>、<code>toolcall_end.toolCall</code>、user 与 toolResult 消息的 <code>content</code> 里。</p>
+<pre><code class="language-typescript">interface TextContent {
+  type: "text";
+  text: string;
+  textSignature?: string;               // 文档：provider 专有的元数据，不透明
+}
+
+interface ThinkingContent {
+  type: "thinking";
+  thinking: string;                     // 推理文本，观测中正文可读
+  // provider 专有的回放数据，不透明。deepseek 的观测值是字符串 "reasoning_content"
+  thinkingSignature?: string;
+  redacted?: boolean;                   // 文档：true 表示正文被 provider 隐去，只有签名
+}
+
+interface ToolCall {
+  type: "toolCall";
+  id: string;                           // 调用 id，deepseek 的观测值形如 "call_00_..."
+  name: string;                         // 工具名，与 system 消息 toolsAdded[].name 对应
+  // 键由工具的 parameters schema 决定。观测中模型会显式传 null，例如 read 的 offset: null
+  arguments: { [key: string]: unknown };
+  thoughtSignature?: string;            // 文档：provider 专有
+  namespace?: string;                   // 文档：OpenAI Responses 的工具命名空间
+}
+
+interface ImageContent {                // 文档：只出现在 user 与 toolResult 消息
+  type: "image";
+  data: string;                         // base64
+  mimeType: string;
+}</code></pre>
+
+<h2>usage 对象</h2>
+<p>出现在 assistant 消息的 <code>usage</code> 与 <code>message_update.usage</code>，都是单次模型调用的量，流里没有整次运行的累计值，需要读取方把每个 assistant <code>message_end</code> 的 usage 相加。</p>
+<pre><code class="language-typescript">interface Usage {
+  // 未命中缓存的输入 token。观测中 input + cacheRead + output = totalTokens
+  input: number;
+  output: number;                       // 输出 token，已包含 reasoning
+  cacheRead: number;                    // 命中缓存的输入 token
+  cacheWrite: number;                   // 写入缓存的 token，deepseek 观测值为 0
+  cacheWrite1h?: number;                // 文档：cacheWrite 中按一小时保留写入的部分
+  // 推理 token，是 output 的子集，不要重复相加；pending 状态与错误消息的 usage 里没有。
+  // 0.73.1 没有
+  reasoning?: number;
+  totalTokens: number;
+  cost: {                               // 单位美元，按 pi 模型目录里的单价计算
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}</code></pre>
+
+<h2>tool_execution 事件</h2>
+<pre><code class="language-typescript">interface ToolExecutionStart {
+  type: "tool_execution_start";
+  toolCallId: string;                   // 对应 ToolCall 的 id
+  toolName: string;
+  args: { [key: string]: unknown };     // 与 ToolCall.arguments 相同
+}
+
+interface ToolExecutionUpdate {
+  type: "tool_execution_update";
+  toolCallId: string;
+  toolName: string;
+  args: { [key: string]: unknown };
+  // bash 工具的第一次更新 content 为 []，之后 content[0].text 是到目前为止的全部输出，
+  // 是累计值，用它替换之前的内容。文档说明替换还是追加由各工具决定
+  partialResult: {
+    content: TextContent[];
+    details?: object;
+  };
+}
+
+interface ToolExecutionEnd {            // 没有 args
+  type: "tool_execution_end";
+  toolCallId: string;
+  toolName: string;
+  result: {
+    content: TextContent[];             // 返回给模型的内容块
+    details?: object;                   // read、write 成功时没有，失败时为 {}
+    structuredContent?: BashStructuredContent;   // 只有 bash 工具有
+  };
+  isError: boolean;                     // 错误文本在 result.content[0].text
+}
+
+interface BashStructuredContent {
+  output: string;
+  truncated: boolean;
+  exit_code: number;
+  wall_time_seconds: number;
+}</code></pre>
+<pre><code class="language-json">{
+  "type": "tool_execution_start",
+  "toolCallId": "call_01A",
+  "toolName": "bash",
+  "args": { "command": "pwd", "timeout": 10 }
+}
+{
+  "type": "tool_execution_update",
+  "toolCallId": "call_01A",
+  "toolName": "bash",
+  "args": { "command": "pwd", "timeout": 10 },
+  "partialResult": { "content": [] }
+}
+{
+  "type": "tool_execution_update",
+  "toolCallId": "call_01A",
+  "toolName": "bash",
+  "args": { "command": "pwd", "timeout": 10 },
+  "partialResult": { "content": [{ "type": "text", "text": "/work/project\n" }], "details": {} }
+}
+{
+  "type": "tool_execution_end",
+  "toolCallId": "call_01A",
+  "toolName": "bash",
+  "result": {
+    "content": [{ "type": "text", "text": "/work/project\n" }],
+    "structuredContent": { "output": "/work/project\n", "truncated": false, "exit_code": 0, "wall_time_seconds": 0 }
+  },
+  "isError": false
+}
+{
+  "type": "tool_execution_end",
+  "toolCallId": "call_01B",
+  "toolName": "write",
+  "result": {
+    "content": [{ "type": "text", "text": "EROFS: read-only file system, open '/root/x'" }],
+    "details": {}
+  },
+  "isError": true
+}</code></pre>
+<p>命令退出码非 0 的情况在样本里没有出现，按 <code>bash</code> 工具的结构推断它会出现在 <code>structuredContent.exit_code</code>，而 <code>isError</code> 是否为 true 未经确认。</p>
+
+<h2>文档中有、样本中没有的事件</h2>
+<h3>auto_retry_start、auto_retry_end</h3>
+<p>模型调用失败后，pi 按 <code>delayMs</code> 延迟后重新开始一次 agent 运行。0.73.1 的样本（网络不通，<code>errorMessage</code> 为 <code>Connection error.</code>）显示了完整的重试序列：首次失败的 <code>agent_end</code> 之后，<code>auto_retry_start</code>（<code>attempt</code> 1、2、3，<code>maxAttempts</code> 3，<code>delayMs</code> 2000、4000、8000）各自后跟一整组 <code>agent_start</code> 到 <code>agent_end</code>，最后 <code>auto_retry_end</code> 带 <code>success: false</code> 与 <code>finalError</code>。重试的 agent 运行里没有 user 消息。1.0.1 的样本中 401 认证错误没有触发重试，直接结束运行，说明重试只针对部分错误类型。</p>
+<pre><code class="language-typescript">interface AutoRetryStart {
+  type: "auto_retry_start";
+  attempt: number;                      // 第几次重试，从 1 开始
+  maxAttempts: number;
+  delayMs: number;                      // 重试前的等待毫秒数
+  errorMessage: string;                 // 触发重试的错误
+}
+
+interface AutoRetryEnd {
+  type: "auto_retry_end";
+  success: boolean;
+  attempt: number;                      // 结束时的尝试序号
+  finalError?: string;                  // success 为 false 时的最终错误
+}</code></pre>
+<pre><code class="language-json">{ "type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "Connection error." }
+{ "type": "auto_retry_end", "success": false, "attempt": 3, "finalError": "Connection error." }</code></pre>
+
+<h3>compaction_start、compaction_end 与摘要重试</h3>
+<p>上下文接近上限时 pi 自动压缩历史。溢出恢复成功后 <code>willRetry</code> 为 true，pi 会重新发送提示词。压缩完成后的历史里会出现 <code>compactionSummary</code> 角色的消息。以下定义全部来自文档。</p>
+<pre><code class="language-typescript">type CompactionReason = "manual" | "threshold" | "overflow";
+
+interface CompactionStart { type: "compaction_start"; reason: CompactionReason; }
+
+interface CompactionEnd {
+  type: "compaction_end";
+  reason: CompactionReason;
+  result?: {                            // 成功时有
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+    estimatedTokensAfter: number;
+    usage: Usage;
+    details: object;
+  };
+  aborted: boolean;                     // 被中止时为 true，没有 result
+  errorMessage?: string;                // 失败时有，没有 result，aborted 为 false
+  willRetry: boolean;
+}
+
+interface SummarizationRetryScheduled {
+  type: "summarization_retry_scheduled";
+  attempt: number; maxAttempts: number; delayMs: number; errorMessage: string;
+}
+interface SummarizationRetryAttemptStart {
+  type: "summarization_retry_attempt_start";
+  source: "compaction" | "branchSummary";
+  reason?: CompactionReason;            // 分支摘要没有
+}
+interface SummarizationRetryFinished { type: "summarization_retry_finished"; }</code></pre>
+
+<h3>队列与状态事件</h3>
+<p>由交互操作或扩展触发，在没有扩展的 JSON 模式一次运行里不会出现。定义来自文档。</p>
+<pre><code class="language-typescript">interface QueueUpdate { type: "queue_update"; steering: unknown[]; followUp: unknown[]; }   // 各为完整的当前队列
+interface EntryAppended { type: "entry_appended"; entry: object; }       // 会话文件的条目对象
+interface SessionInfoChanged { type: "session_info_changed"; name?: string; }   // 缺失表示清除
+interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; }</code></pre>
+
+<h2>错误、中断与退出码</h2>
+<table>
+  <thead>
+    <tr><th>情形</th><th>退出码</th><th>流里的表现</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>正常完成</td><td>0</td><td>最后一个 assistant 消息的 <code>stopReason</code> 为 <code>stop</code>，最后一行是 <code>agent_settled</code></td></tr>
+    <tr><td>工具失败（写只读路径等）</td><td>0</td><td><code>tool_execution_end.isError</code> 与 toolResult 消息的 <code>isError</code> 为 true，模型继续，运行正常结束</td></tr>
+    <tr><td>模型调用失败（401 认证错误）</td><td>0</td><td>assistant 消息的 <code>message_start</code> 之后直接 <code>message_end</code>，没有 <code>message_update</code>；<code>content</code> 为 <code>[]</code>，<code>stopReason</code> 为 <code>error</code>，<code>errorMessage</code> 为 <code>401: {...}</code>。之后 <code>turn_end</code>、<code>agent_end</code>、<code>agent_settled</code> 照常出现。标准错误为空</td></tr>
+    <tr><td>网络不通（0.73.1 样本）</td><td>0</td><td>与上一行相同的错误消息，<code>errorMessage</code> 为 <code>Connection error.</code>，之后自动重试三次，见「auto_retry_start、auto_retry_end」</td></tr>
+    <tr><td>模型名不存在</td><td>1</td><td>标准输出为空，标准错误 <code>Error: Model "xxx" not found. Use --list-models to see available models.</code></td></tr>
+    <tr><td>未知命令行选项</td><td>1</td><td>标准输出为空，标准错误 <code>Error: Unknown option: --xxx</code></td></tr>
+    <tr><td>没有 API 凭据（0.73.1 样本）</td><td>1</td><td>标准输出只有 <code>session</code> 头，标准错误 <code>No API key found for deepseek...</code>。1.0.1 下未实测</td></tr>
+    <tr><td>SIGINT</td><td>130</td><td>流停在当前位置，没有收尾事件。样本中一次停在 <code>tool_execution_start</code> 之后，一次停在 <code>turn_start</code> 之后。标准错误为空</td></tr>
+  </tbody>
+</table>
+<p>判定规则：退出码非 0 一定失败；退出码为 0 时，找到最后一个 role 为 <code>assistant</code> 的 <code>message_end</code>，<code>stopReason</code> 为 <code>stop</code> 算成功，<code>error</code>、<code>aborted</code>、<code>length</code> 算失败；没有 <code>agent_settled</code> 时按被中断处理。<code>docs/cli-integration.md</code> 说明 JSON 模式下失败或中止的 assistant 响应本身不产生非 0 退出码，只有进程抛出异常时才非 0；print 模式（<code>-p</code> 不加 <code>--mode json</code>）则相反，<code>error</code> 或 <code>aborted</code> 会产生非 0 退出码。SIGTERM 未实测。</p>
+<pre><code class="language-json">{
+  "type": "message_end",
+  "message": {
+    "role": "assistant",
+    "content": [],
+    "api": "openai-completions",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "usage": {
+      "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
+      "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 }
+    },
+    "stopReason": "error",
+    "timestamp": 1791044157763,
+    "errorMessage": "401: {\"message\":\"Authentication Fails, Your api key: **** is invalid (request_id: REQUEST_ID)\",\"type\":\"authentication_error\",\"param\":null,\"code\":\"invalid_request_error\"}",
+    "thinkingLevel": "high"
+  }
+}
+{ "type": "turn_end", "message": { "...": "..." }, "toolResults": [] }
+{ "type": "agent_end", "messages": ["..."], "willRetry": false }
+{ "type": "agent_settled" }</code></pre>
+
+<h2>版本说明</h2>
+<p>1.0.1 与 0.73.1（npm 包名当时为 <code>@mariozechner/pi-coding-agent</code>）的样本对比，以及 <code>CHANGELOG.md</code> 中与这条流有关的条目：</p>
+<table>
+  <thead>
+    <tr><th>差异</th><th>0.73.1</th><th>1.0.1</th><th>引入版本</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>system 消息</td><td>没有，流从 user 消息开始</td><td>第一次 <code>turn_start</code> 后输出一次</td><td>0.86.0 加入 transcript 记录的系统提示与工具变更</td></tr>
+    <tr><td><code>agent_settled</code></td><td>没有，最后一行是 <code>agent_end</code></td><td>有</td><td>0.80.4</td></tr>
+    <tr><td><code>agent_end.willRetry</code></td><td>没有</td><td>有</td><td>0.75.4</td></tr>
+    <tr><td><code>usage.reasoning</code></td><td>没有</td><td>有</td><td>0.80.3</td></tr>
+    <tr><td>assistant 消息的 <code>responseId</code>、<code>rawStopReason</code>、<code>thinkingLevel</code></td><td>没有</td><td>有</td><td>changelog 中没有找到明确条目，介于两个版本之间</td></tr>
+    <tr><td><code>message_update</code> 的形状</td><td>changelog 记载 0.84.0 之前带累计的 <code>message</code> 与 <code>assistantMessageEvent.partial</code>；0.73.1 样本里没有成功的模型调用，未直接观测</td><td>只有 <code>usage</code> 与增量的 <code>assistantMessageEvent</code></td><td>0.84.0 改为只发增量；0.84.2 修复 <code>usage</code> 丢失</td></tr>
+    <tr><td>默认 deepseek 模型 id</td><td><code>deepseek-v4-flash</code></td><td><code>deepseek-flash</code></td><td></td></tr>
+  </tbody>
+</table>
+<ul>
+  <li>两个版本相同的部分：<code>session</code> 头、<code>agent_start</code>、<code>turn_start</code>、<code>turn_end</code>、user 消息、assistant 错误消息的 <code>stopReason: "error"</code> 与 <code>errorMessage</code>、退出码 0。</li>
+  <li>本文的 1.0.1 样本只覆盖 deepseek provider 与 <code>read</code>、<code>bash</code>、<code>write</code> 三个工具的执行；<code>edit</code>、<code>grep</code>、<code>find</code>、<code>ls</code> 的 <code>result.details</code> 形状、其他 provider 的 <code>api</code> 与签名字段、图片内容块、<code>length</code>、<code>aborted</code>、<code>deferred</code> 三种 <code>stopReason</code>、压缩与扩展相关事件、SIGTERM 的行为均未实测。</li>
+  <li>pi 在 <code>--mode json</code> 下的输出同时也是 RPC 模式的事件格式（RPC 没有 <code>session</code> 头，另有 <code>bash_execution_update</code> 与 <code>extension_error</code>），以及 SDK 的 <code>AgentSessionEvent</code> 去掉累计快照后的形状。TypeScript 类型 <code>JsonAgentSessionEvent</code> 由 <code>@earendil-works/pi-coding-agent</code> 导出。</li>
+</ul>
+</main>
+</body>
+</html>

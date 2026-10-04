@@ -16,9 +16,9 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">返回索引</a> · <a href="agentrun.html">总览</a> · <a href="isolation.html">隔离</a> · <a href="session.html">会话环境</a> · <a href="events.html">事件与输出</a> · 运行时适配 · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="isolation.html">隔离</a> · <a href="session.html">会话环境</a> · <a href="events.html">事件与输出</a> · 运行时适配 · <a href="pending.html">待定</a></p>
 <h1>运行时适配 <span class="tag">草稿</span></h1>
-<p class="lead">每个运行时一节：agentrun 用什么参数启动它、它的原始输出怎么映射到统一事件、什么情况算失败。参数与行为都来自实测，写明了实测的版本；<mark>运行时升级后要重新核对</mark>。</p>
+<p class="lead">每个运行时一节：agentrun 用什么参数启动它、它的原始输出怎么映射到统一事件、什么情况算失败。参数与行为都来自实测，写明了实测的版本；<mark>运行时升级后要重新核对</mark>。原始输出的完整字段见 <a href="claudecode.jsonl.html">claude-code 事件流</a>与 <a href="pi.jsonl.html">pi 事件流</a>两页字段参考。</p>
 
 <table>
   <thead>
@@ -54,9 +54,20 @@
   <li>提示词从标准输入传入，不在命令行里。</li>
 </ul>
 <p>沙箱设置（只在沙箱打开时传）：</p>
-<pre><code class="language-json">{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
-  "filesystem":{"allowWrite":["&lt;cwd 的绝对路径&gt;","&lt;会话临时目录&gt;"]},
-  "network":{"allowedDomains":[]}}}</code></pre>
+<pre><code class="language-json">{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": ["&lt;cwd 的绝对路径&gt;", "&lt;会话临时目录&gt;"]
+    },
+    "network": {
+      "allowedDomains": []
+    }
+  }
+}</code></pre>
 <p>前三项以外的设置（<code>failIfUnavailable</code>、<code>allowWrite</code>、空的 <code>allowedDomains</code>）取自 claude 的设置说明，还没有实测是否生效。<code>--network full|custom</code> 时另加 <code>network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。</p>
 
 <h3>auto 模式没有生效时终止</h3>

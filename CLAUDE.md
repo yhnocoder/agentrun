@@ -8,7 +8,7 @@ agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linu
 - Unified Experience：同一条命令在四种环境里都能运行，输出格式与成败判定相同。
 - Doctor：每个平台一个可执行文件，能在启动前检查环境，失败时能看出原因。
 
-设计见 `docs/design/pages/agentrun.html`，Task 计划与进度见 GitHub issue #1。
+设计从 `docs/design/index.html` 开始读，Task 计划与进度见 GitHub issue #1。
 
 ## 协作方式
 
@@ -83,8 +83,8 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 
 文件组织：
 
-- `docs/design/index.html` 是索引页，列出所有文档。
-- `docs/design/style.css` 是所有页面共用的样式。新文档参考 `pages/agentrun.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
+- `docs/design/index.html` 是总览页，写工具的目标、调用方式、命令行选项、doctor 与退出码，并列出所有文档。
+- `docs/design/style.css` 是所有页面共用的样式。新文档参考 `pages/isolation.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
 - 项目的设计文档放在 `docs/design/pages/`。
 - 改动 `docs/design/` 后运行 `uv run scripts/check_design.py`，它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
 

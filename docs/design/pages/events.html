@@ -16,35 +16,244 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">返回索引</a> · <a href="agentrun.html">总览</a> · <a href="isolation.html">隔离</a> · <a href="session.html">会话环境</a> · 事件与输出 · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="isolation.html">隔离</a> · <a href="session.html">会话环境</a> · 事件与输出 · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
 <h1>事件与输出 <span class="tag">草稿</span></h1>
 <p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="runtimes.html">运行时适配</a>。</p>
 
 <h2>统一事件流</h2>
-<p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。每个事件都有 <code>schema</code>（事件格式的版本号，整数，当前为 1）、<code>type</code> 与 <code>time</code>（RFC 3339，UTC，精确到毫秒），其后按下表的顺序写其他字段。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。</p>
-<table>
-  <thead>
-    <tr><th>type</th><th>字段</th><th>何时出现</th></tr>
-  </thead>
-  <tbody>
-    <tr><td><code>start</code></td><td><code>runtime</code>；<code>sandbox</code>（<code>seatbelt</code>、<code>bubblewrap</code>、<code>codex</code> 或 <code>none</code>）；<code>network</code>（<code>{mode, allow, enforced}</code>）；<code>model</code>（<code>--model</code> 的值，未给时为 null）；<code>cwd</code>（绝对路径）；<code>argv</code>（实际执行的完整命令，不含提示词）；<code>env</code>（<code>--env</code> 与 <code>--env-file</code> 设置的变量名）</td><td>运行时进程启动后</td></tr>
-    <tr><td><code>tool</code></td><td><code>id</code>（运行时给出的工具调用 id）、<code>parent</code>、<code>name</code>（运行时自己的工具名）、<code>summary</code>（一行，最长 120 个字符，超出时截断并加省略号）、<code>denied</code>（布尔值，这次调用被运行时的权限机制拒绝）</td><td>一次工具调用结束时</td></tr>
-    <tr><td><code>text</code></td><td><code>parent</code>、<code>text</code></td><td>agent 输出一段完整的文字时</td></tr>
-    <tr><td><code>usage</code></td><td><code>parent</code>、<code>model</code>、<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>、<code>context_tokens</code>（这次调用送进模型的全部上下文）</td><td>一次模型调用结束时</td></tr>
-    <tr><td><code>subagent_start</code></td><td><code>id</code>、<code>parent</code>、<code>number</code>（agentrun 按启动顺序给的编号，从 1 开始）、<code>kind</code>（subagent 的类型，例如 <code>Explore</code>）、<code>model</code>（启动时给出的模型，没给出时为 null）、<code>description</code>（一行任务描述）</td><td>agent 启动一个 subagent 时</td></tr>
-    <tr><td><code>subagent_end</code></td><td><code>id</code>、<code>status</code>（<code>finished</code> 或 <code>failed</code>）、<code>duration_ms</code>、<code>usage</code>（这个 subagent 及其内部 subagent 的用量，结构同 <code>end.usage</code>）</td><td>subagent 结束时</td></tr>
-    <tr id="network-event"><td><code>network</code></td><td><code>host</code>、<code>port</code>、<code>allowed</code>（布尔值）、<code>reason</code>（拒绝时为 <code>not_allowed</code> 或 <code>private_address</code>，放行时为 null）</td><td>经过过滤代理的连接，每组 host、port、allowed 第一次出现时</td></tr>
-    <tr><td><code>end</code></td><td><code>status</code>、<code>exit_code</code>（运行时的退出码，未启动或被信号终止时为 null）、<code>detail</code>、<code>duration_ms</code>（从 agentrun 开始解析命令行到输出 <code>end</code>）、<code>usage</code>、<code>result</code></td><td>结束时</td></tr>
-  </tbody>
-</table>
-<pre><code class="language-json">{"schema":1,"type":"start","time":"2026-10-04T13:00:00.000Z","runtime":"claude-code","sandbox":"bubblewrap","network":{"mode":"none","allow":[],"enforced":true},"model":null,"cwd":"/work/repo","argv":["/usr/local/bin/claude","-p","--output-format","stream-json","..."],"env":["GH_TOKEN"]}
-{"schema":1,"type":"subagent_start","time":"2026-10-04T13:00:03.120Z","id":"toolu_01","parent":null,"number":1,"kind":"Explore","model":"haiku","description":"查找所有调用 parse_line 的位置"}
-{"schema":1,"type":"tool","time":"2026-10-04T13:00:04.410Z","id":"toolu_02","parent":"toolu_01","name":"Grep","summary":"Grep: parse_line","denied":false}
-{"schema":1,"type":"usage","time":"2026-10-04T13:00:05.002Z","parent":"toolu_01","model":"claude-haiku-4-5","input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"context_tokens":14120}
-{"schema":1,"type":"subagent_end","time":"2026-10-04T13:00:15.530Z","id":"toolu_01","status":"finished","duration_ms":12400,"usage":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200,"by_model":{"claude-haiku-4-5":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}}}
-{"schema":1,"type":"tool","time":"2026-10-04T13:00:16.880Z","id":"toolu_03","parent":null,"name":"Bash","summary":"Bash: cargo test","denied":false}
-{"schema":1,"type":"text","time":"2026-10-04T13:00:31.100Z","parent":null,"text":"测试全部通过。"}
-{"schema":1,"type":"end","time":"2026-10-04T13:00:31.250Z","status":"finished","exit_code":0,"detail":"","duration_ms":31250,"usage":{"input_tokens":18234,"output_tokens":912,"cache_read_tokens":42000,"cache_write_tokens":5100,"by_model":{"claude-sonnet-5-5":{"input_tokens":15114,"output_tokens":827,"cache_read_tokens":32200,"cache_write_tokens":3900},"claude-haiku-4-5":{"input_tokens":3120,"output_tokens":85,"cache_read_tokens":9800,"cache_write_tokens":1200}}},"result":"测试全部通过。"}</code></pre>
+<p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
+<pre id="event-types"><code class="language-typescript">type Event =
+  | StartEvent | ToolEvent | TextEvent | UsageEvent
+  | SubagentStartEvent | SubagentEndEvent | NetworkEvent | EndEvent
+
+interface EventBase {
+  schema: 1                  // 事件格式的版本号
+  type: string
+  time: string               // RFC 3339，UTC，精确到毫秒
+}
+
+// 运行时进程启动后输出一次
+interface StartEvent extends EventBase {
+  type: "start"
+  runtime: "claude-code" | "codex" | "pi"
+  sandbox: "seatbelt" | "bubblewrap" | "codex" | "none"
+  network: {
+    mode: "none" | "full" | "custom"
+    allow: string[]          // --allow-host 的值
+    enforced: boolean        // 网络限制是否由沙箱执行
+  }
+  model: string | null       // --model 的值，未给时为 null
+  cwd: string                // 绝对路径
+  argv: string[]             // 实际执行的完整命令，不含提示词
+  env: string[]              // --env 与 --env-file 设置的变量名，不含值
+}
+
+// 一次工具调用结束时输出
+interface ToolEvent extends EventBase {
+  type: "tool"
+  id: string                 // 运行时给出的工具调用 id
+  parent: string | null      // 主 agent 为 null，subagent 内为 subagent_start.id
+  name: string               // 运行时自己的工具名
+  summary: string            // 一行，最长 120 个字符，超出时截断并加省略号
+  denied: boolean            // 这次调用被运行时的权限机制拒绝
+}
+
+// agent 输出一段完整的文字时输出
+interface TextEvent extends EventBase {
+  type: "text"
+  parent: string | null
+  text: string
+}
+
+// 一次模型调用结束时输出；运行时没报告的字段为 null
+interface UsageEvent extends EventBase {
+  type: "usage"
+  parent: string | null
+  model: string | null
+  input_tokens: number | null        // 不含缓存命中的部分
+  output_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  context_tokens: number | null      // 前三项之和，即送进模型的全部上下文
+}
+
+// agent 启动一个 subagent 时输出
+interface SubagentStartEvent extends EventBase {
+  type: "subagent_start"
+  id: string                 // 启动它的工具调用 id
+  parent: string | null
+  number: number             // agentrun 按启动顺序给的编号，从 1 开始
+  kind: string               // subagent 的类型，例如 "Explore"
+  model: string | null       // 启动时给出的模型
+  description: string        // 一行任务描述
+}
+
+// subagent 结束时输出
+interface SubagentEndEvent extends EventBase {
+  type: "subagent_end"
+  id: string
+  status: "finished" | "failed"
+  duration_ms: number
+  usage: Usage               // 这个 subagent 及其内部 subagent 的用量
+}
+
+// 经过过滤代理的连接，每组 host、port、allowed 第一次出现时输出
+interface NetworkEvent extends EventBase {
+  type: "network"
+  host: string
+  port: number
+  allowed: boolean
+  reason: "not_allowed" | "private_address" | null   // 放行时为 null
+}
+
+// 运行结束时输出
+interface EndEvent extends EventBase {
+  type: "end"
+  status: "finished" | "failed" | "interrupted" | "timeout" | "rejected"
+  exit_code: number | null   // 运行时的退出码，未启动或被信号终止时为 null
+  detail: string
+  duration_ms: number        // 从 agentrun 开始解析命令行到输出 end
+  usage: Usage
+  result: string | null      // 主 agent 最后一段文字
+}
+
+interface TokenCounts {
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+}
+
+interface Usage extends TokenCounts {
+  by_model: Record&lt;string, TokenCounts&gt;   // 模型未知时键为 "unknown"
+}</code></pre>
+<p>下面是一次运行的事件流，为了阅读把每行格式化成了多行，实际输出中每个事件占一行。</p>
+<pre><code class="language-json">{
+  "schema": 1,
+  "type": "start",
+  "time": "2026-10-04T13:00:00.000Z",
+  "runtime": "claude-code",
+  "sandbox": "bubblewrap",
+  "network": {
+    "mode": "none",
+    "allow": [],
+    "enforced": true
+  },
+  "model": null,
+  "cwd": "/work/repo",
+  "argv": [
+    "/usr/local/bin/claude",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "..."
+  ],
+  "env": [
+    "GH_TOKEN"
+  ]
+}
+{
+  "schema": 1,
+  "type": "subagent_start",
+  "time": "2026-10-04T13:00:03.120Z",
+  "id": "toolu_01",
+  "parent": null,
+  "number": 1,
+  "kind": "Explore",
+  "model": "haiku",
+  "description": "查找所有调用 parse_line 的位置"
+}
+{
+  "schema": 1,
+  "type": "tool",
+  "time": "2026-10-04T13:00:04.410Z",
+  "id": "toolu_02",
+  "parent": "toolu_01",
+  "name": "Grep",
+  "summary": "Grep: parse_line",
+  "denied": false
+}
+{
+  "schema": 1,
+  "type": "usage",
+  "time": "2026-10-04T13:00:05.002Z",
+  "parent": "toolu_01",
+  "model": "claude-haiku-4-5",
+  "input_tokens": 3120,
+  "output_tokens": 85,
+  "cache_read_tokens": 9800,
+  "cache_write_tokens": 1200,
+  "context_tokens": 14120
+}
+{
+  "schema": 1,
+  "type": "subagent_end",
+  "time": "2026-10-04T13:00:15.530Z",
+  "id": "toolu_01",
+  "status": "finished",
+  "duration_ms": 12400,
+  "usage": {
+    "input_tokens": 3120,
+    "output_tokens": 85,
+    "cache_read_tokens": 9800,
+    "cache_write_tokens": 1200,
+    "by_model": {
+      "claude-haiku-4-5": {
+        "input_tokens": 3120,
+        "output_tokens": 85,
+        "cache_read_tokens": 9800,
+        "cache_write_tokens": 1200
+      }
+    }
+  }
+}
+{
+  "schema": 1,
+  "type": "tool",
+  "time": "2026-10-04T13:00:16.880Z",
+  "id": "toolu_03",
+  "parent": null,
+  "name": "Bash",
+  "summary": "Bash: cargo test",
+  "denied": false
+}
+{
+  "schema": 1,
+  "type": "text",
+  "time": "2026-10-04T13:00:31.100Z",
+  "parent": null,
+  "text": "测试全部通过。"
+}
+{
+  "schema": 1,
+  "type": "end",
+  "time": "2026-10-04T13:00:31.250Z",
+  "status": "finished",
+  "exit_code": 0,
+  "detail": "",
+  "duration_ms": 31250,
+  "usage": {
+    "input_tokens": 18234,
+    "output_tokens": 912,
+    "cache_read_tokens": 42000,
+    "cache_write_tokens": 5100,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "input_tokens": 15114,
+        "output_tokens": 827,
+        "cache_read_tokens": 32200,
+        "cache_write_tokens": 3900
+      },
+      "claude-haiku-4-5": {
+        "input_tokens": 3120,
+        "output_tokens": 85,
+        "cache_read_tokens": 9800,
+        "cache_write_tokens": 1200
+      }
+    }
+  },
+  "result": "测试全部通过。"
+}</code></pre>
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
 <h3>tool 事件在调用结束时输出</h3>
@@ -75,7 +284,7 @@
     <tr><th>status</th><th>条件</th><th>agentrun 退出码</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>rejected</code></td><td>启动前失败，情形见<a href="agentrun.html">总览</a>的「启动前检查」</td><td>2</td></tr>
+    <tr><td><code>rejected</code></td><td>启动前失败，情形见总览的<a href="../index.html#preflight">启动前检查</a></td><td>2</td></tr>
     <tr><td><code>interrupted</code></td><td>agentrun 收到 SIGINT 或 SIGTERM，以第一个信号为准</td><td>130 或 143</td></tr>
     <tr><td><code>timeout</code></td><td>超过 <code>--timeout</code></td><td>3</td></tr>
     <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="runtimes.html">运行时适配</a>。三个运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>

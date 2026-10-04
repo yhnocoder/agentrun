@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">返回索引</a> · <a href="agentrun.html">总览</a> · 隔离 · <a href="session.html">会话环境</a> · <a href="events.html">事件与输出</a> · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · 隔离 · <a href="session.html">会话环境</a> · <a href="events.html">事件与输出</a> · <a href="runtimes.html">运行时适配</a> · <a href="pending.html">待定</a></p>
 <h1>隔离：沙箱与网络 <span class="tag">草稿</span></h1>
 <p class="lead">agentrun 用沙箱限制 agent 能写的文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code> 与 <code>--network</code> 两个选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
 
@@ -94,8 +94,12 @@
   <li>监听 <code>127.0.0.1</code> 上的随机端口。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，再由 <code>socat</code> 把会话临时目录里的 Unix socket 接到这个端口，做法与 claude-code 自己的沙箱相同。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址。</li>
   <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 指向代理，<code>NO_PROXY</code> 清空。调用方环境里原有的代理变量改由过滤代理作为上游使用，所以云端容器自带的出口代理仍然生效。</li>
-  <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#network-event">事件与输出</a>。</li>
+  <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#event-types">事件与输出</a>。</li>
 </ul>
+<figure>
+<svg class="diagram" viewBox="0 0 600 370" style="max-width:600px" role="img" aria-label="沙箱内进程经过滤代理访问网络"><defs><marker id="arr-net" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="20" y="10" width="560" height="84" rx="10" style="fill:none;stroke-dasharray:6 4"/><text class="note" x="34" y="30" text-anchor="start">沙箱</text><rect x="110" y="34" width="380" height="44" rx="8"/><text x="300.0" y="61.0" text-anchor="middle">agent 进程：运行时与它执行的命令</text><path d="M300,78 L300,138" marker-end="url(#arr-net)"/><text class="note" x="312" y="113" text-anchor="start">只能连接 127.0.0.1 上的随机端口</text><rect x="130" y="140" width="340" height="44" rx="8"/><text x="300.0" y="167.0" text-anchor="middle">过滤代理：在 agentrun 进程里，沙箱外</text><path d="M300,184 C300,214 100,214 100,248" marker-end="url(#arr-net)"/><path d="M300,184 L300,248" marker-end="url(#arr-net)"/><path d="M300,184 C300,214 500,214 500,248" marker-end="url(#arr-net)"/><rect x="20" y="250" width="160" height="60" rx="8"/><text x="100.0" y="276.0" text-anchor="middle">放行</text><text x="100.0" y="294.0" text-anchor="middle">经上游代理或直连</text><rect x="220" y="250" width="160" height="60" rx="8"/><text x="300.0" y="276.0" text-anchor="middle">拒绝</text><text x="300.0" y="294.0" text-anchor="middle">not_allowed</text><rect x="420" y="250" width="160" height="60" rx="8"/><text x="500.0" y="276.0" text-anchor="middle">拒绝</text><text x="500.0" y="294.0" text-anchor="middle">private_address</text><text class="note" x="100" y="330" text-anchor="middle">主机在放行列表里</text><text class="note" x="300" y="330" text-anchor="middle">主机不在放行列表里</text><text class="note" x="500" y="330" text-anchor="middle">解析到私有地址</text><text class="note" x="300" y="358" text-anchor="middle">每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 network 事件</text></svg>
+<figcaption>沙箱里的进程只能连到过滤代理，由代理按主机决定放行或拒绝。</figcaption>
+</figure>
 <p>没有直接用各运行时自带的网络设置，因为三者能力不一致：claude-code 沙箱的 <code>allowedDomains</code> 不接受单独的 <code>*</code>，表达不了 full（claude 2.1.289）；codex 的网络设置只有开与关；pi 没有任何网络控制。三套做法含义不同，也没有统一的连接记录可供排查。</p>
 
 <h3>各运行时的做法</h3>
