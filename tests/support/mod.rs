@@ -1,9 +1,11 @@
+pub mod fake;
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use agentrun::adapter::Adapter;
 use agentrun::aggregate::Aggregator;
-use agentrun::run::{conclude, translate_line};
+use agentrun::run::{Exit, conclude, translate_line};
 use serde_json::Value;
 
 pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value> {
@@ -12,9 +14,14 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
     let mut events = aggregator.begin(prompt);
     for line in content.split(|byte| *byte == b'\n') {
-        events.extend(translate_line(line, adapter, &mut aggregator));
+        events.extend(translate_line(line, adapter, &mut aggregator).0);
     }
-    let (rest, _) = conclude(aggregator, adapter, Some(0), "", started);
+    let exit = Exit {
+        code: Some(0),
+        signal: None,
+        timed_out: false,
+    };
+    let (rest, _) = conclude(aggregator, adapter, &exit, "", started);
     events.extend(rest);
     events
         .iter()

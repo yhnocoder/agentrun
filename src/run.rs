@@ -2,18 +2,20 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use clap::error::ErrorKind as ClapErrorKind;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use crate::adapter::{Adapter, Launch};
+use crate::adapter::{Adapter, Launch, Record};
 use crate::aggregate::Aggregator;
 use crate::cli::{
     Cli, Format, RunArgs, Runtime, SandboxMode, default_format, prescan_format, usage_error_detail,
@@ -22,12 +24,14 @@ use crate::credential::write_session_credential;
 use crate::event::{Body, End, EndStatus, Event, NetworkInfo, SandboxKind, Start};
 use crate::output::Output;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
+use crate::signal::{SharedWriter, Signal, Signals};
 use crate::usage::Usage;
 
 const STDERR_TAIL_CHARS: usize = 500;
 const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;
 const SANDBOX_UNAVAILABLE_REASON: &str = "not implemented in this build";
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
 pub type AdapterLookup = dyn Fn(Runtime) -> Option<Box<dyn Adapter>>;
 
@@ -36,9 +40,10 @@ pub struct Caller {
     pub env: Vec<(OsString, OsString)>,
     pub stdin: Box<dyn Read>,
     pub stdin_is_terminal: bool,
-    pub stdout: Box<dyn Write>,
+    pub stdout: SharedWriter,
     pub stdout_is_terminal: bool,
     pub stderr: Arc<Mutex<dyn Write + Send>>,
+    pub signals: Signals,
 }
 
 impl Caller {
@@ -56,6 +61,27 @@ impl Caller {
             let _ = stderr.flush();
         }
     }
+
+    fn emit(&self, output: &mut Output, event: &Event) {
+        if let Ok(mut stdout) = self.stdout.lock() {
+            output.write(&mut *stdout, event);
+        }
+    }
+
+    fn print_lines(&self, lines: &[String]) {
+        if let Ok(mut stdout) = self.stdout.lock() {
+            for line in lines {
+                let _ = writeln!(stdout, "{line}");
+            }
+            let _ = stdout.flush();
+        }
+    }
+}
+
+pub struct Exit {
+    pub code: Option<i32>,
+    pub signal: Option<Signal>,
+    pub timed_out: bool,
 }
 
 pub struct Invocation {
@@ -78,12 +104,18 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     let started = Instant::now();
     let fallback_format =
         prescan_format(&caller.args).unwrap_or(default_format(caller.stdout_is_terminal));
+    if let Err(code) = caller
+        .signals
+        .prepare(Arc::clone(&caller.stdout), fallback_format, started)
+    {
+        return code;
+    }
     let cli = match Cli::try_parse_from(&caller.args) {
         Ok(cli) => cli,
         Err(error) => match error.kind() {
             ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion => {
-                let _ = write!(caller.stdout, "{}", error.render());
-                let _ = caller.stdout.flush();
+                caller.signals.finishing();
+                caller.print_lines(&[error.render().to_string().trim_end().to_string()]);
                 return 0;
             }
             _ => {
@@ -94,16 +126,15 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     };
     let (runtime, args) = cli.command.into_parts();
     let format = args.format.unwrap_or(fallback_format);
+    caller.signals.format(format);
     let ready = match prepare(&mut caller, runtime, args, format, adapters) {
         Ok(ready) => ready,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
     let mut plan = plan_lines(&ready);
     if ready.invocation.args.dry_run {
-        for line in &plan {
-            let _ = writeln!(caller.stdout, "{line}");
-        }
-        let _ = caller.stdout.flush();
+        caller.signals.finishing();
+        caller.print_lines(&plan);
         return 0;
     }
     let credential = match write_session_credential(
@@ -127,10 +158,14 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         Ok(tempdir) => tempdir,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
+    caller
+        .signals
+        .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
     execute(caller, ready, plan, tempdir, started)
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
+    caller.signals.finishing();
     let end = Event::now(Body::End(End {
         status: EndStatus::Rejected,
         exit_code: None,
@@ -139,7 +174,7 @@ fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -
         usage: Usage::default(),
         result: None,
     }));
-    Output::new(format, SandboxMode::On, "").write(&mut caller.stdout, &end);
+    caller.emit(&mut Output::new(format, SandboxMode::On, ""), &end);
     caller.print_error_line(&format!("agentrun: {detail}"));
     EndStatus::Rejected.exit_code()
 }
@@ -363,6 +398,7 @@ fn execute(
         .current_dir(&invocation.cwd)
         .env_clear()
         .envs(&session.env)
+        .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -372,6 +408,7 @@ fn execute(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            caller.signals.finishing();
             let end = Event::now(Body::End(End {
                 status: EndStatus::Failed,
                 exit_code: None,
@@ -380,11 +417,15 @@ fn execute(
                 usage: Usage::default(),
                 result: None,
             }));
-            output.write(&mut caller.stdout, &end);
+            caller.emit(&mut output, &end);
             finish_tempdir(tempdir, debug);
             return EndStatus::Failed.exit_code();
         }
     };
+    caller.signals.running(
+        child.id() as i32,
+        invocation.args.timeout.map(Duration::from_secs),
+    );
 
     let start = Event::now(Body::Start(Start {
         runtime: invocation.runtime,
@@ -404,22 +445,113 @@ fn execute(
             .collect(),
         env: session.set.clone(),
     }));
-    output.write(&mut caller.stdout, &start);
+    caller.emit(&mut output, &start);
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
     for event in aggregator.begin(&invocation.prompt) {
-        output.write(&mut caller.stdout, &event);
+        caller.emit(&mut output, &event);
     }
 
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let input = launch.stdin;
-    let writer = thread::spawn(move || {
+    thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });
+    let (sender, receiver) = mpsc::channel();
     let stderr = child.stderr.take().expect("stderr is piped");
     let sink = Arc::clone(&caller.stderr);
-    let forwarder = thread::spawn(move || forward_stderr(stderr, sink));
-
+    let tail = Arc::new(Mutex::new(Vec::new()));
+    let tail_writer = Arc::clone(&tail);
+    let stderr_sender = sender.clone();
+    thread::spawn(move || {
+        forward_stderr(stderr, sink, &tail_writer);
+        let _ = stderr_sender.send(Message::StderrEnd);
+    });
     let stdout = child.stdout.take().expect("stdout is piped");
+    let stdout_sender = sender.clone();
+    thread::spawn(move || read_lines(stdout, &stdout_sender));
+    thread::spawn(move || wait_child(child, &sender));
+
+    let exit_code = supervise(&caller, &receiver, |content| {
+        if let Some(file) = raw.as_mut() {
+            let mut bytes = Vec::with_capacity(content.len() + 1);
+            bytes.extend_from_slice(content);
+            bytes.push(b'\n');
+            let _ = file.write_all(&bytes);
+        }
+        let (events, terminate) = translate_line(content, adapter.as_mut(), &mut aggregator);
+        for event in events {
+            caller.emit(&mut output, &event);
+        }
+        terminate
+    });
+
+    let tail = tail.lock().map(|tail| tail.clone()).unwrap_or_default();
+    let stderr_tail = tail_chars(String::from_utf8_lossy(&tail).trim_end(), STDERR_TAIL_CHARS);
+    let exit = Exit {
+        code: exit_code,
+        signal: caller.signals.first_signal(),
+        timed_out: caller.signals.timed_out(),
+    };
+    let (events, status) = conclude(aggregator, adapter.as_ref(), &exit, &stderr_tail, started);
+    for event in &events {
+        caller.emit(&mut output, event);
+    }
+    drop(raw);
+    finish_tempdir(tempdir, debug);
+    status.exit_code()
+}
+
+enum Message {
+    Line(Vec<u8>),
+    StdoutEnd,
+    StderrEnd,
+    Exited(ExitStatus),
+}
+
+fn supervise(
+    caller: &Caller,
+    receiver: &Receiver<Message>,
+    mut handle_line: impl FnMut(&[u8]) -> bool,
+) -> Option<i32> {
+    let mut exit_code = None;
+    let mut exited = false;
+    let mut stdout_ended = false;
+    let mut stderr_ended = false;
+    let mut drain_deadline: Option<Instant> = None;
+    loop {
+        let message = match drain_deadline {
+            None => receiver.recv().ok(),
+            Some(deadline) => {
+                match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(message) => Some(message),
+                    Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => None,
+                }
+            }
+        };
+        match message {
+            Some(Message::Line(line)) => {
+                let content = line.strip_suffix(b"\n").unwrap_or(&line);
+                if handle_line(content) {
+                    caller.signals.kill_group();
+                }
+            }
+            Some(Message::StdoutEnd) => stdout_ended = true,
+            Some(Message::StderrEnd) => stderr_ended = true,
+            Some(Message::Exited(status)) => {
+                exited = true;
+                exit_code = status.code();
+                caller.signals.exited();
+                drain_deadline = Some(Instant::now() + DRAIN_PERIOD);
+            }
+            None => return exit_code,
+        }
+        if exited && stdout_ended && stderr_ended {
+            return exit_code;
+        }
+    }
+}
+
+fn read_lines(stdout: impl Read, sender: &Sender<Message>) {
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
     loop {
@@ -430,54 +562,44 @@ fn execute(
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
-        let content = line.strip_suffix(b"\n").unwrap_or(&line);
-        if let Some(file) = raw.as_mut() {
-            let mut bytes = Vec::with_capacity(content.len() + 1);
-            bytes.extend_from_slice(content);
-            bytes.push(b'\n');
-            let _ = file.write_all(&bytes);
-        }
-        for event in translate_line(content, adapter.as_mut(), &mut aggregator) {
-            output.write(&mut caller.stdout, &event);
+        if sender.send(Message::Line(line.clone())).is_err() {
+            return;
         }
     }
+    let _ = sender.send(Message::StdoutEnd);
+}
 
-    let exit_code = child.wait().ok().and_then(|status| status.code());
-    let _ = writer.join();
-    let tail = forwarder.join().unwrap_or_default();
-    let stderr_tail = tail_chars(String::from_utf8_lossy(&tail).trim_end(), STDERR_TAIL_CHARS);
-    let (events, status) = conclude(
-        aggregator,
-        adapter.as_ref(),
-        exit_code,
-        &stderr_tail,
-        started,
-    );
-    for event in &events {
-        output.write(&mut caller.stdout, event);
+fn wait_child(mut child: Child, sender: &Sender<Message>) {
+    if let Ok(status) = child.wait() {
+        let _ = sender.send(Message::Exited(status));
     }
-    drop(raw);
-    finish_tempdir(tempdir, debug);
-    status.exit_code()
 }
 
 pub fn translate_line(
     line: &[u8],
     adapter: &mut dyn Adapter,
     aggregator: &mut Aggregator,
-) -> Vec<Event> {
-    match serde_json::from_slice::<Value>(line) {
-        Ok(value) => adapter
-            .translate(&value)
-            .into_iter()
-            .flat_map(|record| aggregator.push(record))
-            .collect(),
-        Err(_) => Vec::new(),
+) -> (Vec<Event>, bool) {
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        return (Vec::new(), false);
+    };
+    let mut events = Vec::new();
+    let mut terminate = false;
+    for record in adapter.translate(&value) {
+        if record == Record::Terminate {
+            terminate = true;
+        } else {
+            events.extend(aggregator.push(record));
+        }
     }
+    (events, terminate)
 }
 
-fn forward_stderr(mut stderr: impl Read, sink: Arc<Mutex<dyn Write + Send>>) -> Vec<u8> {
-    let mut tail = Vec::new();
+fn forward_stderr(
+    mut stderr: impl Read,
+    sink: Arc<Mutex<dyn Write + Send>>,
+    tail: &Mutex<Vec<u8>>,
+) {
     let mut buffer = [0u8; 8192];
     loop {
         let count = match stderr.read(&mut buffer) {
@@ -490,12 +612,14 @@ fn forward_stderr(mut stderr: impl Read, sink: Arc<Mutex<dyn Write + Send>>) -> 
             let _ = sink.write_all(&buffer[..count]);
             let _ = sink.flush();
         }
-        tail.extend_from_slice(&buffer[..count]);
-        if tail.len() > STDERR_TAIL_BYTES {
-            tail.drain(..tail.len() - STDERR_TAIL_BYTES);
+        if let Ok(mut tail) = tail.lock() {
+            tail.extend_from_slice(&buffer[..count]);
+            if tail.len() > STDERR_TAIL_BYTES {
+                let excess = tail.len() - STDERR_TAIL_BYTES;
+                tail.drain(..excess);
+            }
         }
     }
-    tail
 }
 
 fn tail_chars(text: &str, count: usize) -> String {
@@ -512,21 +636,25 @@ fn finish_tempdir(tempdir: TempDir, debug: bool) {
 pub fn conclude(
     aggregator: Aggregator,
     adapter: &dyn Adapter,
-    exit_code: Option<i32>,
+    exit: &Exit,
     stderr_tail: &str,
     started: Instant,
 ) -> (Vec<Event>, EndStatus) {
     let (mut events, summary) = aggregator.finish();
-    let (status, detail) = match adapter.failure(exit_code, stderr_tail) {
-        Some(detail) => (
-            EndStatus::Failed,
-            failure_detail(detail, stderr_tail, adapter.runtime()),
-        ),
-        None => (EndStatus::Finished, String::new()),
+    let (status, detail) = match (exit.signal, exit.timed_out) {
+        (Some(signal), _) => (EndStatus::Interrupted(signal), String::new()),
+        (None, true) => (EndStatus::Timeout, String::new()),
+        (None, false) => match adapter.failure(exit.code, stderr_tail) {
+            Some(detail) => (
+                EndStatus::Failed,
+                failure_detail(detail, stderr_tail, adapter.runtime()),
+            ),
+            None => (EndStatus::Finished, String::new()),
+        },
     };
     events.push(Event::now(Body::End(End {
         status,
-        exit_code,
+        exit_code: exit.code,
         detail,
         duration_ms: elapsed_ms(started),
         usage: summary.usage,

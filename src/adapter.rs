@@ -60,4 +60,5 @@ pub enum Record {
     Result {
         text: String,
     },
+    Terminate,
 }

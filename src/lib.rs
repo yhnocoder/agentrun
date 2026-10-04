@@ -6,4 +6,5 @@ pub mod event;
 pub mod output;
 pub mod run;
 pub mod session;
+pub mod signal;
 pub mod usage;
