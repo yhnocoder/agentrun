@@ -53,65 +53,76 @@
 <p>读取方必须持续消费标准输出。文档说明管道缓冲区满时 pi 会阻塞。</p>
 
 <h2>有哪些事件</h2>
-<p>「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述；「0.73.1 观测」表示在 0.73.1 的样本中出现过、1.0.1 的样本里没有遇到触发条件。</p>
+<p>按用途分为五类，越靠前越需要处理。「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述；「0.73.1 观测」表示在 0.73.1 的样本中出现过、1.0.1 的样本里没有遇到触发条件。</p>
+<h3>消息与结果</h3>
+<p>解析器必须处理的事件。<code>message_end</code> 给出每条消息的完整内容，最后一个 assistant 消息的 <code>stopReason</code> 决定成败。</p>
 <table>
   <thead>
     <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
   </thead>
   <tbody>
     <tr><td><code>session</code></td><td>第一行，一次</td><td>观测</td></tr>
-    <tr><td><code>agent_start</code></td><td>一次 agent 运行开始。正常运行一次；自动重试时每次尝试一次</td><td>观测</td></tr>
-    <tr><td><code>turn_start</code></td><td>每次模型调用之前</td><td>观测</td></tr>
+    <tr><td><code>message_end</code></td><td>每条消息完成，<code>message</code> 为最终内容</td><td>观测</td></tr>
     <tr><td><code>message_start</code></td><td>每条消息开始：system、user、assistant、toolResult</td><td>观测</td></tr>
     <tr><td><code>message_update</code></td><td>assistant 消息流式输出中的每个片段</td><td>观测</td></tr>
-    <tr><td><code>message_end</code></td><td>每条消息完成，<code>message</code> 为最终内容</td><td>观测</td></tr>
+  </tbody>
+</table>
+<h3>工具执行</h3>
+<p>每次工具调用的开始、部分输出与结束，用 <code>toolCallId</code> 关联。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
     <tr><td><code>tool_execution_start</code></td><td>每次工具执行开始</td><td>观测</td></tr>
     <tr><td><code>tool_execution_update</code></td><td>工具报告部分结果。样本中只有 <code>bash</code> 工具产生</td><td>观测</td></tr>
     <tr><td><code>tool_execution_end</code></td><td>每次工具执行结束</td><td>观测</td></tr>
+  </tbody>
+</table>
+<h3>运行与轮次的边界</h3>
+<p>标出一次运行与每次模型调用的开始和结束，本身不带新内容。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>agent_start</code></td><td>一次 agent 运行开始。正常运行一次；自动重试时每次尝试一次</td><td>观测</td></tr>
+    <tr><td><code>turn_start</code></td><td>每次模型调用之前</td><td>观测</td></tr>
     <tr><td><code>turn_end</code></td><td>一次模型调用及其工具结果全部完成</td><td>观测</td></tr>
     <tr><td><code>agent_end</code></td><td>一次 agent 运行结束</td><td>观测</td></tr>
     <tr><td><code>agent_settled</code></td><td>没有剩余的自动工作（重试、压缩恢复、排队消息），正常运行的最后一行</td><td>观测</td></tr>
+  </tbody>
+</table>
+<h3>重试与压缩</h3>
+<p>模型调用失败或上下文过长时出现。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
     <tr><td><code>auto_retry_start</code>、<code>auto_retry_end</code></td><td>模型调用失败后自动重试前后</td><td>0.73.1 观测</td></tr>
+    <tr><td><code>compaction_start</code>、<code>compaction_end</code></td><td>上下文压缩开始与结束</td><td>文档</td></tr>
+    <tr><td><code>summarization_retry_scheduled</code>、<code>summarization_retry_attempt_start</code>、<code>summarization_retry_finished</code></td><td>压缩或分支摘要失败后的重试</td><td>文档</td></tr>
+  </tbody>
+</table>
+<h3>JSON 模式下通常不出现</h3>
+<p>依赖输入通道、扩展或 RPC 模式，解析器跳过即可。</p>
+<table>
+  <thead>
+    <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
+  </thead>
+  <tbody>
     <tr><td><code>queue_update</code></td><td>steering 或 follow-up 队列变化。JSON 模式没有输入通道，正常情况不会出现</td><td>文档</td></tr>
     <tr><td><code>entry_appended</code></td><td>扩展通过 <code>pi.appendEntry()</code> 追加自定义条目</td><td>文档</td></tr>
     <tr><td><code>session_info_changed</code></td><td>会话显示名变化</td><td>文档</td></tr>
     <tr><td><code>thinking_level_changed</code></td><td>thinking 级别变化</td><td>文档</td></tr>
-    <tr><td><code>compaction_start</code>、<code>compaction_end</code></td><td>上下文压缩开始与结束</td><td>文档</td></tr>
-    <tr><td><code>summarization_retry_scheduled</code>、<code>summarization_retry_attempt_start</code>、<code>summarization_retry_finished</code></td><td>压缩或分支摘要失败后的重试</td><td>文档</td></tr>
     <tr><td><code>bash_execution_update</code>、<code>extension_error</code></td><td>只在 RPC 模式出现，JSON 模式没有</td><td>文档</td></tr>
   </tbody>
 </table>
 
 <h2>一次运行的顺序</h2>
-<p>下面是一次「运行一条命令、回答结果」的运行。流里每行一个事件，缩进只为阅读。</p>
-<div class="term">session
-agent_start
-turn_start
-message_start            <span class="dim">role system（系统提示与工具定义）</span>
-message_end              <span class="dim">role system</span>
-message_start            <span class="dim">role user（提示词）</span>
-message_end              <span class="dim">role user</span>
-<span class="dim">第 1 次模型调用：thinking 之后一个 bash 工具调用</span>
-message_start            <span class="dim">role assistant，content []，stopReason pending</span>
-message_update  ×N       <span class="dim">thinking_start、thinking_delta…、toolcall_start、toolcall_delta…</span>
-message_update           <span class="dim">thinking_end（usage 从这里开始非零）</span>
-message_update           <span class="dim">toolcall_end</span>
-message_end              <span class="dim">role assistant，stopReason toolUse</span>
-tool_execution_start     <span class="dim">bash</span>
-tool_execution_update    <span class="dim">partialResult.content []</span>
-tool_execution_update    <span class="dim">partialResult.content 含输出</span>
-tool_execution_end       <span class="dim">result，isError false</span>
-message_start            <span class="dim">role toolResult</span>
-message_end              <span class="dim">role toolResult</span>
-turn_end                 <span class="dim">message 为 assistant 消息，toolResults 含 1 项</span>
-<span class="dim">第 2 次模型调用：文字回答</span>
-turn_start
-message_start            <span class="dim">role assistant</span>
-message_update  ×N       <span class="dim">thinking_*、text_start、text_delta…、text_end</span>
-message_end              <span class="dim">role assistant，stopReason stop</span>
-turn_end                 <span class="dim">toolResults []</span>
-agent_end                <span class="dim">messages 含以上全部消息，willRetry false</span>
-agent_settled</div>
+<p>下面是一次「运行一条命令、回答结果」的运行。图中每个方框是流里的一行，写成 <code>message_start / message_end</code> 的方框表示紧挨着的两行。</p>
+<figure style="overflow-x:auto"><svg viewBox="0 0 595 824" style="width:684px;max-width:none" role="img" aria-label="pi 一次运行的事件顺序"><style>.sq-box{fill:var(--surface);stroke-width:1.4}.sq-axis{stroke:var(--line);stroke-width:2}.sq-name{font-family:var(--mono);font-size:12.5px;fill:var(--fg)}.sq-note{font-family:var(--mono);font-size:11.5px;fill:var(--muted)}.sq-phase{font-family:var(--font);font-size:13px;font-weight:600;fill:var(--fg)}.sq-legend{font-family:var(--font);font-size:12px;fill:var(--muted)}</style><line x1="12" y1="79.0" x2="12" y2="799.0" class="sq-axis"/><rect x="30" y="10" width="14" height="14" rx="3" style="stroke:var(--fg)" class="sq-box"/><text class="sq-legend" x="50" y="21">会话头与结果</text><rect x="153.6" y="10" width="14" height="14" rx="3" style="stroke:var(--accent)" class="sq-box"/><text class="sq-legend" x="173.6" y="21">模型输出</text><rect x="250.0" y="10" width="14" height="14" rx="3" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-legend" x="270.0" y="21">输入与工具结果</text><rect x="387.2" y="10" width="14" height="14" rx="3" style="stroke:var(--muted)" class="sq-box"/><text class="sq-legend" x="407.2" y="21">状态与流程</text><text class="sq-phase" x="30" y="56">启动</text><circle cx="12" cy="79.0" r="4" style="fill:var(--fg)"/><rect x="30" y="67" width="232" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="83.0">session</text><text class="sq-note" x="278" y="83.0">第一行，会话头</text><circle cx="12" cy="109.0" r="4" style="fill:var(--muted)"/><rect x="30" y="97" width="232" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="113.0">agent_start</text><circle cx="12" cy="139.0" r="4" style="fill:var(--muted)"/><rect x="30" y="127" width="232" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="143.0">turn_start</text><circle cx="12" cy="169.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="157" width="232" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="173.0">message_start / message_end</text><text class="sq-note" x="278" y="173.0">role system：系统提示与工具定义</text><circle cx="12" cy="199.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="187" width="232" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="203.0">message_start / message_end</text><text class="sq-note" x="278" y="203.0">role user：提示词</text><text class="sq-phase" x="30" y="236">第 1 次模型调用：thinking 之后一个 bash 工具调用</text><circle cx="12" cy="259.0" r="4" style="fill:var(--accent)"/><rect x="30" y="247" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="263.0">message_start</text><text class="sq-note" x="278" y="263.0">role assistant，stopReason pending</text><circle cx="12" cy="289.0" r="4" style="fill:var(--accent)"/><rect x="30" y="277" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="293.0">message_update ×N</text><text class="sq-note" x="278" y="293.0">thinking_*、toolcall_start、toolcall_delta…</text><circle cx="12" cy="319.0" r="4" style="fill:var(--accent)"/><rect x="30" y="307" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="323.0">message_update</text><text class="sq-note" x="278" y="323.0">thinking_end（usage 从这里开始非零）</text><circle cx="12" cy="349.0" r="4" style="fill:var(--accent)"/><rect x="30" y="337" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="353.0">message_update</text><text class="sq-note" x="278" y="353.0">toolcall_end</text><circle cx="12" cy="379.0" r="4" style="fill:var(--accent)"/><rect x="30" y="367" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="383.0">message_end</text><text class="sq-note" x="278" y="383.0">role assistant，stopReason toolUse</text><circle cx="12" cy="409.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="397" width="232" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="413.0">tool_execution_start</text><text class="sq-note" x="278" y="413.0">bash</text><circle cx="12" cy="439.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="427" width="232" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="443.0">tool_execution_update ×2</text><text class="sq-note" x="278" y="443.0">partialResult：先为空，再含输出</text><circle cx="12" cy="469.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="457" width="232" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="473.0">tool_execution_end</text><text class="sq-note" x="278" y="473.0">result，isError false</text><circle cx="12" cy="499.0" r="4" style="fill:var(--code-str)"/><rect x="30" y="487" width="232" height="24" rx="6" style="stroke:var(--code-str)" class="sq-box"/><text class="sq-name" x="40" y="503.0">message_start / message_end</text><text class="sq-note" x="278" y="503.0">role toolResult</text><circle cx="12" cy="529.0" r="4" style="fill:var(--muted)"/><rect x="30" y="517" width="232" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="533.0">turn_end</text><text class="sq-note" x="278" y="533.0">toolResults 含 1 项</text><text class="sq-phase" x="30" y="566">第 2 次模型调用：文字回答</text><circle cx="12" cy="589.0" r="4" style="fill:var(--muted)"/><rect x="30" y="577" width="232" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="593.0">turn_start</text><circle cx="12" cy="619.0" r="4" style="fill:var(--accent)"/><rect x="30" y="607" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="623.0">message_start</text><text class="sq-note" x="278" y="623.0">role assistant</text><circle cx="12" cy="649.0" r="4" style="fill:var(--accent)"/><rect x="30" y="637" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="653.0">message_update ×N</text><text class="sq-note" x="278" y="653.0">thinking_*、text_start、text_delta…、text_end</text><circle cx="12" cy="679.0" r="4" style="fill:var(--accent)"/><rect x="30" y="667" width="232" height="24" rx="6" style="stroke:var(--accent)" class="sq-box"/><text class="sq-name" x="40" y="683.0">message_end</text><text class="sq-note" x="278" y="683.0">role assistant，stopReason stop</text><circle cx="12" cy="709.0" r="4" style="fill:var(--muted)"/><rect x="30" y="697" width="232" height="24" rx="6" style="stroke:var(--muted)" class="sq-box"/><text class="sq-name" x="40" y="713.0">turn_end</text><text class="sq-note" x="278" y="713.0">toolResults []</text><text class="sq-phase" x="30" y="746">结束</text><circle cx="12" cy="769.0" r="4" style="fill:var(--fg)"/><rect x="30" y="757" width="232" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="773.0">agent_end</text><text class="sq-note" x="278" y="773.0">messages 含全部消息，willRetry false</text><circle cx="12" cy="799.0" r="4" style="fill:var(--fg)"/><rect x="30" y="787" width="232" height="24" rx="6" style="stroke:var(--fg)" class="sq-box"/><text class="sq-name" x="40" y="803.0">agent_settled</text><text class="sq-note" x="278" y="803.0">正常运行的最后一行</text></svg></figure>
 <p>要点：</p>
 <ul>
   <li>system 与 user 消息的 <code>message_start</code> 与 <code>message_end</code> 内容相同，紧挨着出现。system 消息只在第一次 <code>turn_start</code> 之后出现一次。</li>
