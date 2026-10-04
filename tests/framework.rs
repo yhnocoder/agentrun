@@ -1,159 +1,16 @@
 mod support;
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agentrun::adapter::{Adapter, Launch, Record};
-use agentrun::cli::Runtime;
-use agentrun::event::SubagentStatus;
-use agentrun::run::{Caller, Invocation, run};
-use agentrun::usage::{TokenCounts, Usage};
+use agentrun::adapter::Adapter;
+use agentrun::run::{Caller, run};
+use agentrun::signal::Signals;
 use serde_json::{Value, json};
+use support::fake::FakeAdapter;
 use tempfile::TempDir;
-
-struct FakeAdapter {
-    echoes: bool,
-    failure: Option<String>,
-}
-
-impl FakeAdapter {
-    fn new(echoes: bool) -> FakeAdapter {
-        FakeAdapter {
-            echoes,
-            failure: None,
-        }
-    }
-}
-
-impl Adapter for FakeAdapter {
-    fn runtime(&self) -> Runtime {
-        Runtime::ClaudeCode
-    }
-
-    fn launch(&self, executable: &Path, invocation: &Invocation) -> Launch {
-        let mut argv = vec![executable.to_string_lossy().into_owned()];
-        argv.extend(invocation.args.runtime_args.iter().cloned());
-        argv.push(invocation.prompt.clone());
-        Launch {
-            argv,
-            stdin: format!("{}\n", invocation.prompt).into_bytes(),
-        }
-    }
-
-    fn echoes_prompt(&self) -> bool {
-        self.echoes
-    }
-
-    fn translate(&mut self, line: &Value) -> Vec<Record> {
-        let record = match line["record"].as_str() {
-            Some("prompt_echo") => Record::PromptEcho {
-                text: string(line, "text"),
-            },
-            Some("tool_start") => Record::ToolStart {
-                id: string(line, "id"),
-                parent: optional(line, "parent"),
-                name: string(line, "name"),
-                summary: string(line, "summary"),
-            },
-            Some("tool_end") => Record::ToolEnd {
-                id: string(line, "id"),
-                denied: line["denied"].as_bool().unwrap_or(false),
-            },
-            Some("subagent_start") => Record::SubagentStart {
-                id: string(line, "id"),
-                parent: optional(line, "parent"),
-                kind: string(line, "kind"),
-                model: optional(line, "model"),
-                description: string(line, "description"),
-            },
-            Some("subagent_end") => Record::SubagentEnd {
-                id: string(line, "id"),
-                status: if line["status"] == "finished" {
-                    SubagentStatus::Finished
-                } else {
-                    SubagentStatus::Failed
-                },
-            },
-            Some("text") => Record::Text {
-                parent: optional(line, "parent"),
-                text: string(line, "text"),
-            },
-            Some("usage") => Record::Usage {
-                parent: optional(line, "parent"),
-                model: optional(line, "model"),
-                counts: counts(line),
-            },
-            Some("run_usage") => Record::RunUsage(Usage {
-                totals: counts(line),
-                by_model: line["by_model"]
-                    .as_object()
-                    .map(|models| {
-                        models
-                            .iter()
-                            .map(|(model, value)| (model.clone(), counts(value)))
-                            .collect::<BTreeMap<_, _>>()
-                    })
-                    .unwrap_or_default(),
-            }),
-            Some("result") => Record::Result {
-                text: string(line, "text"),
-            },
-            Some("fail") => {
-                self.failure = Some(string(line, "detail"));
-                return Vec::new();
-            }
-            _ => return Vec::new(),
-        };
-        vec![record]
-    }
-
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
-        self.failure
-            .clone()
-            .or_else(|| (exit_code != Some(0)).then(String::new))
-    }
-}
-
-fn string(line: &Value, key: &str) -> String {
-    line[key].as_str().unwrap_or_default().to_string()
-}
-
-fn optional(line: &Value, key: &str) -> Option<String> {
-    line[key].as_str().map(str::to_string)
-}
-
-fn counts(line: &Value) -> TokenCounts {
-    TokenCounts {
-        input_tokens: line["input_tokens"].as_u64(),
-        output_tokens: line["output_tokens"].as_u64(),
-        cache_read_tokens: line["cache_read_tokens"].as_u64(),
-        cache_write_tokens: line["cache_write_tokens"].as_u64(),
-    }
-}
-
-#[derive(Clone, Default)]
-struct Shared(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Shared {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Shared {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
-}
 
 struct Sandbox {
     root: TempDir,
@@ -223,25 +80,27 @@ impl Sandbox {
             (OsString::from("PATH"), OsString::from(self.path_var())),
             (OsString::from("TMPDIR"), self.tmp().into_os_string()),
         ];
-        let stdout = Shared::default();
+        let stdout = Arc::new(Mutex::new(Vec::new()));
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let caller = Caller {
             args,
             env,
             stdin: Box::new(std::io::empty()),
             stdin_is_terminal: false,
-            stdout: Box::new(stdout.clone()),
+            stdout: stdout.clone(),
             stdout_is_terminal: false,
             stderr: stderr.clone(),
+            signals: Signals::install(),
         };
         let code = run(caller, &move |_| {
             Some(Box::new(FakeAdapter::new(echoes)) as Box<dyn Adapter>)
         });
-        let stderr = String::from_utf8(stderr.lock().unwrap().clone()).unwrap();
+        let text =
+            |bytes: &Arc<Mutex<Vec<u8>>>| String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
         Outcome {
             code,
-            stdout: stdout.text(),
-            stderr,
+            stdout: text(&stdout),
+            stderr: text(&stderr),
         }
     }
 }

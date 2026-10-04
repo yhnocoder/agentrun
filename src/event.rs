@@ -1,10 +1,11 @@
 use std::time::SystemTime;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
 use crate::cli::{NetworkMode, Runtime};
+use crate::signal::Signal;
 use crate::usage::{TokenCounts, Usage};
 
 pub const SCHEMA: u8 = 1;
@@ -196,11 +197,12 @@ impl NetworkReason {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndStatus {
     Finished,
     Failed,
+    Interrupted(Signal),
+    Timeout,
     Rejected,
 }
 
@@ -209,6 +211,8 @@ impl EndStatus {
         match self {
             EndStatus::Finished => "finished",
             EndStatus::Failed => "failed",
+            EndStatus::Interrupted(_) => "interrupted",
+            EndStatus::Timeout => "timeout",
             EndStatus::Rejected => "rejected",
         }
     }
@@ -217,8 +221,16 @@ impl EndStatus {
         match self {
             EndStatus::Finished => 0,
             EndStatus::Failed => 1,
+            EndStatus::Interrupted(signal) => signal.exit_code(),
+            EndStatus::Timeout => 3,
             EndStatus::Rejected => 2,
         }
+    }
+}
+
+impl Serialize for EndStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
     }
 }
 
@@ -365,6 +377,34 @@ mod tests {
             event.to_json(),
             r#"{"schema":1,"type":"network","time":"2026-10-04T13:00:00.000Z","host":"example.com","port":443,"allowed":false,"reason":"not_allowed"}"#
         );
+    }
+
+    #[test]
+    fn end_status_names_and_exit_codes() {
+        let statuses = [
+            (EndStatus::Finished, "finished", 0),
+            (EndStatus::Failed, "failed", 1),
+            (EndStatus::Rejected, "rejected", 2),
+            (EndStatus::Timeout, "timeout", 3),
+            (
+                EndStatus::Interrupted(Signal::Interrupt),
+                "interrupted",
+                130,
+            ),
+            (
+                EndStatus::Interrupted(Signal::Terminate),
+                "interrupted",
+                143,
+            ),
+        ];
+        for (status, name, code) in statuses {
+            assert_eq!(status.name(), name);
+            assert_eq!(status.exit_code(), code);
+            assert_eq!(
+                serde_json::to_string(&status).unwrap(),
+                format!("\"{name}\"")
+            );
+        }
     }
 
     #[test]
