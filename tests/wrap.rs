@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentrun::sandbox::{create_pi_state_dir, wrap_pi, wrapper_failure};
+use agentrun::sandbox::{wrap_pi, wrapper_failure};
 use tempfile::TempDir;
 
 struct Wrapped {
@@ -73,6 +73,10 @@ impl Wrapped {
         self.home().join(".pi/agent")
     }
 
+    fn login_file(&self) -> PathBuf {
+        self.state_dir().join("auth.json")
+    }
+
     fn script(&self, body: &str) -> PathBuf {
         let path = self.cwd().join("script.sh");
         std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
@@ -81,7 +85,8 @@ impl Wrapped {
     }
 
     fn command(&self, body: &str, args: &[&str]) -> Command {
-        create_pi_state_dir(&self.state_dir()).unwrap();
+        std::fs::create_dir_all(self.state_dir()).unwrap();
+        std::fs::write(self.login_file(), "{}").unwrap();
         let script = self.script(body);
         let mut argv = vec![script.to_string_lossy().into_owned()];
         argv.extend(args.iter().map(|arg| arg.to_string()));
@@ -89,7 +94,7 @@ impl Wrapped {
             &self.bwrap,
             &self.cwd(),
             &self.tempdir(),
-            &self.state_dir(),
+            Some(&self.login_file()),
             &argv,
         );
         let mut command = Command::new(&wrapped[0]);
@@ -114,7 +119,7 @@ fn stdout(output: &Output) -> String {
 }
 
 #[test]
-fn writes_only_cwd_tempdir_and_state_dir() {
+fn writes_only_cwd_tempdir_and_login_file() {
     let Some(wrapped) = Wrapped::new() else {
         return;
     };
@@ -128,6 +133,7 @@ fn writes_only_cwd_tempdir_and_state_dir() {
         &[
             wrapped.cwd().join("inside.txt").to_str().unwrap(),
             wrapped.tempdir().join("temp.txt").to_str().unwrap(),
+            wrapped.login_file().to_str().unwrap(),
             wrapped.state_dir().join("state.txt").to_str().unwrap(),
             wrapped.home().join("outside.txt").to_str().unwrap(),
             other_tmp.to_str().unwrap(),
@@ -142,27 +148,19 @@ fn writes_only_cwd_tempdir_and_state_dir() {
         .collect();
     assert_eq!(
         lines,
-        ["written", "written", "written", "blocked", "blocked"]
+        [
+            "written", "written", "written", "blocked", "blocked", "blocked"
+        ]
     );
     assert!(wrapped.cwd().join("inside.txt").exists());
     assert!(wrapped.tempdir().join("temp.txt").exists());
-    assert!(wrapped.state_dir().join("state.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(wrapped.login_file()).unwrap(),
+        "probe\n"
+    );
+    assert!(!wrapped.state_dir().join("state.txt").exists());
     assert!(!wrapped.home().join("outside.txt").exists());
     assert!(!other_tmp.exists());
-}
-
-#[test]
-fn state_dir_is_created_before_wrapping() {
-    let Some(wrapped) = Wrapped::new() else {
-        return;
-    };
-    assert!(!wrapped.state_dir().exists());
-    let output = wrapped.run("echo ok\n", &[]);
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    for created in [wrapped.home().join(".pi"), wrapped.state_dir()] {
-        let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", created.display());
-    }
 }
 
 #[test]
@@ -221,14 +219,15 @@ fn process_is_gone(pid: i32) -> bool {
 }
 
 #[test]
-fn sigterm_to_the_process_group_ends_the_wrapped_command() {
+fn sigterm_to_the_process_group_kills_the_wrapped_command_before_its_trap() {
     let Some(wrapped) = Wrapped::new() else {
         return;
     };
     let pidfile = wrapped.cwd().join("pid");
+    let marker = wrapped.cwd().join("trap-ran");
     let mut command = wrapped.command(
-        "trap '' TERM\necho $$ > \"$1\"\necho ready\nwhile :; do sleep 1; done\n",
-        &[pidfile.to_str().unwrap()],
+        "trap 'sleep 1; : > \"$2\"; exit 0' TERM\necho $$ > \"$1\"\necho ready\nwhile :; do sleep 1; done\n",
+        &[pidfile.to_str().unwrap(), marker.to_str().unwrap()],
     );
     let mut child = command
         .process_group(0)
@@ -262,6 +261,8 @@ fn sigterm_to_the_process_group_ends_the_wrapped_command() {
         process_is_gone(script_pid),
         "the wrapped script {script_pid} is still running"
     );
+    thread::sleep(Duration::from_millis(1500));
+    assert!(!marker.exists(), "the trap of the wrapped script ran");
 }
 
 #[test]
@@ -275,7 +276,7 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
         &wrapped.bwrap,
         &wrapped.cwd(),
         &wrapped.tempdir(),
-        &missing,
+        Some(&missing),
         &argv,
     );
     let output = Command::new(&bad[0]).args(&bad[1..]).output().unwrap();

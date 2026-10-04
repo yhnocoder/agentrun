@@ -119,6 +119,7 @@ GREETING='hello world'</code></pre>
   <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再最多等 1 秒读完剩余的输出，然后输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 waitpid 判断主进程退出，不用标准输出的 EOF 判断。</li>
   <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
   <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>
+  <li>pi 被 <code>bwrap</code> 包裹时，第一个信号（转发的 SIGINT 或 SIGTERM，以及超时的 SIGTERM）只发给 bwrap 的子进程 pi，不发给进程组：agentrun 读 <code>/proc/&lt;bwrap 进程号&gt;/task/&lt;bwrap 进程号&gt;/children</code> 找到它，读不到时扫描 <code>/proc/*/stat</code> 找父进程是 bwrap 的进程；都找不到时仍向进程组发信号。之后的 SIGKILL 仍发给整个进程组。理由：bwrap 0.9.0 不转发 SIGTERM，向进程组发信号时 bwrap 自己退出，<code>--die-with-parent</code> 随即 SIGKILL 被包裹的 pi，pi 没有宽限期，正在改写的 <code>auth.json</code> 可能写坏（云端实测）。pi 自己的子进程收不到第一个信号，由最后的 SIGKILL 清理。</li>
   <li>结束顺序：输出 <code>end</code>，删除临时目录，按<a href="run.html#exit-codes">退出码</a>表退出。agentrun 不重新给自己发信号。</li>
 </ul>
 <figure>

@@ -22,8 +22,9 @@ use crate::cli::{
     usage_error_detail,
 };
 use crate::credential::write_session_credential;
-use crate::event::{Body, End, EndStatus, Event, NetworkInfo, SandboxKind, Start};
+use crate::event::{Body, End, EndStatus, Event, NetworkInfo, Start};
 use crate::output::Output;
+use crate::pi;
 use crate::sandbox::{self, Sandbox};
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::signal::{SharedWriter, Signal, Signals};
@@ -94,6 +95,7 @@ pub struct Invocation {
     pub format: Format,
     pub sandbox: Sandbox,
     pub tempdir: PathBuf,
+    pub session: Session,
 }
 
 struct Ready {
@@ -101,7 +103,6 @@ struct Ready {
     adapter: Box<dyn Adapter>,
     executable: PathBuf,
     raw: Option<(PathBuf, File)>,
-    session: Session,
 }
 
 pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
@@ -144,14 +145,14 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         caller.signals.finishing();
         caller.print_lines(&plan_lines(
             &launch,
-            &ready.session,
+            &ready.invocation.session,
             &ready.invocation.prompt,
         ));
         return 0;
     }
     let credential = match write_session_credential(
         ready.invocation.runtime,
-        &ready.session,
+        &ready.invocation.session,
         &ready.invocation.cwd,
     ) {
         Ok(credential) => credential,
@@ -166,15 +167,6 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ),
         None => "credentials: (none)".to_string(),
     };
-    if ready.invocation.runtime == Runtime::Pi
-        && ready.invocation.sandbox.kind == SandboxKind::Bubblewrap
-    {
-        let prepared = sandbox::pi_state_dir(&ready.session, &ready.invocation.cwd)
-            .and_then(|dir| sandbox::create_pi_state_dir(&dir));
-        if let Err(detail) = prepared {
-            return reject(&mut caller, format, &detail, started);
-        }
-    }
     let tempdir = match create_tempdir(&caller) {
         Ok(tempdir) => tempdir,
         Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -187,7 +179,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         Ok(launch) => launch,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
-    let mut plan = plan_lines(&launch, &ready.session, &ready.invocation.prompt);
+    let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
     plan.push(credential_line);
     execute(caller, ready, launch, plan, tempdir, started)
 }
@@ -217,6 +209,9 @@ fn prepare(
     if args.max_turns.is_some() && runtime != Runtime::ClaudeCode {
         return Err("--max-turns is only supported by claude-code".to_string());
     }
+    if let (Runtime::Pi, Some(model)) = (runtime, &args.model) {
+        pi::parse_model(model)?;
+    }
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let prompt = read_prompt(caller, &args)?;
     let env_args = parse_env_args(&args.env, &caller.env)?;
@@ -238,6 +233,9 @@ fn prepare(
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
+    if runtime == Runtime::Pi && sandbox.runs() {
+        return Err(pi::SANDBOX_NOT_IMPLEMENTED.to_string());
+    }
     if args.network != NetworkMode::None {
         return Err(format!(
             "--network {} is not implemented in this build. Use --network none",
@@ -258,13 +256,13 @@ fn prepare(
         format,
         sandbox,
         tempdir: PathBuf::new(),
+        session,
     };
     Ok(Ready {
         invocation,
         adapter,
         executable,
         raw,
-        session,
     })
 }
 
@@ -390,7 +388,6 @@ fn execute(
         invocation,
         mut adapter,
         raw,
-        session,
         ..
     } = ready;
     let debug = invocation.args.debug;
@@ -430,7 +427,8 @@ fn execute(
         .args(program_args)
         .current_dir(&invocation.cwd)
         .env_clear()
-        .envs(&session.env)
+        .envs(&invocation.session.env)
+        .envs(launch.env.iter().map(|(key, value)| (key, value)))
         .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -458,6 +456,7 @@ fn execute(
     caller.signals.running(
         child.id() as i32,
         invocation.args.timeout.map(Duration::from_secs),
+        launch.signal_wrapped_child,
     );
 
     let start = Event::now(Body::Start(Start {
@@ -476,7 +475,7 @@ fn execute(
             .filter(|arg| **arg != invocation.prompt)
             .cloned()
             .collect(),
-        env: session.set.clone(),
+        env: invocation.session.set.clone(),
     }));
     caller.emit(&mut output, &start);
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
