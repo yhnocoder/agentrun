@@ -3,11 +3,13 @@ use std::io::Write;
 
 use crate::cli::{Format, SandboxMode};
 use crate::event::{Body, EndStatus, Event, SandboxKind};
+use crate::rich::{OpenTool, Rich};
 use crate::usage::TokenCounts;
 
 pub enum Output {
     Jsonl,
     Text(TextFormatter),
+    Rich(Box<Rich>),
 }
 
 impl Output {
@@ -20,15 +22,32 @@ impl Output {
         }
     }
 
-    pub fn write(&mut self, out: &mut dyn Write, event: &Event) {
+    pub fn write(&mut self, out: &mut dyn Write, event: &Event, open_tool: OpenTool) {
         let lines = match self {
             Output::Jsonl => vec![event.to_json()],
             Output::Text(formatter) => formatter.lines(event),
+            Output::Rich(rich) => return rich.event(out, event, open_tool),
         };
         for line in lines {
             let _ = writeln!(out, "{line}");
         }
         let _ = out.flush();
+    }
+
+    pub fn refresh(&mut self, out: &mut dyn Write, open_tool: OpenTool) {
+        if let Output::Rich(rich) = self {
+            rich.refresh(out, open_tool);
+        }
+    }
+
+    pub fn stderr(&mut self, out: &mut dyn Write, bytes: &[u8], open_tool: OpenTool) {
+        if let Output::Rich(rich) = self {
+            rich.stderr(out, bytes, open_tool);
+        }
+    }
+
+    pub fn is_rich(&self) -> bool {
+        matches!(self, Output::Rich(_))
     }
 }
 
@@ -74,7 +93,7 @@ impl TextFormatter {
                 Vec::new()
             }
             Body::SubagentStart(start) => {
-                let label = format!("{}#{}", start.kind.to_lowercase(), start.number);
+                let label = subagent_label(&start.kind, start.number);
                 self.labels.insert(start.id.clone(), label.clone());
                 if let Some(model) = &start.model {
                     self.subagent_models
@@ -104,7 +123,7 @@ impl TextFormatter {
                     line.push(' ');
                     line.push_str(model);
                 }
-                line.push_str(&in_out(&end.usage.totals));
+                line.push_str(&usage_items(&end.usage.totals));
                 vec![line]
             }
             Body::Network(network) => match network.reason {
@@ -120,20 +139,10 @@ impl TextFormatter {
                 if end.status == EndStatus::Rejected {
                     return vec![format!("[end] rejected {}", end.detail)];
                 }
-                let counts = &end.usage.totals;
                 let mut line = format!("[end] {} {}", end.status.name(), seconds(end.duration_ms));
-                line.push_str(&in_out(counts));
-                if counts.cache_read_tokens.is_some() || counts.cache_write_tokens.is_some() {
-                    line.push_str(" cache");
-                    if let Some(read) = counts.cache_read_tokens {
-                        line.push_str(&format!(" read {read}"));
-                    }
-                    if let Some(write) = counts.cache_write_tokens {
-                        line.push_str(&format!(" write {write}"));
-                    }
-                }
+                line.push_str(&usage_items(&end.usage.totals));
                 if !end.detail.is_empty() {
-                    line.push(' ');
+                    line.push_str("  ");
                     line.push_str(&end.detail);
                 }
                 vec![line]
@@ -163,8 +172,12 @@ impl TextFormatter {
     }
 }
 
-fn first_line(text: &str) -> &str {
+pub fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
+}
+
+pub fn subagent_label(kind: &str, number: u64) -> String {
+    format!("{}#{}", kind.to_lowercase(), number)
 }
 
 fn seconds(duration_ms: u64) -> String {
@@ -172,15 +185,12 @@ fn seconds(duration_ms: u64) -> String {
     format!("{}.{}s", tenths / 10, tenths % 10)
 }
 
-fn in_out(counts: &TokenCounts) -> String {
-    let mut text = String::new();
-    if let Some(input) = counts.input_tokens {
-        text.push_str(&format!(" in {input}"));
-    }
-    if let Some(output) = counts.output_tokens {
-        text.push_str(&format!(" out {output}"));
-    }
-    text
+fn usage_items(counts: &TokenCounts) -> String {
+    counts
+        .summary(true)
+        .iter()
+        .map(|item| format!("  {item}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -346,7 +356,7 @@ mod tests {
                     by_model: Default::default(),
                 },
             }))),
-            vec!["[explore#1] agent finished 12.4s claude-haiku-4-5 in 3120 out 85"]
+            vec!["[explore#1] agent finished 12.4s claude-haiku-4-5  in 3.1k  out 85  cached 0%"]
         );
         assert_eq!(
             text.lines(&event(Body::SubagentEnd(SubagentEnd {
@@ -391,7 +401,7 @@ mod tests {
                 "",
                 counts(Some(18234), Some(912), Some(42000), Some(5100))
             )),
-            vec!["[end] finished 31.3s in 18234 out 912 cache read 42000 write 5100"]
+            vec!["[end] finished 31.3s  in 65.3k  out 0.9k  cached 64%"]
         );
         assert_eq!(
             text.lines(&end(
@@ -399,7 +409,7 @@ mod tests {
                 "boom",
                 counts(None, Some(3), None, Some(4))
             )),
-            vec!["[end] failed 31.3s out 3 cache write 4 boom"]
+            vec!["[end] failed 31.3s  in 4  out 3  boom"]
         );
         assert_eq!(
             text.lines(&end(EndStatus::Failed, "", TokenCounts::default())),

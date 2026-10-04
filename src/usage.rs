@@ -15,11 +15,44 @@ impl TokenCounts {
         Some(self.input_tokens? + self.cache_read_tokens? + self.cache_write_tokens?)
     }
 
-    fn add(&mut self, other: &TokenCounts) {
+    pub fn summary(&self, with_output: bool) -> Vec<String> {
+        let input = [
+            self.input_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| a + b);
+        let mut items = Vec::new();
+        if let Some(input) = input {
+            items.push(format!("in {}", tokens(input)));
+        }
+        if let Some(output) = self.output_tokens.filter(|_| with_output) {
+            items.push(format!("out {}", tokens(output)));
+        }
+        if let (Some(read), Some(input)) = (self.cache_read_tokens, input.filter(|n| *n > 0)) {
+            let percent = (read as f64 / input as f64 * 100.0).round() as u64;
+            items.push(format!("cached {percent}%"));
+        }
+        items
+    }
+
+    pub fn add(&mut self, other: &TokenCounts) {
         self.input_tokens = add(self.input_tokens, other.input_tokens);
         self.output_tokens = add(self.output_tokens, other.output_tokens);
         self.cache_read_tokens = add(self.cache_read_tokens, other.cache_read_tokens);
         self.cache_write_tokens = add(self.cache_write_tokens, other.cache_write_tokens);
+    }
+}
+
+pub fn tokens(count: u64) -> String {
+    if count < 100 {
+        count.to_string()
+    } else if count < 1_000_000 {
+        format!("{:.1}k", count as f64 / 1000.0)
+    } else {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
     }
 }
 
@@ -84,6 +117,30 @@ mod tests {
             counts(Some(1), None, Some(2), Some(0)).context_tokens(),
             Some(3)
         );
+    }
+
+    #[test]
+    fn summary_items_follow_the_display_rules() {
+        assert_eq!(
+            counts(Some(18234), Some(912), Some(42000), Some(5100)).summary(true),
+            vec!["in 65.3k", "out 0.9k", "cached 64%"]
+        );
+        assert_eq!(
+            counts(Some(18234), Some(912), Some(42000), Some(5100)).summary(false),
+            vec!["in 65.3k", "cached 64%"]
+        );
+        assert_eq!(
+            counts(None, Some(3), None, Some(4)).summary(true),
+            vec!["in 4", "out 3"]
+        );
+        assert_eq!(
+            counts(Some(0), None, Some(0), None).summary(true),
+            vec!["in 0"]
+        );
+        assert!(TokenCounts::default().summary(true).is_empty());
+        assert_eq!(tokens(99), "99");
+        assert_eq!(tokens(100), "0.1k");
+        assert_eq!(tokens(1_234_567), "1.2M");
     }
 
     #[test]

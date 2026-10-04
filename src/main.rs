@@ -16,6 +16,7 @@ fn main() -> ExitCode {
         stdout_is_terminal: std::io::stdout().is_terminal(),
         stdout: Arc::new(Mutex::new(std::io::stdout())),
         stderr: Arc::new(Mutex::new(std::io::stderr())),
+        stderr_is_terminal: std::io::stderr().is_terminal(),
         signals,
     };
     ExitCode::from(run(caller, &adapter::builtin))

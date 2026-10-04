@@ -1,5 +1,7 @@
 #[path = "support/fake.rs"]
 mod fake;
+#[path = "support/harness.rs"]
+mod harness;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -24,10 +26,6 @@ fn main() {
     if std::env::var_os(FAKE_AGENTRUN).is_some() {
         std::process::exit(fake_agentrun().into());
     }
-    let filters: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .collect();
     let tests: Vec<(&str, fn())> = vec![
         (
             "background_process_is_killed_after_exit",
@@ -78,35 +76,7 @@ fn main() {
             first_signal_reaches_the_wrapped_runtime_directly,
         ),
     ];
-    let selected: Vec<(&str, fn())> = tests
-        .into_iter()
-        .filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str())))
-        .collect();
-    println!("\nrunning {} tests", selected.len());
-    let handles: Vec<_> = selected
-        .into_iter()
-        .map(|(name, test)| (name, thread::spawn(test)))
-        .collect();
-    let mut failed = 0;
-    for (name, handle) in handles {
-        match handle.join() {
-            Ok(()) => println!("test {name} ... ok"),
-            Err(payload) => {
-                failed += 1;
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                println!("test {name} ... FAILED\n    {message}");
-            }
-        }
-    }
-    if failed > 0 {
-        println!("\ntest result: FAILED. {failed} failed");
-        std::process::exit(1);
-    }
-    println!("\ntest result: ok");
+    harness::run_tests(tests);
 }
 
 fn fake_agentrun() -> u8 {
@@ -119,6 +89,7 @@ fn fake_agentrun() -> u8 {
         stdout: Arc::new(Mutex::new(std::io::stdout())),
         stdout_is_terminal: false,
         stderr: Arc::new(Mutex::new(std::io::stderr())),
+        stderr_is_terminal: false,
         signals,
     };
     run(caller, &|_| {

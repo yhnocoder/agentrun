@@ -284,7 +284,7 @@ impl Preparation {
             result: None,
         }));
         if let Ok(mut stdout) = self.stdout.lock() {
-            Output::new(self.format, SandboxMode::On, "").write(&mut *stdout, &end);
+            Output::new(self.format, SandboxMode::On, "").write(&mut *stdout, &end, &|_| None);
         }
         if let (Some(tempdir), false) = (&self.tempdir, self.keep_tempdir) {
             let _ = std::fs::remove_dir_all(tempdir);

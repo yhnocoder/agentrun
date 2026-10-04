@@ -7,6 +7,7 @@ pub mod event;
 pub mod json;
 pub mod output;
 pub mod pi;
+pub mod rich;
 pub mod run;
 pub mod sandbox;
 pub mod session;

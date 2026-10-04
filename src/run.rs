@@ -25,6 +25,7 @@ use crate::credential::write_session_credential;
 use crate::event::{Body, End, EndStatus, Event, NetworkInfo, Start};
 use crate::output::Output;
 use crate::pi;
+use crate::rich::{OpenTool, REFRESH_PERIOD, Rich, terminal_size};
 use crate::sandbox::{self, Sandbox};
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::signal::{SharedWriter, Signal, Signals};
@@ -46,6 +47,7 @@ pub struct Caller {
     pub stdout: SharedWriter,
     pub stdout_is_terminal: bool,
     pub stderr: Arc<Mutex<dyn Write + Send>>,
+    pub stderr_is_terminal: bool,
     pub signals: Signals,
 }
 
@@ -65,9 +67,13 @@ impl Caller {
         }
     }
 
-    fn emit(&self, output: &mut Output, event: &Event) {
+    fn emit(&self, output: &mut Output, event: &Event, open_tool: OpenTool) {
+        self.with_stdout(|stdout| output.write(stdout, event, open_tool));
+    }
+
+    fn with_stdout(&self, write: impl FnOnce(&mut dyn Write)) {
         if let Ok(mut stdout) = self.stdout.lock() {
-            output.write(&mut *stdout, event);
+            write(&mut *stdout);
         }
     }
 
@@ -194,7 +200,9 @@ fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -
         usage: Usage::default(),
         result: None,
     }));
-    caller.emit(&mut Output::new(format, SandboxMode::On, ""), &end);
+    caller.emit(&mut Output::new(format, SandboxMode::On, ""), &end, &|_| {
+        None
+    });
     caller.print_error_line(&format!("agentrun: {detail}"));
     EndStatus::Rejected.exit_code()
 }
@@ -412,11 +420,22 @@ fn execute(
         }
     }
     let mut raw = raw.map(|(_, file)| file);
-    let mut output = Output::new(
-        invocation.format,
-        invocation.sandbox.mode,
-        &invocation.sandbox.reason,
-    );
+    let mut output = if invocation.format == Format::Rich && caller.stdout_is_terminal {
+        let color = caller.var("NO_COLOR").is_none_or(|value| value.is_empty());
+        Output::Rich(Box::new(Rich::new(
+            invocation.sandbox.mode,
+            &invocation.sandbox.reason,
+            color,
+            Box::new(terminal_size),
+        )))
+    } else {
+        Output::new(
+            invocation.format,
+            invocation.sandbox.mode,
+            &invocation.sandbox.reason,
+        )
+    };
+    let rich_stderr = output.is_rich() && caller.stderr_is_terminal;
 
     let (program, program_args) = launch
         .argv
@@ -448,7 +467,7 @@ fn execute(
                 usage: Usage::default(),
                 result: None,
             }));
-            caller.emit(&mut output, &end);
+            caller.emit(&mut output, &end, &|_| None);
             finish_tempdir(tempdir, debug);
             return EndStatus::Failed.exit_code();
         }
@@ -477,10 +496,10 @@ fn execute(
             .collect(),
         env: invocation.session.set.clone(),
     }));
-    caller.emit(&mut output, &start);
+    caller.emit(&mut output, &start, &|_| None);
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
     for event in aggregator.begin(&invocation.prompt) {
-        caller.emit(&mut output, &event);
+        caller.emit(&mut output, &event, &|_| None);
     }
 
     let mut stdin = child.stdin.take().expect("stdin is piped");
@@ -494,16 +513,33 @@ fn execute(
     let tail = Arc::new(Mutex::new(Vec::new()));
     let tail_writer = Arc::clone(&tail);
     let stderr_sender = sender.clone();
+    let relay = rich_stderr.then(|| sender.clone());
     thread::spawn(move || {
-        forward_stderr(stderr, sink, &tail_writer);
+        forward_stderr(stderr, sink, relay, &tail_writer);
         let _ = stderr_sender.send(Message::StderrEnd);
     });
     let stdout = child.stdout.take().expect("stdout is piped");
     let stdout_sender = sender.clone();
     thread::spawn(move || read_lines(stdout, &stdout_sender));
+    if output.is_rich() {
+        let refresh_sender = sender.clone();
+        thread::spawn(move || {
+            while refresh_sender.send(Message::Refresh).is_ok() {
+                thread::sleep(REFRESH_PERIOD);
+            }
+        });
+    }
     thread::spawn(move || wait_child(child, &sender));
 
-    let exit_code = supervise(&caller, &receiver, |content| {
+    let exit_code = supervise(&caller, &receiver, |input| {
+        let Input::Line(content) = input else {
+            let open_tool = |agent: Option<&str>| aggregator.open_tool(agent);
+            caller.with_stdout(|stdout| match input {
+                Input::Stderr(bytes) => output.stderr(stdout, bytes, &open_tool),
+                _ => output.refresh(stdout, &open_tool),
+            });
+            return false;
+        };
         if let Some(file) = raw.as_mut() {
             let mut bytes = Vec::with_capacity(content.len() + 1);
             bytes.extend_from_slice(content);
@@ -511,16 +547,23 @@ fn execute(
             let _ = file.write_all(&bytes);
         }
         let translated = translate_line(content, adapter.as_mut(), &mut aggregator);
+        let open_tool = |agent: Option<&str>| aggregator.open_tool(agent);
         for event in translated.events {
-            caller.emit(&mut output, &event);
+            caller.emit(&mut output, &event, &open_tool);
         }
         if debug {
             for line in translated.debug {
-                caller.print_error_line(&format!("[debug] {line}"));
+                let line = format!("[debug] {line}\n");
+                if rich_stderr {
+                    caller.with_stdout(|stdout| output.stderr(stdout, line.as_bytes(), &open_tool));
+                } else {
+                    caller.print_error_line(line.trim_end());
+                }
             }
         }
         translated.terminate
     });
+    drop(receiver);
 
     let tail = tail.lock().map(|tail| tail.clone()).unwrap_or_default();
     let stderr_tail = stderr_tail(&String::from_utf8_lossy(&tail));
@@ -531,7 +574,7 @@ fn execute(
     };
     let (events, status) = conclude(aggregator, adapter.as_mut(), &exit, &stderr_tail, started);
     for event in &events {
-        caller.emit(&mut output, event);
+        caller.emit(&mut output, event, &|_| None);
     }
     drop(raw);
     finish_tempdir(tempdir, debug);
@@ -540,15 +583,23 @@ fn execute(
 
 enum Message {
     Line(Vec<u8>),
+    Stderr(Vec<u8>),
+    Refresh,
     StdoutEnd,
     StderrEnd,
     Exited(ExitStatus),
 }
 
+enum Input<'a> {
+    Line(&'a [u8]),
+    Stderr(&'a [u8]),
+    Refresh,
+}
+
 fn supervise(
     caller: &Caller,
     receiver: &Receiver<Message>,
-    mut handle_line: impl FnMut(&[u8]) -> bool,
+    mut handle: impl FnMut(Input) -> bool,
 ) -> Option<i32> {
     let mut exit_code = None;
     let mut exited = false;
@@ -568,9 +619,15 @@ fn supervise(
         match message {
             Some(Message::Line(line)) => {
                 let content = line.strip_suffix(b"\n").unwrap_or(&line);
-                if handle_line(content) {
+                if handle(Input::Line(content)) {
                     caller.signals.kill_group();
                 }
+            }
+            Some(Message::Stderr(bytes)) => {
+                handle(Input::Stderr(&bytes));
+            }
+            Some(Message::Refresh) => {
+                handle(Input::Refresh);
             }
             Some(Message::StdoutEnd) => stdout_ended = true,
             Some(Message::StderrEnd) => stderr_ended = true,
@@ -649,6 +706,7 @@ fn push_records(records: Vec<Record>, aggregator: &mut Aggregator) -> Translated
 fn forward_stderr(
     mut stderr: impl Read,
     sink: Arc<Mutex<dyn Write + Send>>,
+    relay: Option<Sender<Message>>,
     tail: &Mutex<Vec<u8>>,
 ) {
     let mut buffer = [0u8; 8192];
@@ -659,9 +717,16 @@ fn forward_stderr(
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        if let Ok(mut sink) = sink.lock() {
-            let _ = sink.write_all(&buffer[..count]);
-            let _ = sink.flush();
+        match &relay {
+            Some(relay) => {
+                let _ = relay.send(Message::Stderr(buffer[..count].to_vec()));
+            }
+            None => {
+                if let Ok(mut sink) = sink.lock() {
+                    let _ = sink.write_all(&buffer[..count]);
+                    let _ = sink.flush();
+                }
+            }
         }
         if let Ok(mut tail) = tail.lock() {
             tail.extend_from_slice(&buffer[..count]);
