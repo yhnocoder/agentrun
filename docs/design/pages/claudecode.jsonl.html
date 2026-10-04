@@ -138,7 +138,8 @@ user                                     <span class="dim">tool_result</span></d
 <h2>类型总览</h2>
 <p>从本节开始，事件的字段用 TypeScript 类型定义描述。写法约定：<code>?</code> 表示字段可能缺失；<code>| null</code> 表示观测到过 null；字符串字面量的并集是观测到的全部取值，没有标注来源的定义都来自样本；注释里以「帮助文本」「文档」开头的内容没有样本，只有 <code>claude --help</code> 或官方文档作依据。</p>
 <pre><code class="language-typescript">type StreamLine =
-  | ActiveGoal | AutocompactState | RateLimitEvent   // 只在 Claude 云端容器里观测到，见「版本与环境说明」
+  // 只在 Claude 云端容器里观测到，见「版本与环境说明」
+  | ActiveGoal | AutocompactState | RateLimitEvent
   | SystemEvent
   | AssistantEvent
   | UserEvent
@@ -161,7 +162,8 @@ interface EventBase {
   | SystemInit | SystemStatus | SystemTaskSummary | SystemPostTurnSummary
   | SystemThinkingTokens | SystemApiRetry | SystemPermissionDenied
   | SystemHookStarted | SystemHookResponse | SystemBackgroundTasksChanged
-  | SystemTaskStarted | SystemTaskProgress | SystemTaskUpdated | SystemTaskNotification;  // 后四种见「subagent 与后台任务」</code></pre>
+  // 后四种见「subagent 与后台任务」</code></pre>
+  | SystemTaskStarted | SystemTaskProgress | SystemTaskUpdated | SystemTaskNotification;
 
 <h3>init</h3>
 <p>运行开始时输出一次，描述这次会话的配置。字段多，解析器一般只需要 <code>model</code>、<code>tools</code>、<code>permissionMode</code>、<code>claude_code_version</code>、<code>cwd</code>。</p>
@@ -169,10 +171,13 @@ interface EventBase {
   type: "system";
   subtype: "init";
   cwd: string;                          // 工作目录
-  model: string;                        // 主模型 id，例如 "claude-sonnet-5-5"；模型名不存在时原样给出传入的名字
+  // 主模型 id，例如 "claude-sonnet-5-5"；模型名不存在时原样给出传入的名字
+  model: string;
   permissionMode: string;               // 权限模式，例如 "auto"、"default"
-  tools: string[];                      // 可用工具名。启动 subagent 的工具在这里叫 "Task"，在 tool_use 块里叫 "Agent"
-  agents: string[];                     // 可用的 subagent 类型，例如 "general-purpose"、"Explore"、"Plan"
+  // 可用工具名。启动 subagent 的工具在这里叫 "Task"，在 tool_use 块里叫 "Agent"
+  tools: string[];
+  // 可用的 subagent 类型，例如 "general-purpose"、"Explore"、"Plan"
+  agents: string[];
   mcp_servers: unknown[];               // 已加载的 MCP 服务器，观测值为空数组
   skills: string[];
   slash_commands: string[];
@@ -191,7 +196,8 @@ interface EventBase {
   per_turn_effort_active: boolean;
   analytics_disabled: boolean;
   product_feedback_disabled: boolean;
-  startup_timing: { phases: { [name: string]: number } };   // 启动各阶段耗时，键名以 _ms 结尾；诊断用，键集随版本变化
+  // 启动各阶段耗时，键名以 _ms 结尾；诊断用，键集随版本变化
+  startup_timing: { phases: { [name: string]: number } };
 }</code></pre>
 <pre><code class="language-json">{
   "type": "system",
@@ -234,7 +240,8 @@ interface EventBase {
 interface SystemTaskSummary extends EventBase {
   type: "system";
   subtype: "task_summary";
-  detail: string | null;                // 当前动作的一句描述，例如 "Writing probe-r1.txt"；result 之后的那一次为 null
+  // 当前动作的一句描述，例如 "Writing probe-r1.txt"；result 之后的那一次为 null
+  detail: string | null;
 }
 
 interface SystemPostTurnSummary extends EventBase {
@@ -352,31 +359,39 @@ interface SystemHookResponse extends EventBase {
 <pre><code class="language-typescript">interface AssistantEvent extends EventBase {
   type: "assistant";
   message: AssistantMessage;            // Anthropic Messages API 的消息对象
-  parent_tool_use_id: string | null;    // 主 agent 为 null；subagent 内部的事件是启动它的 Agent 调用的 id
+  // 主 agent 为 null；subagent 内部的事件是启动它的 Agent 调用的 id
+  parent_tool_use_id: string | null;
   request_id: string;                   // API 请求 id，"req_" 开头
   timestamp: string;                    // ISO 8601，UTC，毫秒
-  wire_tool_inputs?: { [toolUseId: string]: object };   // 发送给工具的参数；只在含 tool_use 块的事件上，subagent 的事件上未观测到
+  // 发送给工具的参数；只在含 tool_use 块的事件上，subagent 的事件上未观测到
+  wire_tool_inputs?: { [toolUseId: string]: object };
   thinking_duration_ms?: number;        // 只在含 thinking 块的事件上
   subagent_type?: string;               // 只在 subagent 内部的事件上
   task_description?: string;            // 同上
-  error?: string;                       // API 错误类别，例如 "authentication_failed"、"model_not_found"；只在合成的错误消息上
-  is_api_error_message?: boolean;       // true 表示这条消息由 claude-code 合成，message.model 为 "&lt;synthetic&gt;"
+  // API 错误类别，例如 "authentication_failed"、"model_not_found"；只在合成的错误消息上
+  error?: string;
+  // true 表示这条消息由 claude-code 合成，message.model 为 "&lt;synthetic&gt;"
+  is_api_error_message?: boolean;
 }
 
 interface AssistantMessage {
-  id: string;                           // "msg_" 开头，同一次模型调用的各个块相同；合成消息是一个 uuid
+  // "msg_" 开头，同一次模型调用的各个块相同；合成消息是一个 uuid
+  id: string;
   type: "message";
   role: "assistant";
   model: string;                        // 实际响应的模型 id；合成消息为 "&lt;synthetic&gt;"
   content: ContentBlock[];              // 只含一个内容块
-  stop_reason: null | "stop_sequence";  // 正常块为 null；合成消息为 "stop_sequence"。整次调用的 stop_reason 在 stream_event 的 message_delta 与 result.stop_reason 里
+  // 正常块为 null；合成消息为 "stop_sequence"。整次调用的 stop_reason 在 stream_event 的
+  // message_delta 与 result.stop_reason 里
+  stop_reason: null | "stop_sequence";
   stop_sequence: null | "";
   stop_details: null;
   container: null;
   context_management: null;
   diagnostics: null;
   input_transformations?: unknown[];    // 观测值为空数组；合成消息上没有
-  usage: Usage;                         // 这次模型调用的用量，同一次调用的各个块相同，累加时按 message.id 去重
+  // 这次模型调用的用量，同一次调用的各个块相同，累加时按 message.id 去重
+  usage: Usage;
 }</code></pre>
 
 <h3>usage 对象</h3>
@@ -386,11 +401,14 @@ interface AssistantMessage {
   output_tokens: number;                // 输出 token，含 thinking
   cache_read_input_tokens: number;      // 从提示缓存读取的输入 token
   cache_creation_input_tokens: number;  // 写入提示缓存的输入 token
-  cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number };   // 按缓存保留时长拆分
+  // 按缓存保留时长拆分
+  cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number };
   service_tier?: "standard" | null;
   inference_geo?: "not_available" | "" | null;
-  output_tokens_details?: { thinking_tokens: number } | null;   // result 与 message_delta 上有，assistant 上没有
-  server_tool_use?: { web_search_requests: number; web_fetch_requests: number };   // result 与合成消息上有
+  // result 与 message_delta 上有，assistant 上没有
+  output_tokens_details?: { thinking_tokens: number } | null;
+  // result 与合成消息上有
+  server_tool_use?: { web_search_requests: number; web_fetch_requests: number };
   iterations?: UsageIteration[] | null; // 每次迭代的用量；result 与 message_delta 上有
   speed?: "standard" | null;            // result 上有
   fallback_credit?: null;               // result 上有
@@ -421,20 +439,30 @@ interface ThinkingBlock {
 interface ToolUseBlock {
   type: "tool_use";
   id: string;                           // "toolu_" 开头
-  name: string;                         // 工具名，例如 "Bash"、"Read"、"Write"、"Edit"、"Agent"、"Skill"、"Workflow"、"StructuredOutput"
+  // 工具名，例如 "Bash"、"Read"、"Write"、"Edit"、"Agent"、"Skill"、"Workflow"、
+  // "StructuredOutput"
+  name: string;
   input: ToolInput;                     // 参数，结构由工具决定
   caller: { type: "direct" };
 }
 
 type ToolInput =
-  | { command: string; description?: string; timeout?: number; run_in_background?: boolean }   // Bash
-  | { file_path: string }                                                                      // Read
-  | { file_path: string; content: string }                                                     // Write
-  | { file_path: string; old_string: string; new_string: string; replace_all?: boolean }       // Edit
-  | { description: string; prompt: string; subagent_type: string; run_in_background?: boolean } // Agent
-  | { skill: string }                                                                          // Skill
-  | { script: string }                                                                         // Workflow
-  | { [key: string]: unknown };                                                                // StructuredOutput，由 --json-schema 决定</code></pre>
+  // Bash
+  | { command: string; description?: string; timeout?: number; run_in_background?: boolean }
+  // Read
+  | { file_path: string }
+  // Write
+  | { file_path: string; content: string }
+  // Edit
+  | { file_path: string; old_string: string; new_string: string; replace_all?: boolean }
+  // Agent
+  | { description: string; prompt: string; subagent_type: string; run_in_background?: boolean }
+  // Skill
+  | { skill: string }
+  // Workflow
+  | { script: string }
+  // StructuredOutput，由 --json-schema 决定</code></pre>
+  | { [key: string]: unknown };
 <pre><code class="language-json">{
   "type": "assistant",
   "message": {
@@ -528,17 +556,21 @@ type ToolInput =
   };
   parent_tool_use_id: string | null;
   timestamp: string;                    // ISO 8601
-  tool_use_result?: ToolUseResult | string;     // 工具的原始结果，只在工具结果事件上。失败时是以 "Error: " 开头的字符串
-  tool_result_meta?: { id: string; non_execution_kind: "permission-rule" }[];   // 标记没有实际执行的工具调用，只在被拒绝的工具结果上
+  // 工具的原始结果，只在工具结果事件上。失败时是以 "Error: " 开头的字符串
+  tool_use_result?: ToolUseResult | string;
+  // 标记没有实际执行的工具调用，只在被拒绝的工具结果上
+  tool_result_meta?: { id: string; non_execution_kind: "permission-rule" }[];
   subagent_type?: string;               // 只在 subagent 内部的事件上
   task_description?: string;            // 同上
-  isSynthetic?: boolean;                // true 表示这条消息由 claude-code 注入，例如 Skill 工具加载的技能说明
+  // true 表示这条消息由 claude-code 注入，例如 Skill 工具加载的技能说明
+  isSynthetic?: boolean;
 }
 
 interface ToolResultBlock {
   type: "tool_result";
   tool_use_id: string;                  // 对应的 tool_use 块的 id
-  content: string | TextBlock[];        // 交给模型的结果。多数工具是字符串；Agent 工具是 TextBlock 数组
+  // 交给模型的结果。多数工具是字符串；Agent 工具是 TextBlock 数组
+  content: string | TextBlock[];
   is_error?: boolean;                   // 失败时为 true。成功时多数没有这个字段，少数为 false
 }</code></pre>
 <p>Bash 命令退出码非 0 时 <code>is_error</code> 为 true，<code>content</code> 以 <code>Exit code N</code> 开头。被 claude-code 自身拦截的命令（例如本环境拦截单独的 <code>sleep</code>）的 <code>content</code> 包在 <code>&lt;tool_use_error&gt;</code> 标签里。</p>
@@ -660,13 +692,17 @@ interface WorkflowResult {
 }
 
 type ApiStreamEvent =
-  | { type: "message_start"; message: AssistantMessage }   // 一次模型调用开始。content 为空数组，usage 里已有输入侧的 token 数
-  | { type: "content_block_start"; index: number; content_block: EmptyContentBlock }   // 第 index 个内容块开始
+  // 一次模型调用开始。content 为空数组，usage 里已有输入侧的 token 数
+  | { type: "message_start"; message: AssistantMessage }
+  // 第 index 个内容块开始
+  | { type: "content_block_start"; index: number; content_block: EmptyContentBlock }
   | { type: "content_block_delta"; index: number; delta: BlockDelta }
-  | { type: "content_block_stop"; index: number }          // 块结束。完整的块在此之前已作为 assistant 事件输出
+  // 块结束。完整的块在此之前已作为 assistant 事件输出
+  | { type: "content_block_stop"; index: number }
   | { type: "message_delta";                               // 调用结束前的汇总
       delta: { stop_reason: "end_turn" | "tool_use"; stop_sequence: null; stop_details: null; container: null };
-      usage: Usage;                                        // 这次调用的最终用量，含 output_tokens_details 与 iterations
+      // 这次调用的最终用量，含 output_tokens_details 与 iterations
+      usage: Usage;
       context_management: { applied_edits: [] } }
   | { type: "message_stop" };
 
@@ -677,9 +713,11 @@ type EmptyContentBlock =
 
 type BlockDelta =
   | { type: "text_delta"; text: string }
-  | { type: "thinking_delta"; thinking: string; estimated_tokens: number | null }   // 观测到 thinking 为空字符串
+  // 观测到 thinking 为空字符串
+  | { type: "thinking_delta"; thinking: string; estimated_tokens: number | null }
   | { type: "signature_delta"; signature: string }
-  | { type: "input_json_delta"; partial_json: string };    // 工具参数 JSON 的片段，拼接后是 tool_use.input；第一个片段可能是空字符串</code></pre>
+  // 工具参数 JSON 的片段，拼接后是 tool_use.input；第一个片段可能是空字符串</code></pre>
+  | { type: "input_json_delta"; partial_json: string };
 <p>解析器可以只用 <code>assistant</code> 事件得到完整的块，用 <code>stream_event</code> 做实时显示。中断时流可能停在任意一个 <code>content_block_delta</code> 之后，没有对应的 <code>assistant</code> 事件。</p>
 <pre><code class="language-json">{
   "type": "stream_event",
@@ -784,18 +822,23 @@ type BlockDelta =
   subtype: "success" | "error_during_execution" | "error_max_turns" | "error_max_budget_usd";
   is_error: boolean;                    // 这一轮是否失败
   terminal_reason: "completed" | "api_error" | "aborted_streaming" | "max_turns" | "budget_exhausted";
-  result?: string;                      // 主 agent 最后一段文字；--json-schema 时是结构化结果的 JSON 文本；限额失败时没有
-  structured_output?: object;           // 按 --json-schema 校验过的结果对象，只在给了 --json-schema 时
+  // 主 agent 最后一段文字；--json-schema 时是结构化结果的 JSON 文本；限额失败时没有
+  result?: string;
+  // 按 --json-schema 校验过的结果对象，只在给了 --json-schema 时
+  structured_output?: object;
   errors?: string[];                    // 只在失败时
   api_error_status?: number | null;     // API 错误的 HTTP 状态码；限额失败与中断时没有这个字段
-  stop_reason: "end_turn" | "tool_use" | "stop_sequence" | null;   // 最后一次模型调用的 stop_reason；中断时为 null
+  // 最后一次模型调用的 stop_reason；中断时为 null
+  stop_reason: "end_turn" | "tool_use" | "stop_sequence" | null;
   num_turns: number;                    // 这一轮里模型调用的次数，含失败的
   duration_ms: number;                  // 总耗时
   duration_api_ms: number;              // 等待 API 的耗时
   total_cost_usd: number;               // modelUsage 各项 costUSD 之和
-  usage: Usage;                         // 主 agent 模型调用的用量合计，不含 subagent；中断与限额失败时可能全为 0
+  // 主 agent 模型调用的用量合计，不含 subagent；中断与限额失败时可能全为 0
+  usage: Usage;
   modelUsage: { [modelId: string]: ModelUsage };   // 包含 subagent 的用量
-  permission_denials: { tool_name: string; tool_use_id: string; tool_input: object }[];   // 无拒绝时为 []
+  // 无拒绝时为 []
+  permission_denials: { tool_name: string; tool_use_id: string; tool_input: object }[];
   subagent_stats?: SubagentStats;
   result_index: number;                 // 这次运行里第几个 result，从 0 开始
   origin?: { kind: "task-notification"; producer: "session-task" };   // 只在后台任务触发的轮次上
