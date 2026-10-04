@@ -35,12 +35,12 @@ codex_set_invalid_credentials() {
   RUN_ENV=(OPENAI_API_KEY=invalid CODEX_HOME="$RUN_CWD/codex-home")
 }
 
+codex_sandboxed() {
+  [ "$PLATFORM" != docker ]
+}
+
 codex_judge_network() {
-  if [ "$NATIVE_SANDBOX" = 1 ] && [ "$1" = allowed ]; then
-    echo pass
-  else
-    echo "$2"
-  fi
+  echo "$2"
 }
 
 codex_write_project_context() {

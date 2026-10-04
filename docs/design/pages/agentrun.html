@@ -58,12 +58,12 @@
     <tr><th>运行时</th><th>本机 macOS</th><th>本机 Linux</th><th>云端容器（Claude 云端或 Codex 云端）</th><th>docker 容器</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>Seatbelt 沙箱：命令只能写工作目录与会话临时目录，不能联网。剩余风险：Read 等内置工具能读工作目录以外的文件，内容会进入模型上下文</td><td>bubblewrap 沙箱，其余同 macOS</td><td>没有沙箱，命令逐条由 auto 模式判断。剩余风险：命令能写容器内任何位置、能联网，边界是容器</td><td>同云端容器</td></tr>
+    <tr><td>claude-code</td><td>Seatbelt 沙箱：命令只能写工作目录与会话临时目录，不能联网。剩余风险：Read 等内置工具能读工作目录以外的文件，内容会进入模型上下文</td><td>bubblewrap 沙箱，其余同 macOS</td><td>bubblewrap 沙箱，同本机 Linux</td><td>没有沙箱，命令逐条由 auto 模式判断。剩余风险：命令能写容器内任何位置、能联网，边界是容器</td></tr>
     <tr><td>codex</td><td>workspace-write 沙箱：只能写工作目录与会话临时目录，命令不能联网。剩余风险：能读用户可读的任何文件，内容会进入模型上下文</td><td>同 macOS</td><td>同 macOS</td><td>danger-full-access。剩余风险：能写容器内任何位置、能联网，边界是容器</td></tr>
     <tr><td>pi</td><td>工具用 Seatbelt 包裹 pi：只能写工作目录、会话临时目录与 pi 的状态目录。剩余风险：读不受限，网络开放（pi 要访问模型服务），agent 可能读到 <code>~/.ssh</code> 之类的文件再发出去</td><td>工具用 bubblewrap 包裹 pi，其余同 macOS</td><td>没有沙箱。剩余风险：能写容器内任何位置、能联网，边界是容器</td><td>同云端容器</td></tr>
   </tbody>
 </table>
-<p class="hint">本机 Linux 的沙箱、本机 pi 的包裹方式，以及三个沙箱能否加一个额外的可写目录，还没有实测，实现时先验证再定稿。</p>
+<p class="hint">本机 Linux 的沙箱、本机 pi 的包裹方式，以及三个沙箱能否加一个额外的可写目录，还没有实测，实现时先验证再定稿。claude-code 的沙箱在云端容器里需要 <code>bwrap</code> 与 <code>socat</code>，已在 Claude 云端验证。</p>
 
 <h2>命令行界面</h2>
 <p>运行时名就是子命令：<code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。另外有 <code>agentrun doctor</code>，见「doctor 检查」。三个运行时子命令接受同一组选项。</p>
@@ -76,7 +76,7 @@
     <tr><td><code>--prompt TEXT</code></td><td>提示词</td><td>无</td></tr>
     <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词</td><td>无</td></tr>
     <tr><td>标准输入</td><td>前两项都没给时，从标准输入读提示词；三处都没有内容时报用法错误</td><td></td></tr>
-    <tr><td><code>--model ID</code></td><td>模型。pi 写成 <code>服务商/模型</code></td><td>不传，用运行时自己的默认模型</td></tr>
+    <tr><td><code>--model ID</code></td><td>模型。pi 写成 <code>服务商/模型</code></td><td>claude-code 用 sonnet；codex 与 pi 不传，用运行时自己的默认模型</td></tr>
     <tr><td><code>--effort LEVEL</code></td><td>推理强度，原样传给运行时对应的参数</td><td>不传，用运行时自己的默认推理强度</td></tr>
     <tr><td><code>--max-turns N</code></td><td>最多轮数。只有 claude-code 支持，其他运行时给出时报用法错误</td><td>不限</td></tr>
     <tr><td><code>--timeout SECONDS</code></td><td>超时后终止整个进程组</td><td>不限</td></tr>
@@ -115,22 +115,25 @@
     <tr><th>运行时</th><th>native（macOS）</th><th>native（Linux）</th><th>cloud</th><th>docker</th><th>失败判定</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>权限模式 auto；Seatbelt 沙箱打开，不允许沙箱外执行命令，沙箱内的命令自动放行，命令不能联网</td><td>同 macOS，沙箱使用 bubblewrap（需要 <code>bwrap</code> 与 <code>socat</code>）</td><td>权限模式 auto，没有沙箱，Bash 命令逐条由分类器判断</td><td>同 cloud</td><td>退出码非 0，或 result 事件的 <code>is_error</code> 为 true</td></tr>
+    <tr><td>claude-code</td><td>权限模式 auto；Seatbelt 沙箱打开，不允许沙箱外执行命令，沙箱内的命令自动放行，命令不能联网</td><td>同 macOS，沙箱使用 bubblewrap（需要 <code>bwrap</code> 与 <code>socat</code>）</td><td>同 native（Linux）</td><td>权限模式 auto，没有沙箱，Bash 命令逐条由分类器判断</td><td>退出码非 0，或 result 事件的 <code>is_error</code> 为 true</td></tr>
     <tr><td>codex</td><td>workspace-write；命令不能联网；<code>/tmp</code> 不可写</td><td>同 macOS，使用 codex 的 Linux 沙箱</td><td>同 native（Linux）</td><td>danger-full-access</td><td>退出码非 0，或 <code>turn.failed</code> 事件</td></tr>
-    <tr><td>pi</td><td>工具用 Seatbelt 包裹 pi 进程，可写工作目录、会话临时目录与 pi 的状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>），读不受限，网络开放</td><td>同 macOS，使用 bubblewrap</td><td>无沙箱</td><td>无沙箱</td><td><code>message_end</code> 的 <code>stopReason</code> 为 <code>error</code> 或 <code>aborted</code>（pi 的退出码恒为 0）</td></tr>
+    <tr><td>pi</td><td>工具用 Seatbelt 包裹 pi 进程，可写工作目录、会话临时目录与 pi 的状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>），读不受限，网络开放</td><td>同 macOS，使用 bubblewrap</td><td>无沙箱</td><td>无沙箱</td><td>退出码非 0，或最后一个 <code>message_end</code> 的 <code>stopReason</code> 为 <code>error</code> 或 <code>aborted</code></td></tr>
   </tbody>
 </table>
 <p>pi 的状态目录必须可写：pi 刷新令牌时要改写其中的 <code>auth.json</code> 并加锁，否则刷新会失败。macOS 上 node 还可能需要其他可写路径（例如缓存目录、<code>/dev/tty</code>），实现时实测后补齐。</p>
 
 <h3>所有档位共用的设置</h3>
 <ul>
-  <li>claude-code：不加载用户与项目设置，不加载 MCP 服务器，不保存会话；放行的工具是 Read、Edit、Write、Glob、Grep 与启动 subagent 的工具（给出 <code>--no-subagents</code> 时不放行）。</li>
+  <li>claude-code：不加载用户与项目设置，不加载 MCP 服务器，不保存会话，每次运行传一个新生成的会话 id；放行的工具是 Read、Edit、Write、Glob、Grep 与启动 subagent 的工具（给出 <code>--no-subagents</code> 时不放行）。启动 subagent 的工具在参数与 init 事件里叫 <code>Task</code>，在事件流的工具调用里叫 <code>Agent</code>，两个名字都要识别。</li>
   <li>codex：不读取用户的 codex 配置目录（只使用其中的登录信息）；忽略用户配置与规则文件，不读工作目录里的 <code>AGENTS.md</code>，不加载技能说明，会话不落盘；不请求批准，不用登录 shell，关闭网页搜索；允许启动 subagent（给出 <code>--no-subagents</code> 时关闭）；工作目录不是 git 仓库时也照常运行。</li>
   <li>pi：不加载扩展、技能、提示模板、上下文文件与自动发现的资源，禁止联网下载资源，不保存会话；只开放 read、bash、edit、write、grep、find、ls。不传 <code>--model</code> 时，pi 使用它自己 <code>settings.json</code> 里的默认服务商。</li>
 </ul>
+<p>claude-code 不传 <code>--model</code> 时工具传 <code>--model sonnet</code>。理由：以 haiku 作主模型时，claude-code 不提示地放弃 auto 模式，Bash 命令全部被拒绝，退出码仍为 0。</p>
+<p>每次运行传新的会话 id 的理由：在 Claude Code 会话里运行 agentrun 时，claude-code 子进程会继承父会话的 id，不传就把记录写进父会话。</p>
+<p>pi 的 <code>settings.json</code> 里写的模型不存在，或没有设置文件时，pi 不提示地改用环境里其他可用的服务商，例如环境里有 <code>AWS_</code> 变量时改用 Amazon Bedrock。pi 升级时可能改模型名，例如 1.0.1 把 <code>deepseek-v4-flash</code> 改为 <code>deepseek-flash</code>。doctor 的登录检查因此要报告 pi 实际选中的服务商与模型。</p>
 
 <h3>档位选错时</h3>
-<p>在 docker 容器里用 <code>native</code>，沙箱无法启动，claude-code 与 pi 会直接失败；用 <code>native</code> 或 <code>cloud</code> 时，codex 可能以退出码 0 结束却没有执行任何命令。在本机用 <code>docker</code>，agent 在没有沙箱的情况下运行。<code>agentrun doctor</code> 会实际检查沙箱，并在失败时提示应使用的档位。</p>
+<p>在 docker 容器里用 <code>native</code>，沙箱无法启动，claude-code 与 pi 会直接失败；用 <code>cloud</code> 时，claude-code 同样因沙箱无法启动而失败；用 <code>native</code> 或 <code>cloud</code> 时，codex 可能以退出码 0 结束却没有执行任何命令。在本机用 <code>docker</code>，agent 在没有沙箱的情况下运行。<code>agentrun doctor</code> 会实际检查沙箱，并在失败时提示应使用的档位。</p>
 
 <h2>会话环境</h2>
 <p>会话的环境变量按以下顺序组装，后一步覆盖前一步：</p>
@@ -308,7 +311,7 @@ subagent  2 个运行中 <span class="ref">2</span>
   </thead>
   <tbody>
     <tr><td>可执行文件</td><td>在组装后的 PATH 里找到</td></tr>
-    <tr><td>登录</td><td>运行时能用当前环境登录。会先按「凭据」一节写入环境变量给出的凭据。claude-code 设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时按令牌登录检查，不要求登录文件；pi 给了 <code>--model</code> 时按该模型的服务商检查，否则按 pi 设置里的默认服务商检查</td></tr>
+    <tr><td>登录</td><td>运行时能用当前环境登录。会先按「凭据」一节写入环境变量给出的凭据。claude-code 设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时按令牌登录检查，不要求登录文件；pi 给了 <code>--model</code> 时按该模型的服务商检查，否则按 pi 设置里的默认服务商检查，并报告 pi 实际选中的服务商与模型，与设置不一致时判为失败</td></tr>
     <tr><td>沙箱</td><td>在一个临时目录里，用当前档位下每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了且文件写出；pi 还要在包裹下实际启动一次 pi 与 node。检查结束后删除该目录，给了 <code>--debug</code> 时保留。档位下没有沙箱的组合报告「无沙箱」</td></tr>
   </tbody>
 </table>

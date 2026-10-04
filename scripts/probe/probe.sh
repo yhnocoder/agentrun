@@ -54,10 +54,6 @@ case "$PLATFORM" in
   macos) SANDBOX_KIND=seatbelt ;;
   *) SANDBOX_KIND=bwrap ;;
 esac
-case "$PLATFORM" in
-  macos|linux) NATIVE_SANDBOX=1 ;;
-  *) NATIVE_SANDBOX=0 ;;
-esac
 
 . "$SCRIPT_DIR/common/util.sh"
 . "$SCRIPT_DIR/common/sandbox.sh"

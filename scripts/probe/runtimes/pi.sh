@@ -9,7 +9,7 @@ pi_bin() {
 pi_build_cmd() {
   local prompt=$1 mode=$2
   CMD=(pi -p --mode json --no-session --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --offline --tools "$PI_TOOLS" "$prompt")
-  if [ "$NATIVE_SANDBOX" = 1 ] || [ "$mode" = own-sandbox ]; then
+  if pi_sandboxed || [ "$mode" = own-sandbox ]; then
     if sandbox_available; then
       sandbox_wrap "$RUN_CWD" "$RT_TMP" "$PI_STATE_DIR" "${CMD[@]}"
       CMD=("${SANDBOX_CMD[@]}")
@@ -50,8 +50,12 @@ pi_set_invalid_credentials() {
   RUN_ENV=(DEEPSEEK_API_KEY=invalid ANTHROPIC_API_KEY=invalid OPENAI_API_KEY=invalid)
 }
 
+pi_sandboxed() {
+  [ "$PLATFORM" = macos ] || [ "$PLATFORM" = linux ]
+}
+
 pi_judge_network() {
-  if [ "$NATIVE_SANDBOX" = 1 ] && [ "$1" = allowed ]; then
+  if pi_sandboxed && [ "$1" = allowed ]; then
     echo pass
   else
     echo "$2"

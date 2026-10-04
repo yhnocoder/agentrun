@@ -1,5 +1,6 @@
 # shellcheck shell=bash disable=SC2034
 
+CLAUDE_MODEL="sonnet"
 CLAUDE_TOOLS="Read,Edit,Write,Glob,Grep"
 CLAUDE_SUBAGENT_TOOL="Task"
 CLAUDE_SUBAGENT_TOOL_USE_NAMES='"name":"Task"\|"name":"Agent"'
@@ -9,15 +10,19 @@ claude_code_bin() {
   echo claude
 }
 
+claude_code_sandboxed() {
+  [ "$PLATFORM" != docker ]
+}
+
 claude_code_build_cmd() {
   local prompt=$1 mode=$2
-  CMD=(claude -p "$prompt" --output-format stream-json --verbose --session-id "$(new_uuid)" --no-session-persistence --permission-mode auto --permission-prompts none --setting-sources "" --strict-mcp-config)
+  CMD=(claude -p "$prompt" --output-format stream-json --verbose --model "$CLAUDE_MODEL" --session-id "$(new_uuid)" --no-session-persistence --permission-mode auto --permission-prompts none --setting-sources "" --strict-mcp-config)
   if [ "$mode" = no-subagents ]; then
     CMD+=(--allowedTools "$CLAUDE_TOOLS" --disallowedTools "$CLAUDE_SUBAGENT_TOOL")
   else
     CMD+=(--allowedTools "$CLAUDE_TOOLS,$CLAUDE_SUBAGENT_TOOL")
   fi
-  if [ "$NATIVE_SANDBOX" = 1 ] || [ "$mode" = own-sandbox ]; then
+  if claude_code_sandboxed || [ "$mode" = own-sandbox ]; then
     CMD+=(--settings "$CLAUDE_SANDBOX_SETTINGS")
   fi
 }
@@ -47,7 +52,10 @@ claude_code_result_text() {
 }
 
 claude_code_add_invalid_model() {
-  CMD+=(--model no-such-model-probe)
+  local i
+  for i in "${!CMD[@]}"; do
+    [ "${CMD[$i]}" = --model ] && CMD[i+1]=no-such-model-probe
+  done
 }
 
 claude_code_set_invalid_credentials() {
