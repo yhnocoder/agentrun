@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">隔离</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
 <h1>事件与输出 <span class="tag">草稿</span></h1>
 <p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
 
@@ -323,7 +323,7 @@ interface Usage extends TokenCounts {
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net 拒绝 主机:端口（原因）</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
   <li><code>end</code>：<code>[end] 状态 耗时s in X out Y cache read Z write W</code>，后接 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。</li>
-  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">隔离</a>。</li>
+  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
 </ul>
 <p>一个 agent 显示的模型取它最近一次 <code>usage</code> 的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"

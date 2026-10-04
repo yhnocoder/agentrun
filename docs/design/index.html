@@ -17,12 +17,12 @@
 <body>
 <main>
 <h1>agentrun 设计 <span class="tag">草稿</span></h1>
-<p class="lead">agentrun 是一个独立的 Rust 命令行工具，在 macOS、Linux、Cloud Managed 容器和 docker 容器里用<mark>同一种</mark>运行 claude-code、codex 和 pi。</p>
+<p class="lead">agentrun 是一个独立的 Rust 命令行工具，在 macOS、Linux、Cloud Managed 容器和 docker 容器里用<mark>同一种调用方式</mark>运行 claude-code、codex 和 pi。</p>
 
 <h2>Motivation</h2>
 <p>具体分三点：</p>
 <ul>
-  <li>Safety：在每个环境能提供的范围内隔离 agent。限制它能写的文件和命令能否联网；不读取用户自己的运行时配置、插件、规则与会话记录；运行中不弹出确认。做法见<a href="pages/isolation.html">隔离</a>。</li>
+  <li>Safety：在每个环境能提供的范围内隔离 agent。限制它能写的文件和命令能否联网；不读取用户自己的运行时配置、插件、规则与会话记录；运行中不弹出确认。做法见<a href="pages/isolation.html">沙箱与网络</a>。</li>
   <li>Unified Experience：同一条命令在四种环境里都能运行，三个运行时的输出统一成一种带版本号的事件流，成败由工具统一判定。见<a href="pages/events.html">事件与输出</a>。</li>
   <li>Doctor：<code>agentrun doctor</code> 在启动前检查运行时能否使用，失败时说明原因和修正方法。</li>
 </ul>
@@ -58,6 +58,7 @@
 </ul>
 
 <h3>在四种环境里怎么调用</h3>
+<p>工具不探测自己运行在哪种环境里。它只看操作系统，并在启动前实际启动一次沙箱来判断沙箱能不能用。理由：按环境探测一旦误判，本机会话就会在没有沙箱的情况下运行；实际启动一次沙箱则能直接回答「能不能隔离」这个问题。</p>
 <table>
   <thead>
     <tr><th>环境</th><th>沙箱</th><th>调用方的写法</th></tr>
@@ -65,11 +66,11 @@
   <tbody>
     <tr><td>本机 macOS</td><td>Seatbelt，系统自带</td><td>不用写 <code>--sandbox</code></td></tr>
     <tr><td>本机 Linux</td><td>bubblewrap（<code>bwrap</code>，claude-code 与 pi 另需 <code>socat</code>）；codex 用它自己的沙箱</td><td>不用写；没装 <code>bwrap</code> 时 agentrun 报错并给出安装命令</td></tr>
-    <tr><td>云端容器（Claude 云端、Codex 云端）</td><td>同本机 Linux，要求容器里装了 <code>bwrap</code> 与 <code>socat</code>，且能创建用户命名空间</td><td>不用写。Claude 云端已实测可用；Codex 云端待实测</td></tr>
+    <tr><td>Cloud Managed 容器（Claude 云端、Codex 云端）</td><td>同本机 Linux，要求容器里装了 <code>bwrap</code> 与 <code>socat</code>，且能创建用户命名空间</td><td>不用写。Claude 云端已实测可用；Codex 云端待实测</td></tr>
     <tr><td>docker 容器</td><td>默认的 docker 容器不能创建用户命名空间，沙箱无法启动</td><td>启动方写 <code>--sandbox off</code> 或设 <code>AGENTRUN_SANDBOX=off</code>，隔离边界是容器本身</td></tr>
   </tbody>
 </table>
-<p>云端容器有两种：Claude 云端只运行 claude-code 与 pi，Codex 云端只运行 codex 与 pi。工具不区分这两种容器，由启动方选择运行时。</p>
+<p>Cloud Managed 容器有两种：Claude 云端只运行 claude-code 与 pi，Codex 云端只运行 codex 与 pi。工具不区分这两种容器，由启动方选择运行时。</p>
 
 <h2>Event and Output</h2>
 <p>agentrun 输出的统一事件流与三种输出格式。后两页是运行时原始输出的字段参考。</p>

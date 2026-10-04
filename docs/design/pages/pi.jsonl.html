@@ -18,7 +18,7 @@
 <main>
 <p class="nav"><a href="../index.html">返回索引</a></p>
 <h1>pi 事件流 <span class="tag">字段参考</span></h1>
-<p class="lead">本文是 <code>pi -p --mode json</code> 输出的事件流的字段参考：每种事件何时出现、有哪些字段、字段的类型与含义、典型运行的顺序、错误与退出码、与旧版本的差异。写给要为这条流写解析器的人，<mark>不依赖 agentrun 的其他文档</mark>。依据是 pi 1.0.1（npm 包 <code>@earendil-works/pi-coding-agent</code>）在 Linux 容器里的实测输出，以及随包安装的 <code>docs/json.md</code>、<code>docs/message-types.md</code>、<code>docs/session-format.md</code>、<code>docs/cli-integration.md</code> 与 <code>CHANGELOG.md</code>。字段表中标出了每一项的来源。</p>
+<p class="lead">本文是 <code>pi -p --mode json</code> 输出的事件流的字段参考：每种事件何时出现、有哪些字段、字段的类型与含义、典型运行的顺序、错误与退出码。写给要为这条流写解析器的人，<mark>不依赖 agentrun 的其他文档</mark>。依据是 pi 1.0.1（npm 包 <code>@earendil-works/pi-coding-agent</code>）在 Linux 容器里的实测输出，以及随包安装的 <code>docs/json.md</code>、<code>docs/message-types.md</code>、<code>docs/session-format.md</code>、<code>docs/cli-integration.md</code> 与 <code>CHANGELOG.md</code>。字段表中标出了每一项的来源。</p>
 
 <blockquote>
   <p>读这条流的三条规则：第一行是 <code>session</code> 头，之后每行一个事件，按 <code>type</code> 分发，不认识的类型跳过；<code>message_end</code> 里的 <code>message</code> 是权威的完整消息，<code>message_update</code> 只用于实时显示；成败看最后一个 assistant 消息的 <code>stopReason</code>，退出码只区分启动失败与被中断，模型调用失败时退出码仍是 0。</p>
@@ -53,7 +53,7 @@
 <p>读取方必须持续消费标准输出。文档说明管道缓冲区满时 pi 会阻塞。</p>
 
 <h2>有哪些事件</h2>
-<p>按用途分为五类，越靠前越需要处理。「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述；「0.73.1 观测」表示在 0.73.1 的样本中出现过、1.0.1 的样本里没有遇到触发条件。</p>
+<p>按用途分为五类，越靠前越需要处理。「来源」一列：「观测」表示在 1.0.1 的样本中出现过；「文档」表示只在 <code>docs/json.md</code> 中有描述。</p>
 <h3>消息与结果</h3>
 <p>解析器必须处理的事件。<code>message_end</code> 给出每条消息的完整内容，最后一个 assistant 消息的 <code>stopReason</code> 决定成败。</p>
 <table>
@@ -100,7 +100,7 @@
     <tr><th>type</th><th>何时出现</th><th>来源</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>auto_retry_start</code>、<code>auto_retry_end</code></td><td>模型调用失败后自动重试前后</td><td>0.73.1 观测</td></tr>
+    <tr><td><code>auto_retry_start</code>、<code>auto_retry_end</code></td><td>模型调用失败后自动重试前后</td><td>文档</td></tr>
     <tr><td><code>compaction_start</code>、<code>compaction_end</code></td><td>上下文压缩开始与结束</td><td>文档</td></tr>
     <tr><td><code>summarization_retry_scheduled</code>、<code>summarization_retry_attempt_start</code>、<code>summarization_retry_finished</code></td><td>压缩或分支摘要失败后的重试</td><td>文档</td></tr>
   </tbody>
@@ -132,14 +132,14 @@
 </ul>
 
 <h2>类型总览</h2>
-<p>从本节开始，事件的字段用 TypeScript 类型定义描述。写法约定：<code>?</code> 表示字段可能缺失；字符串字面量的并集是观测到的全部取值；没有标注来源的定义都来自 1.0.1 的样本，注释里以「文档」开头的内容只有随包安装的 <code>docs/</code> 作依据，没有样本；「0.73.1 没有」标出与旧版本的差异。</p>
+<p>从本节开始，事件的字段用 TypeScript 类型定义描述。写法约定：<code>?</code> 表示字段可能缺失；字符串字面量的并集是观测到的全部取值；没有标注来源的定义都来自 1.0.1 的样本，注释里以「文档」开头的内容只有随包安装的 <code>docs/</code> 作依据，没有样本。</p>
 <pre><code class="language-typescript">type PiLine = SessionHeader | PiEvent;   // 第一行是 SessionHeader，之后每行一个 PiEvent
 
 type PiEvent =
   | AgentStart | TurnStart | MessageStart | MessageUpdate | MessageEnd
   | ToolExecutionStart | ToolExecutionUpdate | ToolExecutionEnd
   | TurnEnd | AgentEnd | AgentSettled
-  | AutoRetryStart | AutoRetryEnd                                   // 0.73.1 观测
+  | AutoRetryStart | AutoRetryEnd                                   // 文档
   | CompactionStart | CompactionEnd                                 // 文档
   // 文档
   | SummarizationRetryScheduled | SummarizationRetryAttemptStart | SummarizationRetryFinished
@@ -178,11 +178,11 @@ interface TurnEnd {
 interface AgentEnd {
   type: "agent_end";
   messages: Message[];                  // 本次运行产生的全部消息，按出现顺序，从 system 消息开始
-  // true 表示 pi 将自动重试，之后会有新的 agent_start。观测值都是 false。0.73.1 没有
+  // true 表示 pi 将自动重试，之后会有新的 agent_start。观测值都是 false。
   willRetry: boolean;
 }
 
-interface AgentSettled { type: "agent_settled"; }  // pi 不会再自动继续，正常运行的最后一行。0.73.1 没有</code></pre>
+interface AgentSettled { type: "agent_settled"; }  // pi 不会再自动继续，正常运行的最后一行。</code></pre>
 <pre><code class="language-json">{
   "type": "turn_end",
   "message": { "role": "assistant", "content": ["..."], "stopReason": "toolUse", "...": "..." },
@@ -236,7 +236,7 @@ interface BranchSummaryMessage { role: "branchSummary"; summary: string; fromId:
 interface CompactionSummaryMessage { role: "compactionSummary"; summary: string; tokensBefore: number; timestamp: number; }</code></pre>
 
 <h3>system 消息</h3>
-<p>第一次 <code>turn_start</code> 之后出现一次，声明系统提示与工具定义。<code>message_start</code> 与 <code>message_end</code> 的内容相同。0.73.1 没有这条消息。</p>
+<p>第一次 <code>turn_start</code> 之后出现一次，声明系统提示与工具定义。<code>message_start</code> 与 <code>message_end</code> 的内容相同。</p>
 <pre><code class="language-typescript">interface SystemMessage {
   role: "system";
   content: string | TextContent[];      // 观测值为空字符串 ""，正文在 sections 里
@@ -306,7 +306,7 @@ interface ToolDefinition {
   provider: string;                     // 观测值 "deepseek"
   model: string;                        // 请求的模型 id，观测值 "deepseek-flash"
   responseModel?: string;               // 文档：provider 实际返回的模型，与 model 不同时才有
-  // provider 的响应 id；pending 与 error 状态下缺失。0.73.1 没有
+  // provider 的响应 id；pending 与 error 状态下缺失。
   responseId?: string;
   providerThinkingLevel?: string;       // 文档
   diagnostics?: unknown[];              // 文档：provider 或运行时诊断
@@ -317,9 +317,8 @@ interface ToolDefinition {
   // stopReason 为 "error" 时的错误文本，观测值以 HTTP 状态码开头，例如 "401: {...}"
   errorMessage?: string;
   // provider 原始的结束原因，观测值 "stop"、"tool_calls"；pending 与 error 状态下缺失。
-  // 0.73.1 没有
   rawStopReason?: string;
-  // 本次调用的 thinking 级别，观测值 "high"；pending 状态下缺失。0.73.1 没有
+  // 本次调用的 thinking 级别，观测值 "high"；pending 状态下缺失。
   thinkingLevel?: string;
   deferred?: {                          // 文档：stopReason 为 "deferred" 时取回结果所需的句柄
     provider: string; modelId: string; api: string; id: string;
@@ -519,7 +518,6 @@ interface ImageContent {                // 文档：只出现在 user 与 toolRe
   cacheWrite: number;                   // 写入缓存的 token，deepseek 观测值为 0
   cacheWrite1h?: number;                // 文档：cacheWrite 中按一小时保留写入的部分
   // 推理 token，是 output 的子集，不要重复相加；pending 状态与错误消息的 usage 里没有。
-  // 0.73.1 没有
   reasoning?: number;
   totalTokens: number;
   cost: {                               // 单位美元，按 pi 模型目录里的单价计算
@@ -614,8 +612,9 @@ interface BashStructuredContent {
 
 <h2>文档中有、样本中没有的事件</h2>
 <h3>auto_retry_start、auto_retry_end</h3>
-<p>模型调用失败后，pi 按 <code>delayMs</code> 延迟后重新开始一次 agent 运行。0.73.1 的样本（网络不通，<code>errorMessage</code> 为 <code>Connection error.</code>）显示了完整的重试序列：首次失败的 <code>agent_end</code> 之后，<code>auto_retry_start</code>（<code>attempt</code> 1、2、3，<code>maxAttempts</code> 3，<code>delayMs</code> 2000、4000、8000）各自后跟一整组 <code>agent_start</code> 到 <code>agent_end</code>，最后 <code>auto_retry_end</code> 带 <code>success: false</code> 与 <code>finalError</code>。重试的 agent 运行里没有 user 消息。1.0.1 的样本中 401 认证错误没有触发重试，直接结束运行，说明重试只针对部分错误类型。</p>
-<pre><code class="language-typescript">interface AutoRetryStart {
+<p>模型调用失败后，pi 按 <code>delayMs</code> 延迟后重新开始一次 agent 运行，最后由 <code>auto_retry_end</code> 报告重试结果。1.0.1 的样本中 401 认证错误没有触发重试，直接结束运行，说明重试只针对部分错误类型。</p>
+<pre><code class="language-typescript">// 以下定义来自文档
+interface AutoRetryStart {
   type: "auto_retry_start";
   attempt: number;                      // 第几次重试，从 1 开始
   maxAttempts: number;
@@ -629,8 +628,6 @@ interface AutoRetryEnd {
   attempt: number;                      // 结束时的尝试序号
   finalError?: string;                  // success 为 false 时的最终错误
 }</code></pre>
-<pre><code class="language-json">{ "type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "Connection error." }
-{ "type": "auto_retry_end", "success": false, "attempt": 3, "finalError": "Connection error." }</code></pre>
 
 <h3>compaction_start、compaction_end 与摘要重试</h3>
 <p>上下文接近上限时 pi 自动压缩历史。溢出恢复成功后 <code>willRetry</code> 为 true，pi 会重新发送提示词。压缩完成后的历史里会出现 <code>compactionSummary</code> 角色的消息。以下定义全部来自文档。</p>
@@ -681,10 +678,8 @@ interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; 
     <tr><td>正常完成</td><td>0</td><td>最后一个 assistant 消息的 <code>stopReason</code> 为 <code>stop</code>，最后一行是 <code>agent_settled</code></td></tr>
     <tr><td>工具失败（写只读路径等）</td><td>0</td><td><code>tool_execution_end.isError</code> 与 toolResult 消息的 <code>isError</code> 为 true，模型继续，运行正常结束</td></tr>
     <tr><td>模型调用失败（401 认证错误）</td><td>0</td><td>assistant 消息的 <code>message_start</code> 之后直接 <code>message_end</code>，没有 <code>message_update</code>；<code>content</code> 为 <code>[]</code>，<code>stopReason</code> 为 <code>error</code>，<code>errorMessage</code> 为 <code>401: {...}</code>。之后 <code>turn_end</code>、<code>agent_end</code>、<code>agent_settled</code> 照常出现。标准错误为空</td></tr>
-    <tr><td>网络不通（0.73.1 样本）</td><td>0</td><td>与上一行相同的错误消息，<code>errorMessage</code> 为 <code>Connection error.</code>，之后自动重试三次，见「auto_retry_start、auto_retry_end」</td></tr>
     <tr><td>模型名不存在</td><td>1</td><td>标准输出为空，标准错误 <code>Error: Model "xxx" not found. Use --list-models to see available models.</code></td></tr>
     <tr><td>未知命令行选项</td><td>1</td><td>标准输出为空，标准错误 <code>Error: Unknown option: --xxx</code></td></tr>
-    <tr><td>没有 API 凭据（0.73.1 样本）</td><td>1</td><td>标准输出只有 <code>session</code> 头，标准错误 <code>No API key found for deepseek...</code>。1.0.1 下未实测</td></tr>
     <tr><td>SIGINT</td><td>130</td><td>流停在当前位置，没有收尾事件。样本中一次停在 <code>tool_execution_start</code> 之后，一次停在 <code>turn_start</code> 之后。标准错误为空</td></tr>
   </tbody>
 </table>
@@ -711,24 +706,8 @@ interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; 
 { "type": "agent_end", "messages": ["..."], "willRetry": false }
 { "type": "agent_settled" }</code></pre>
 
-<h2>版本说明</h2>
-<p>1.0.1 与 0.73.1（npm 包名当时为 <code>@mariozechner/pi-coding-agent</code>）的样本对比，以及 <code>CHANGELOG.md</code> 中与这条流有关的条目：</p>
-<table>
-  <thead>
-    <tr><th>差异</th><th>0.73.1</th><th>1.0.1</th><th>引入版本</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>system 消息</td><td>没有，流从 user 消息开始</td><td>第一次 <code>turn_start</code> 后输出一次</td><td>0.86.0 加入 transcript 记录的系统提示与工具变更</td></tr>
-    <tr><td><code>agent_settled</code></td><td>没有，最后一行是 <code>agent_end</code></td><td>有</td><td>0.80.4</td></tr>
-    <tr><td><code>agent_end.willRetry</code></td><td>没有</td><td>有</td><td>0.75.4</td></tr>
-    <tr><td><code>usage.reasoning</code></td><td>没有</td><td>有</td><td>0.80.3</td></tr>
-    <tr><td>assistant 消息的 <code>responseId</code>、<code>rawStopReason</code>、<code>thinkingLevel</code></td><td>没有</td><td>有</td><td>changelog 中没有找到明确条目，介于两个版本之间</td></tr>
-    <tr><td><code>message_update</code> 的形状</td><td>changelog 记载 0.84.0 之前带累计的 <code>message</code> 与 <code>assistantMessageEvent.partial</code>；0.73.1 样本里没有成功的模型调用，未直接观测</td><td>只有 <code>usage</code> 与增量的 <code>assistantMessageEvent</code></td><td>0.84.0 改为只发增量；0.84.2 修复 <code>usage</code> 丢失</td></tr>
-    <tr><td>默认 deepseek 模型 id</td><td><code>deepseek-v4-flash</code></td><td><code>deepseek-flash</code></td><td></td></tr>
-  </tbody>
-</table>
+<h2>样本范围</h2>
 <ul>
-  <li>两个版本相同的部分：<code>session</code> 头、<code>agent_start</code>、<code>turn_start</code>、<code>turn_end</code>、user 消息、assistant 错误消息的 <code>stopReason: "error"</code> 与 <code>errorMessage</code>、退出码 0。</li>
   <li>本文的 1.0.1 样本只覆盖 deepseek provider 与 <code>read</code>、<code>bash</code>、<code>write</code> 三个工具的执行；<code>edit</code>、<code>grep</code>、<code>find</code>、<code>ls</code> 的 <code>result.details</code> 形状、其他 provider 的 <code>api</code> 与签名字段、图片内容块、<code>length</code>、<code>aborted</code>、<code>deferred</code> 三种 <code>stopReason</code>、压缩与扩展相关事件、SIGTERM 的行为均未实测。</li>
   <li>pi 在 <code>--mode json</code> 下的输出同时也是 RPC 模式的事件格式（RPC 没有 <code>session</code> 头，另有 <code>bash_execution_update</code> 与 <code>extension_error</code>），以及 SDK 的 <code>AgentSessionEvent</code> 去掉累计快照后的形状。TypeScript 类型 <code>JsonAgentSessionEvent</code> 由 <code>@earendil-works/pi-coding-agent</code> 导出。</li>
 </ul>

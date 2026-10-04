@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · 隔离 · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · 沙箱与网络 · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
 <h1>沙箱与网络 <span class="tag">草稿</span></h1>
 <p class="lead">agentrun 用沙箱限制 agent 能写的文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code> 与 <code>--network</code> 两个选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
 
@@ -93,7 +93,7 @@
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
   <li>监听 <code>127.0.0.1</code> 上的随机端口。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，再由 <code>socat</code> 把会话临时目录里的 Unix socket 接到这个端口，做法与 claude-code 自己的沙箱相同。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址。</li>
-  <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 指向代理，<code>NO_PROXY</code> 清空。调用方环境里原有的代理变量改由过滤代理作为上游使用，所以云端容器自带的出口代理仍然生效。</li>
+  <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 指向代理，<code>NO_PROXY</code> 清空。调用方环境里原有的代理变量改由过滤代理作为上游使用，所以Cloud Managed 容器自带的出口代理仍然生效。</li>
   <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#event-types">事件与输出</a>。</li>
 </ul>
 <figure>

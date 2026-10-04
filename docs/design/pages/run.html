@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">隔离</a> · <a href="events.html">事件与输出</a> · 运行 · <a href="pending.html">待定</a></p>
+<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · 运行 · <a href="pending.html">待定</a></p>
 <h1>运行：命令行与运行时 <span class="tag">草稿</span></h1>
 <p class="lead">前半页写调用方怎么运行 agentrun：命令行选项、一次运行的顺序、启动前检查、doctor 与退出码。后半页每个运行时一节：agentrun 用什么参数启动它、它的原始输出怎么映射到统一事件、什么情况算失败。运行时的参数与行为来自实测，写明了实测的版本；<mark>运行时升级后要重新核对</mark>。原始输出的完整字段见 <a href="claudecode.jsonl.html">claude-code 事件流</a>与 <a href="pi.jsonl.html">pi 事件流</a>两页字段参考。</p>
 
@@ -56,7 +56,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 <p>另外有 <code>agentrun doctor</code>。在 <a href="#doctor_check">后文</a> 详细描述。</p>
 
 <h3>额外传递参数给运行时</h3>
-<p><code>--</code> 之后的所有参数原样传给运行时，用于工具没有提供选项的运行时功能。调用方的参数可以覆盖工具的设置。</p>
+<p><code>--</code> 之后的所有参数原样传给运行时，用于工具没有提供选项的运行时功能。工具生成的参数在前，<code>--</code> 之后的参数接在后面。多数运行时遇到同一个选项出现两次时以后一次为准，所以调用方的参数可以覆盖工具的设置。</p>
 <p>可以覆盖的设置包括权限与沙箱设置。工具不阻止，只在 <code>start</code> 事件的 <code>argv</code> 里如实记录，这时安全保证由调用方负责。理由：用户需要为没有预料到的用途保留完整的控制。</p>
 <p>调用方的参数可能让运行时输出工具不认识的事件，例如给 claude-code 传 <code>--include-partial-messages</code> 后，会多出逐字输出的 <code>stream_event</code>。这类事件不进入统一事件流，只写入 <code>--raw</code> 文件。</p>
 
@@ -73,7 +73,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败；codex 的登录文件不存在。</li>
-  <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">隔离</a>。</li>
+  <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
   <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且没有用 <code>--network custom</code>。</li>
   <li>会话临时目录创建失败。</li>
 </ul>
@@ -122,7 +122,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 
 <ul>
   <li>claude-code: >= 2.1.288</li>
-  <li>pi: >= 1.0.1</li>
+  <li>pi: >= 1.0.1，npm 包 <code>@earendil-works/pi-coding-agent</code></li>
   <li>codex: unknown</li>
 </ul>
 
@@ -173,7 +173,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><th>原始事件</th><th>用到的字段</th><th>转成</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>system</code>，subtype <code>init</code></td><td><code>permissionMode</code>、<code>model</code>、<code>tools</code></td><td>不输出；用于检查 auto 模式与 <code>--no-subagents</code></td></tr>
+    <tr><td><code>system</code>，subtype <code>init</code></td><td><code>permissionMode</code>、<code>model</code>、<code>tools</code></td><td>不输出；用于检查 <code>--no-subagents</code></td></tr>
     <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略</td></tr>
     <tr><td><code>system</code>，subtype <code>permission_denied</code></td><td><code>tool_use_id</code>、<code>tool_name</code>、<code>decision_reason</code></td><td>把对应的调用标为被拒绝；它出现在对应的 tool_result 之前</td></tr>
     <tr><td><code>user</code>，<code>isReplay</code> 为 true</td><td><code>message.content</code></td><td><code>prompt</code>。它在 <code>system/init</code> 之后、第一个 assistant 之前出现，<code>parent_tool_use_id</code> 为 null</td></tr>
@@ -205,7 +205,6 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 <h3>失败判定</h3>
 <p>以下任一成立即为 <code>failed</code>，<code>detail</code> 按顺序取第一项的信息：</p>
 <ol>
-  <li>auto 模式没有生效（见上）。</li>
   <li>最后一个 result 的 <code>is_error</code> 为 true：取它的 <code>result</code> 文字。例如无效模型（同时退出码 1、标准错误有 <code>[claude-code:unrecognized_model]</code>）、无效凭据（退出码 1）。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。例如未知选项，没有任何事件。</li>
   <li>退出码 0 但没有 result：<code>运行时退出（退出码 N）时没有输出 result 事件</code>。</li>
@@ -225,7 +224,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
   <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
-  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">隔离</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; --bind &lt;临时目录&gt; --bind &lt;状态目录&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。状态目录在 cwd 之下时不再单独绑定。</li>
+  <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>：Linux 是 <code>bwrap --ro-bind / / --bind &lt;cwd&gt; --bind &lt;临时目录&gt; --bind &lt;状态目录&gt; --dev /dev --proc /proc --die-with-parent --unshare-net -- ...</code>，macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb ...</code>。状态目录在 cwd 之下时不再单独绑定。</li>
 </ul>
 
 <h3>模型检查</h3>
