@@ -86,7 +86,7 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 - `docs/design/index.html` 是总览页，按 Motivation、Environment、Event and Output、Runtime、TBD、暂不做的功能六节列出所有文档。
 - `docs/design/style.css` 是所有页面共用的样式。新文档参考 `pages/isolation.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
 - 项目的设计文档放在 `docs/design/pages/`。
-- 改动 `docs/design/` 后运行 `uv run scripts/check_design.py`，它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
+- 改动 `docs/design/` 后运行 `uv run scripts/check_design.py`（默认用本机的 Chrome；在 Cloud Managed 容器里加 `--browser chromium`，用 playwright 自带的 Chromium），它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
 
 ### Intro Doc
 

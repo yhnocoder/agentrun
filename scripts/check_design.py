@@ -130,28 +130,28 @@ def proxy_options():
     return options
 
 
-def launch(p):
+def launch(p, browser):
     options = proxy_options()
-    try:
+    if browser == "chrome":
         return p.chromium.launch(channel="chrome", **options)
-    except Error:
-        bundled = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")) / "chromium"
-        if bundled.is_file():
-            return p.chromium.launch(executable_path=bundled, **options)
-        return p.chromium.launch(**options)
+    bundled = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")) / "chromium"
+    if bundled.is_file():
+        return p.chromium.launch(executable_path=bundled, **options)
+    return p.chromium.launch(**options)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("root", nargs="?", default="docs/design", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--browser", choices=["chrome", "chromium"], default="chrome")
     args = parser.parse_args()
     root = args.root.resolve()
     out = args.out or Path(tempfile.mkdtemp())
     out.mkdir(parents=True, exist_ok=True)
     failed = False
     with sync_playwright() as p:
-        browser = launch(p)
+        browser = launch(p, args.browser)
         for html in sorted(root.rglob("*.html")):
             rel, errors = check(browser, root, html, out)
             print(f"{'FAIL' if errors else 'PASS'} {rel}")
