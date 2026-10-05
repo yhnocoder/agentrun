@@ -302,7 +302,7 @@ cat > "$PWD/prompt.txt"
   echo "tmpdir=$TMPDIR"
   echo "auth=$(readlink "$CODEX_HOME/auth.json")"
   echo "entries=$(ls -A "$CODEX_HOME" | sort | tr '\n' ' ')"
-  echo "mode=$(stat -f %Lp "$CODEX_HOME" 2>/dev/null || stat -c %a "$CODEX_HOME")"
+  echo "mode=$(stat -c %a "$CODEX_HOME" 2>/dev/null || stat -f %Lp "$CODEX_HOME")"
   echo "proxy=${http_proxy-unset}"
 } > "$PWD/state.txt"
 echo '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}'
@@ -396,6 +396,19 @@ fn missing_login_file_is_rejected_with_and_without_dry_run() {
         events(&output).pop().unwrap()["detail"],
         "codex login file /nonexistent/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH"
     );
+}
+
+#[test]
+fn dry_run_accepts_login_content_without_the_login_file() {
+    let env = Env::new(FAKE_CODEX);
+    let output = env
+        .command(&["--sandbox", "off", "--dry-run", "--prompt", "hi"])
+        .env("AGENTRUN_CODEX_AUTH", "{\"tokens\":{}}")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(!env.login().exists());
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
 
 #[test]

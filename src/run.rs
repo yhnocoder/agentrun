@@ -160,7 +160,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
             socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
         });
         if let Some(login) = &codex_login {
-            if let Err(detail) = codex::check_login_file(login) {
+            if let Err(detail) = codex::check_login(&ready.invocation.session, login) {
                 return reject(&mut caller, format, &detail, started);
             }
             ready.invocation.codex_home = Some(codex::home_path(&ready.invocation.tempdir));
@@ -202,23 +202,25 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         .signals
         .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
-    let mut codex_home: Option<PrivateDir> = None;
-    if let Some(login) = &codex_login {
-        let home = codex::home_path(tempdir.path());
-        if let Err(detail) =
-            codex::check_login_file(login).and_then(|()| codex::create_home(&home, login))
-        {
-            return reject(&mut caller, format, &detail, started);
+    let _codex_home = match &codex_login {
+        Some(login) => {
+            let home = codex::home_path(tempdir.path());
+            if let Err(detail) = codex::check_login(&ready.invocation.session, login)
+                .and_then(|()| codex::create_home(&home, login))
+            {
+                return reject(&mut caller, format, &detail, started);
+            }
+            caller
+                .signals
+                .tempdir(home.clone(), ready.invocation.args.debug);
+            ready.invocation.codex_home = Some(home.clone());
+            Some(PrivateDir {
+                path: home,
+                keep: ready.invocation.args.debug,
+            })
         }
-        caller
-            .signals
-            .tempdir(home.clone(), ready.invocation.args.debug);
-        codex_home = Some(PrivateDir {
-            path: home.clone(),
-            keep: ready.invocation.args.debug,
-        });
-        ready.invocation.codex_home = Some(home);
-    }
+        None => None,
+    };
     let mut proxy = None;
     if proxy_needed {
         match FilterProxy::bind(tempdir.path()) {
@@ -242,7 +244,6 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     };
     let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
     plan.push(credential_line);
-    let _codex_home = codex_home;
     execute(caller, ready, launch, plan, tempdir, proxy, started)
 }
 

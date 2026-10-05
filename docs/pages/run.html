@@ -303,23 +303,23 @@ removed: (none)</div>
   &lt;-- 之后的调用方参数&gt; -</code></pre>
 <ul>
   <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#runtime-home">私有配置目录</a>；它不出现在 argv、<code>start.env</code> 与 <code>set:</code> 行里。最后的 <code>-</code> 表示从标准输入读提示词，提示词原文写入标准输入后关闭。</li>
-  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（<code>std::fs::canonicalize</code>，macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
+  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
 </ul>
 <table>
   <thead>
     <tr><th>沙箱</th><th><code>--network</code></th><th>权限参数</th></tr>
   </thead>
   <tbody>
-    <tr><td>运行</td><td><code>none</code></td><td>上面的三行：<code>default_permissions=agentrun</code>、<code>permissions.agentrun.filesystem={...}</code>、<code>permissions.agentrun.network.enabled=false</code></td></tr>
-    <tr><td>运行</td><td><code>full</code></td><td>前两行同上，第三行为 <code>-c permissions.agentrun.network.enabled=true</code></td></tr>
-    <tr><td>运行</td><td><code>custom</code></td><td>前两行同上，第三行换成 <code>--enable network_proxy -c 'permissions.agentrun.network={enabled=true, enable_socks5=false, enable_socks5_udp=false, allow_upstream_proxy=true, domains={"&lt;主机1&gt;"="allow", ...}}'</code>。<code>domains</code> 写每条 <code>--allow-host</code> 的主机部分，不写端口，按给出的顺序去重，通配写成 <code>*.example.com</code>（codex 只匹配子域名，与 <code>--allow-host</code> 相同，codex 0.159.2 实测）；端口限制由过滤代理执行。不写 <code>allow_local_binding</code>，理由见<a href="isolation.html#network">网络</a></td></tr>
-    <tr><td>不运行</td><td>任意</td><td><code>-c default_permissions=":danger-full-access"</code></td></tr>
+    <tr><td class="nb">运行</td><td><code>none</code></td><td>上面的三行：<code>default_permissions=agentrun</code>、<code>permissions.agentrun.filesystem={...}</code>、<code>permissions.agentrun.network.enabled=false</code></td></tr>
+    <tr><td class="nb">运行</td><td><code>full</code></td><td>前两行同上，第三行为 <code>-c permissions.agentrun.network.enabled=true</code></td></tr>
+    <tr><td class="nb">运行</td><td><code>custom</code></td><td>前两行同上，第三行换成 <code>--enable network_proxy -c 'permissions.agentrun.network={enabled=true, enable_socks5=false, enable_socks5_udp=false, allow_upstream_proxy=true, domains={"&lt;主机1&gt;"="allow", ...}}'</code>。<code>domains</code> 写每条 <code>--allow-host</code> 的主机部分，不写端口，按给出的顺序去重，通配写成 <code>*.example.com</code>（codex 只匹配子域名，与 <code>--allow-host</code> 相同，codex 0.159.2 实测）；端口限制由过滤代理执行。不写 <code>allow_local_binding</code>，理由见<a href="isolation.html#network">网络</a></td></tr>
+    <tr><td class="nb">不运行</td><td>任意</td><td><code>-c default_permissions=":danger-full-access"</code></td></tr>
   </tbody>
 </table>
 <ul>
   <li>写进 <code>-c</code> 值的字符串按 TOML 基本字符串写：外加双引号，<code>\</code> 写成 <code>\\</code>，<code>"</code> 写成 <code>\"</code>，控制字符写成 <code>\uXXXX</code>。用于会话临时目录路径、<code>--effort</code> 的值与主机名。</li>
   <li><code>--dry-run</code> 时会话临时目录写成 <code>&lt;tempdir&gt;</code>，私有目录写成 <code>&lt;tempdir&gt;-codex</code>（只在环境里，不在 argv 里）。</li>
-  <li>用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）不存在时启动前报错，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>codex login file &lt;路径&gt; not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</code>。私有目录创建失败的 <code>detail</code> 为 <code>cannot create the codex home directory &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
+  <li>用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）不存在、也没有给出 <code>AGENTRUN_CODEX_AUTH</code> 时启动前报错，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>codex login file &lt;路径&gt; not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</code>。私有目录创建失败的 <code>detail</code> 为 <code>cannot create the codex home directory &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
   <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除。</li>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>

@@ -312,8 +312,12 @@ pub fn login_file(session: &Session, cwd: &Path) -> PathBuf {
         .join(LOGIN_FILE)
 }
 
-pub fn check_login_file(login: &Path) -> Result<(), String> {
-    if login.exists() {
+pub fn check_login(session: &Session, login: &Path) -> Result<(), String> {
+    let provided = session
+        .codex_auth
+        .as_ref()
+        .is_some_and(|value| !value.is_empty());
+    if provided || login.exists() {
         Ok(())
     } else {
         Err(format!(
@@ -333,7 +337,11 @@ pub fn create_home(home: &Path, login: &Path) -> Result<(), String> {
     DirBuilder::new()
         .mode(0o700)
         .create(home)
-        .and_then(|()| std::os::unix::fs::symlink(login, home.join(LOGIN_FILE)))
+        .and_then(|()| {
+            std::os::unix::fs::symlink(login, home.join(LOGIN_FILE)).inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(home);
+            })
+        })
         .map_err(|error| {
             format!(
                 "cannot create the codex home directory {}: {error}",
@@ -962,12 +970,28 @@ mod tests {
             )),
             "{error}"
         );
+    }
+
+    #[test]
+    fn login_check_passes_when_the_file_exists_or_its_content_is_given() {
+        let setup = Setup::new();
+        let login = setup.root.path().join("auth.json");
+        let session = Session::assemble(Runtime::Codex, &[], &[], &[], &[]);
         assert_eq!(
-            check_login_file(&login).unwrap_err(),
+            check_login(&session, &login).unwrap_err(),
             format!(
                 "codex login file {} not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH",
                 login.display()
             )
         );
+        let empty = vec![(OsString::from("AGENTRUN_CODEX_AUTH"), OsString::new())];
+        let session = Session::assemble(Runtime::Codex, &empty, &[], &[], &[]);
+        assert!(check_login(&session, &login).is_err());
+        let given = vec![(OsString::from("AGENTRUN_CODEX_AUTH"), OsString::from("{}"))];
+        let session = Session::assemble(Runtime::Codex, &given, &[], &[], &[]);
+        assert_eq!(check_login(&session, &login), Ok(()));
+        std::fs::write(&login, "{}").unwrap();
+        let session = Session::assemble(Runtime::Codex, &[], &[], &[], &[]);
+        assert_eq!(check_login(&session, &login), Ok(()));
     }
 }
