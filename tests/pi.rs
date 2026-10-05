@@ -396,7 +396,7 @@ fn network_events(events: &[Value]) -> Vec<Value> {
 
 #[test]
 fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
-    if !support::bwrap_available() {
+    if !support::sandbox_available() {
         return;
     }
     let server = support::WebServer::start();
@@ -473,7 +473,7 @@ fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
 
 #[test]
 fn sandboxed_pi_with_unknown_provider_needs_an_allowed_host() {
-    if !support::bwrap_available() {
+    if !support::sandbox_available() {
         return;
     }
     let env = Env::new(CURL_PI);
@@ -497,7 +497,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
 
 #[test]
 fn run_ends_after_the_sandboxed_agent_removes_the_proxy_socket() {
-    if !support::bwrap_available() {
+    if !support::sandbox_available() {
         return;
     }
     let env = Env::new(SOCKET_REMOVING_PI);

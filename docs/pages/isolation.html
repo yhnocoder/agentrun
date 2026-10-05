@@ -21,7 +21,7 @@
 <p class="lead">agentrun 用沙箱限制 agent 能写的文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code> 与 <code>--network</code> 两个选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
-<p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
+<p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
 <table>
   <thead>
     <tr><th></th><th><code>on</code>（默认）</th><th><code>relax</code></th><th><code>off</code></th></tr>
@@ -39,11 +39,31 @@
 <h3>判断沙箱能不能用</h3>
 <p>只看 <code>bwrap</code> 是否存在不够：docker 容器、关闭了非特权用户命名空间的系统、被 AppArmor 限制的系统里，<code>bwrap</code> 装了也启动不了。所以 <code>on</code> 与 <code>relax</code> 在每次运行前都实际检查一次：</p>
 <ul>
-  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。</li>
-  <li>Linux：会话 PATH 里有 <code>bwrap</code>；claude-code 与 pi 还要有 <code>socat</code>。然后执行一次 <code>bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent -- /bin/true</code>，最多等 5 秒。耗时通常是毫秒级。</li>
-  <li>codex 用它自己的沙箱，不做 <code>bwrap</code> 检查。codex 沙箱启动失败时怎么发现，待实测，见<a href="pending.html">待定</a>。</li>
+  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。<code>sandbox-exec</code> 只用 <code>/usr/bin/sandbox-exec</code> 这个绝对路径，不在会话 PATH 里查找，因为 Seatbelt 是系统组件，PATH 里同名的程序不是它。macOS 上不查找 <code>socat</code>：claude-code 在 macOS 上不用它，pi 直接连接过滤代理的端口。</li>
+  <li>Linux：会话 PATH 里有 <code>bwrap</code>；claude-code 与 pi 还要有 <code>socat</code>。然后执行一次 <code>bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent --unshare-net -- /bin/true</code>，最多等 5 秒。耗时通常是毫秒级。检查创建的命名空间与 pi 的包裹相同，网络命名空间也在检查之内。</li>
+  <li>Linux 上的 codex 同样执行这条检查，不要求 <code>socat</code>。查找 <code>bwrap</code> 时跳过工作目录之内的 PATH 项，找不到时报缺少 <code>bwrap</code>。理由：codex 的沙箱启动失败时，<code>codex exec</code> 仍以退出码 0 结束并输出 <code>turn.completed</code>，没有失败事件，运行中发现不了（codex 0.160.0 在本机 Linux 与 docker 实测）。codex 用 PATH 上第一个不在工作目录之内的 <code>bwrap</code>，找不到时才用 npm 包里自带的 <code>bwrap</code>；agentrun 按同样的规则查找，检查的就是 codex 会用的那一个，并且不让 codex 退回到没有检查过的自带 <code>bwrap</code>。运行中的附加信号见<a href="run.html#codex">codex 的失败判定</a>。</li>
 </ul>
 <p>启动前发现的沙箱问题按 <code>rejected</code> 处理（退出码 2）；运行中才发现的，例如 pi 的包裹命令启动失败，按 <code>failed</code> 处理（退出码 1）。<code>--dry-run</code> 也做这些检查，<code>--debug</code> 写出每项检查的结果。</p>
+<h3 id="apparmor">bwrap 启动失败的常见原因</h3>
+<p>检查失败时，报错写出 <code>bwrap</code> 的第一行报错，并提示 <code>In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile</code>，后面附本节的链接。<code>bwrap</code> 的报错文字随调用者身份变化，所以提示同时写出两种情况，不按报错文字区分。</p>
+<table>
+  <thead>
+    <tr><th>环境</th><th><code>bwrap</code> 的报错</th><th>做法</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>docker 默认权限（不加 <code>--privileged</code>）的容器</td><td>以 root 运行时为 <code>Creating new namespace failed: Operation not permitted</code>；以普通用户运行时为 <code>No permissions to create new namespace</code> 开头的一句</td><td>用 <code>--sandbox off</code>，由容器提供隔离。能让 <code>bwrap</code> 在容器里启动的 docker 选项没有实测</td></tr>
+    <tr><td>Ubuntu 23.10 及以后的默认设置，AppArmor 限制普通程序创建用户命名空间</td><td>普通用户运行时为 <code>setting up uid map: Permission denied</code>；root 不受这项限制</td><td>为 <code>/usr/bin/bwrap</code> 单独加一个 AppArmor profile（见下）</td></tr>
+  </tbody>
+</table>
+<pre><code class="language-bash"># 这项限制由 sysctl kernel.apparmor_restrict_unprivileged_userns=1 打开
+# /etc/apparmor.d/bwrap
+abi &lt;abi/4.0&gt;,
+include &lt;tunables/global&gt;
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}</code></pre>
+<p>写入后运行 <code>sudo apparmor_parser -r /etc/apparmor.d/bwrap</code> 加载（Ubuntu 24.04 实测）。只给 <code>bwrap</code> 放行，不把上表里的这项 sysctl 改成 0。理由：改成 0 会让所有程序都能创建用户命名空间。</p>
 <p>agentrun 不自动安装 <code>bwrap</code> 与 <code>socat</code>。理由：安装需要 root 和各发行版不同的包管理器，运行 agent 时修改系统，出了问题不容易查清原因。报错信息与 <code>agentrun doctor</code> 给出安装命令。</p>
 
 <h3>没有沙箱时的提示</h3>
@@ -59,10 +79,11 @@
   </thead>
   <tbody>
     <tr><td>claude-code</td><td>用 claude-code 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加 <code>socat</code>），由 <code>--settings</code> 打开。只作用于 Bash 命令：命令只能写两个目录、不能联网，沙箱里的命令自动放行，不允许沙箱外执行命令。Edit 与 Write 不经过沙箱，改用权限模式 <code>dontAsk</code> 加按路径放行的规则，只放行写两个目录</td><td>权限模式 <code>auto</code>，每条 Bash 命令由 claude-code 的分类器判断</td></tr>
-    <tr><td>codex</td><td>codex 自己的沙箱，用一个自定义权限配置：整个文件系统可读，工作目录与会话临时目录可写，<code>/tmp</code> 与 <code>$TMPDIR</code> 不可写，网络关闭</td><td>内置权限配置 <code>:danger-full-access</code></td></tr>
+    <tr><td>codex</td><td>codex 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加一个 seccomp 网络过滤），用一个自定义权限配置：整个文件系统可读，工作目录与会话临时目录可写，<code>/tmp</code> 与 <code>$TMPDIR</code> 不可写，网络关闭</td><td>内置权限配置 <code>:danger-full-access</code></td></tr>
     <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。另外只放行用户 pi 登录文件 <code>auth.json</code> 这一个文件。网络见下一节</td><td>不包裹</td></tr>
   </tbody>
 </table>
+<p>macOS 上 pi 的 Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、用户的 pi 登录文件（没有时不写）与 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。</p>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
   <li>pi 只放行登录文件，不放行整个状态目录：pi 刷新令牌时原地改写 <code>auth.json</code>，锁目录建在私有状态目录里，所以一个文件就够；状态目录里有 pi 的启动脚本与扩展，不能让沙箱里的 agent 改写，见<a href="session.html#runtime-home">私有配置目录</a>。Linux 上用 <code>--bind</code> 单独绑定这个文件；用户没有登录文件时不放行。</li>
@@ -166,7 +187,7 @@
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
+    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）；Linux 上这个目录在会话临时目录之内，没有这项风险（本机 Linux 与云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）。<code>--network full</code> 下命令直接联网，不经过滤代理，没有私有地址检查，<code>169.254.169.254</code> 这类地址可以访问（用户定）</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
     <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户的 pi 登录文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>

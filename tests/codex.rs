@@ -523,6 +523,7 @@ fn custom_network_runs_the_filter_proxy_with_the_service_hosts() {
             "fetch",
         ])
         .env("http_proxy", &upstream_address)
+        .env("https_proxy", &upstream_address)
         .output()
         .unwrap();
     let events = events(&output);

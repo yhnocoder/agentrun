@@ -276,8 +276,12 @@ fn runtime_missing_from_path_is_rejected() {
     );
 }
 
+#[cfg(target_os = "linux")]
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+#[cfg(target_os = "linux")]
+const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
     let env = Env::with_fake_claude();
@@ -292,6 +296,7 @@ fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
     assert!(env.no_leftover_tempdirs());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
     let env = Env::with_fake_pi();
@@ -311,6 +316,7 @@ fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn bwrap_that_cannot_start_is_rejected_with_its_message() {
     let env = Env::with_fake_claude();
@@ -321,15 +327,46 @@ fn bwrap_that_cannot_start_is_rejected_with_its_message() {
     env.install("socat", "#!/bin/sh\nexit 0\n");
     assert_eq!(
         assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
-        "sandbox is not available: bwrap cannot start: No permissions to create new namespace. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+        format!(
+            "sandbox is not available: bwrap cannot start: No permissions to create new namespace. {CANNOT_START_HINT}"
+        )
     );
     env.install("bwrap", "#!/bin/sh\nexit 3\n");
     assert_eq!(
         assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
-        "sandbox is not available: bwrap cannot start: exited with code 3. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+        format!(
+            "sandbox is not available: bwrap cannot start: exited with code 3. {CANNOT_START_HINT}"
+        )
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn codex_is_rejected_when_bwrap_cannot_start_and_needs_no_socat() {
+    let env = Env::with_fake_codex();
+    let work = env.root.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let args = ["codex", "--cwd", work.to_str().unwrap(), "--prompt", "hi"];
+    env.install(
+        "bwrap",
+        "#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n",
+    );
+    assert_eq!(
+        assert_rejected(&env.run(&args)),
+        format!(
+            "sandbox is not available: bwrap cannot start: setting up uid map: Permission denied. {CANNOT_START_HINT}"
+        )
+    );
+    env.install("bwrap", "#!/bin/sh\nexit 0\n");
+    let detail = assert_rejected(&env.run(&args));
+    assert!(detail.starts_with("codex login file "), "{detail}");
+    assert_eq!(
+        assert_rejected(&env.run(&["codex", "--prompt", "hi"])),
+        "sandbox is not available: bwrap not found in PATH. Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off"
+    );
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn bwrap_that_hangs_is_killed_after_five_seconds() {
     let env = Env::with_fake_claude();
@@ -341,10 +378,13 @@ fn bwrap_that_hangs_is_killed_after_five_seconds() {
     assert!((4.5..9.0).contains(&elapsed), "took {elapsed:.2}s");
     assert_eq!(
         detail,
-        "sandbox is not available: bwrap cannot start: timed out after 5 seconds. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+        format!(
+            "sandbox is not available: bwrap cannot start: timed out after 5 seconds. {CANNOT_START_HINT}"
+        )
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn missing_socat_is_rejected() {
     let env = Env::with_fake_claude();
@@ -360,6 +400,12 @@ fn assert_dry_run(output: &Output) {
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert!(stdout.starts_with("command: "), "{stdout}");
 }
+
+#[cfg(target_os = "linux")]
+const SANDBOX_ON_WITHOUT_PROVIDER: &str = "sandbox is not available: bwrap not found in PATH. Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+
+#[cfg(target_os = "macos")]
+const SANDBOX_ON_WITHOUT_PROVIDER: &str = "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>";
 
 #[test]
 fn sandbox_variable_from_every_source_and_option_precedence() {
@@ -415,7 +461,7 @@ fn sandbox_variable_from_every_source_and_option_precedence() {
             "--prompt",
             "hi"
         ])),
-        format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
+        SANDBOX_ON_WITHOUT_PROVIDER
     );
     let output = env
         .command(&["pi", "--prompt", "hi"])
@@ -537,6 +583,7 @@ fn start_network_reports_mode_allow_and_enforcement() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn real_bwrap_passes_the_sandbox_step() {
     let Some(bwrap) = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
@@ -660,6 +707,54 @@ fn real_bwrap_passes_the_sandbox_step() {
         "{command}"
     );
     assert!(!command.contains("proxy port"), "{command}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_exec_passes_the_sandbox_step() {
+    let env = Env::with_fake_claude();
+    env.install("pi", "#!/bin/sh\nexit 0\n");
+    let output = env.run(&[
+        "pi",
+        "--debug",
+        "--dry-run",
+        "--model",
+        "deepseek/deepseek-flash",
+        "--prompt",
+        "hi",
+    ]);
+    assert_dry_run(&output);
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    let first = stderr.lines().next().unwrap_or_default();
+    assert!(
+        first.starts_with("[debug] sandbox: seatbelt (/usr/bin/sandbox-exec, check "),
+        "{first}"
+    );
+    assert!(first.ends_with("ms)"), "{first}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout.lines().next().unwrap();
+    assert!(
+        command.starts_with(&format!(
+            "command: /usr/bin/sandbox-exec -f '<tempdir>/seatbelt.sb' {}/pi -p ",
+            env.bin().display()
+        )),
+        "{command}"
+    );
+    assert!(!command.contains("socat"), "{command}");
+    assert!(env.no_leftover_tempdirs());
+    let output = env.run(&["pi", "--sandbox", "off", "--dry-run", "--prompt", "hi"]);
+    assert_dry_run(&output);
+    assert!(
+        !String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("sandbox-exec"),
+        "the unsandboxed command is not wrapped"
+    );
+    let output = env.run(&["claude-code", "--dry-run", "--prompt", "hi"]);
+    assert_dry_run(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#""sandbox":{"enabled":true"#), "{stdout}");
+    assert!(!stdout.contains("sandbox-exec"), "{stdout}");
 }
 
 #[test]

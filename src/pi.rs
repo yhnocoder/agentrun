@@ -9,10 +9,13 @@ use serde_json::{Map, Value};
 use crate::adapter::{Adapter, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
+use crate::event::SandboxKind;
 use crate::json::{first_line, joined_text, optional_string, string};
-use crate::network::proxy_environment;
+use crate::network::{ProxyEndpoint, proxy_environment};
 use crate::run::Invocation;
-use crate::sandbox::{ProxyForward, wrap_pi, wrapper_failure};
+use crate::sandbox::{
+    ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure, write_seatbelt_profile,
+};
 use crate::usage::TokenCounts;
 
 pub const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
@@ -52,7 +55,7 @@ const NO_REPLY_DETAIL: &str = "pi produced no model reply";
 const DETAIL_MAX_CHARS: usize = 500;
 
 pub struct Pi {
-    sandboxed: bool,
+    sandbox: SandboxKind,
     model_option: Option<String>,
     expected: Option<Model>,
     model_checked: bool,
@@ -81,7 +84,7 @@ impl Default for Pi {
 impl Pi {
     pub fn new() -> Pi {
         Pi {
-            sandboxed: false,
+            sandbox: SandboxKind::None,
             model_option: None,
             expected: None,
             model_checked: false,
@@ -150,7 +153,7 @@ impl Adapter for Pi {
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
-        self.sandboxed = invocation.sandbox.runs();
+        self.sandbox = invocation.sandbox.kind;
         self.model_option = invocation.args.model.clone();
         self.expected = match &invocation.args.model {
             Some(model) => Some(parse_model(model)?),
@@ -188,7 +191,6 @@ impl Adapter for Pi {
             private_dir.into_os_string(),
         )];
         let mut service_hosts = Vec::new();
-        let mut forward = None;
         if let Some(proxy) = &invocation.proxy {
             let provider = match &self.expected {
                 Some(model) => Some(model.provider.clone()),
@@ -206,36 +208,56 @@ impl Adapter for Pi {
                 }
                 None => {}
             }
-            let socat = invocation
-                .sandbox
-                .socat
-                .as_deref()
-                .ok_or_else(|| "socat not found in PATH".to_string())?;
-            forward = Some((socat.to_path_buf(), proxy.port_text(), proxy.socket.clone()));
             env.extend(proxy_environment(&proxy.port_text()));
         }
+        let port = invocation.proxy.as_ref().map(ProxyEndpoint::port_text);
+        let login = || {
+            user_dir
+                .as_deref()
+                .and_then(|dir| std::fs::canonicalize(dir.join(LOGIN_FILE)).ok())
+        };
         let bwrap = invocation
             .sandbox
             .bwrap
             .as_deref()
-            .filter(|_| self.sandboxed);
+            .filter(|_| self.sandbox == SandboxKind::Bubblewrap);
         if let Some(bwrap) = bwrap {
-            let login = user_dir
-                .as_deref()
-                .and_then(|dir| std::fs::canonicalize(dir.join(LOGIN_FILE)).ok());
-            let forward = forward.as_ref().map(|(socat, port, socket)| ProxyForward {
-                socat,
-                port,
-                socket,
-            });
+            let forward = match (&invocation.proxy, &port) {
+                (Some(proxy), Some(port)) => Some(ProxyForward {
+                    socat: invocation
+                        .sandbox
+                        .socat
+                        .as_deref()
+                        .ok_or_else(|| "socat not found in PATH".to_string())?,
+                    port,
+                    socket: &proxy.socket,
+                }),
+                _ => None,
+            };
             argv = wrap_pi(
                 bwrap,
                 &invocation.cwd,
                 &invocation.tempdir,
-                login.as_deref(),
+                login().as_deref(),
                 forward.as_ref(),
                 &argv,
             );
+        } else if self.sandbox == SandboxKind::Seatbelt {
+            if !invocation.args.dry_run {
+                write_seatbelt_profile(
+                    &invocation.cwd,
+                    &invocation.tempdir,
+                    login().as_deref(),
+                    port.as_deref(),
+                )
+                .map_err(|error| {
+                    format!(
+                        "cannot write the sandbox profile {}: {error}",
+                        invocation.tempdir.join(SEATBELT_FILE).display()
+                    )
+                })?;
+            }
+            argv = wrap_seatbelt(&invocation.tempdir, &argv);
         }
         Ok(Launch {
             argv,
@@ -280,9 +302,7 @@ impl Adapter for Pi {
         if let Some(detail) = &self.mismatch {
             return Some(detail.clone());
         }
-        if self.sandboxed
-            && let Some(detail) = wrapper_failure(exit_code, stderr_tail)
-        {
+        if let Some(detail) = wrapper_failure(self.sandbox, exit_code, stderr_tail) {
             return Some(detail);
         }
         if exit_code != Some(0) {
@@ -899,6 +919,117 @@ mod tests {
             OsString::from("http://127.0.0.1:<proxy port>")
         )));
         assert!(!setup.private().exists());
+    }
+
+    fn seatbelt(setup: &Setup, port: Option<u16>, extra: &[&str]) -> (Pi, Launch) {
+        let _ = std::fs::remove_dir_all(setup.private());
+        let _ = std::fs::remove_file(setup.tempdir().join("seatbelt.sb"));
+        let mut invocation = setup.invocation(&pairs(&setup.with_home()), false, extra);
+        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.proxy = Some(proxy(port, setup));
+        let mut adapter = Pi::new();
+        let launch = adapter
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap();
+        (adapter, launch)
+    }
+
+    #[test]
+    fn seatbelt_launch_writes_the_profile_and_wraps_pi_directly() {
+        let setup = Setup::new();
+        let real = setup.write_user_file("real-auth.json", "{}");
+        std::os::unix::fs::symlink(&real, setup.user_state().join("auth.json")).unwrap();
+        let (_, launch) = seatbelt(&setup, Some(41234), &["--model", "deepseek/deepseek-flash"]);
+        let profile_path = setup.tempdir().join("seatbelt.sb");
+        let mut expected = vec![
+            "/usr/bin/sandbox-exec".to_string(),
+            "-f".to_string(),
+            profile_path.to_string_lossy().into_owned(),
+        ];
+        expected.extend(fixed("/opt/bin/pi"));
+        expected.extend(["--model", "deepseek/deepseek-flash", "--", "hi"].map(str::to_string));
+        assert_eq!(launch.argv, expected);
+        assert!(!launch.signal_wrapped_child);
+        assert_eq!(launch.service_hosts, ["api.deepseek.com"]);
+        assert!(launch.env.contains(&(
+            OsString::from("HTTPS_PROXY"),
+            OsString::from("http://127.0.0.1:41234")
+        )));
+        assert_eq!(mode(&profile_path), 0o600);
+        let real_path = |path: &Path| std::fs::canonicalize(path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&profile_path).unwrap(),
+            crate::sandbox::seatbelt_profile(
+                &real_path(&setup.work()),
+                &real_path(&setup.tempdir()),
+                Some(&real_path(&real)),
+                Some("41234"),
+            )
+        );
+    }
+
+    #[test]
+    fn seatbelt_launch_without_login_file_leaves_it_out() {
+        let setup = Setup::new();
+        seatbelt(&setup, Some(1), &["--model", "deepseek/deepseek-flash"]);
+        let profile = std::fs::read_to_string(setup.tempdir().join("seatbelt.sb")).unwrap();
+        assert!(!profile.contains("auth.json"), "{profile}");
+        assert!(
+            profile.ends_with("(remote tcp \"localhost:1\"))\n"),
+            "{profile}"
+        );
+    }
+
+    #[test]
+    fn seatbelt_dry_run_writes_no_profile() {
+        let setup = Setup::new();
+        let (_, launch) = seatbelt(
+            &setup,
+            None,
+            &["--dry-run", "--model", "deepseek/deepseek-flash"],
+        );
+        assert_eq!(
+            launch.argv[..3],
+            [
+                "/usr/bin/sandbox-exec",
+                "-f",
+                setup.tempdir().join("seatbelt.sb").to_str().unwrap()
+            ]
+        );
+        assert!(!setup.tempdir().join("seatbelt.sb").exists());
+        assert!(!setup.private().exists());
+    }
+
+    #[test]
+    fn seatbelt_profile_that_cannot_be_written_is_a_launch_error() {
+        let setup = Setup::new();
+        std::fs::write(setup.tempdir().join("seatbelt.sb"), "taken").unwrap();
+        let mut invocation = setup.invocation(&[], false, &["--model", "deepseek/deepseek-flash"]);
+        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        let detail = Pi::new()
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap_err();
+        assert!(
+            detail.starts_with(&format!(
+                "cannot write the sandbox profile {}: ",
+                setup.tempdir().join("seatbelt.sb").display()
+            )),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn seatbelt_failure_uses_the_sandbox_exec_prefix() {
+        let setup = Setup::new();
+        let (adapter, _) = seatbelt(&setup, Some(1), &["--model", "deepseek/deepseek-flash"]);
+        assert_eq!(
+            adapter.failure(Some(65), "sandbox-exec: syntax error\n"),
+            Some("sandbox failed to start: syntax error".to_string())
+        );
+        assert_eq!(
+            adapter.failure(Some(1), "bwrap: not on macOS\n"),
+            Some(String::new())
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
-#[path = "support/fake.rs"]
-mod fake;
 #[path = "support/harness.rs"]
 mod harness;
+#[allow(dead_code)]
+#[path = "support/mod.rs"]
+mod support;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -14,8 +15,8 @@ use std::time::{Duration, Instant};
 use agentrun::adapter::Adapter;
 use agentrun::run::{Caller, run};
 use agentrun::signal::Signals;
-use fake::FakeAdapter;
 use serde_json::Value;
+use support::fake::FakeAdapter;
 use tempfile::TempDir;
 
 const FAKE_AGENTRUN: &str = "AGENTRUN_SIGNALS_TEST_FAKE_AGENTRUN";
@@ -67,6 +68,7 @@ fn main() {
             "adapter_can_terminate_the_process_group",
             adapter_can_terminate_the_process_group,
         ),
+        #[cfg(target_os = "linux")]
         (
             "signal_during_sandbox_check_kills_the_check",
             signal_during_sandbox_check_kills_the_check,
@@ -392,6 +394,7 @@ fn signal_before_launch_ends_without_start() {
     );
 }
 
+#[cfg(target_os = "linux")]
 fn signal_during_sandbox_check_kills_the_check() {
     let env = Env::new("exit 0\n");
     let bwrap = env.bin().join("bwrap");
@@ -446,30 +449,8 @@ fn adapter_can_terminate_the_process_group() {
     assert!(outcome.texts().is_empty(), "{:?}", outcome.texts());
 }
 
-fn bwrap_available() -> bool {
-    let available = Command::new("bwrap")
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--die-with-parent",
-            "--",
-            "/bin/true",
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
-    if !available {
-        eprintln!("skipped: bwrap is not available here");
-    }
-    available
-}
-
 fn first_signal_reaches_the_wrapped_runtime_directly() {
-    if !bwrap_available() {
+    if !support::sandbox_available() {
         return;
     }
     let env = Env::new(&format!(
@@ -488,5 +469,5 @@ fn first_signal_reaches_the_wrapped_runtime_directly() {
     assert_eq!(outcome.code, 143);
     assert_eq!(outcome.end()["status"], "interrupted");
     assert_eq!(outcome.end()["exit_code"], 0);
-    assert_eq!(outcome.events[0]["sandbox"], "bubblewrap");
+    assert_eq!(outcome.events[0]["sandbox"], support::SANDBOX_KIND);
 }
