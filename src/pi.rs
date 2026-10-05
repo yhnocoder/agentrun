@@ -16,6 +16,7 @@ use crate::run::Invocation;
 use crate::sandbox::{
     ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure, write_seatbelt_profile,
 };
+use crate::session::Session;
 use crate::usage::TokenCounts;
 
 pub const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
@@ -28,10 +29,11 @@ const SERVICE_HOSTS: [(&str, &str); 5] = [
     ("openrouter", "openrouter.ai"),
 ];
 const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
+const DEFAULT_MODEL_KEY: &str = "defaultModel";
 const PRIVATE_STATE_DIR: &str = "pi-agent";
 const LOGIN_FILE: &str = "auth.json";
 const MODELS_FILE: &str = "models.json";
-const SETTINGS_FILE: &str = "settings.json";
+pub const SETTINGS_FILE: &str = "settings.json";
 const BIN_DIR: &str = "bin";
 const LINKED_TOOLS: [&str; 2] = ["fd", "rg"];
 const SETTINGS_KEYS: [&str; 2] = ["defaultProvider", "defaultModel"];
@@ -160,10 +162,7 @@ impl Adapter for Pi {
             None => None,
         };
         let private_dir = invocation.tempdir.join(PRIVATE_STATE_DIR);
-        let user_dir =
-            invocation
-                .session
-                .runtime_dir(&invocation.cwd, STATE_DIR_VARIABLE, STATE_HOME_SUBDIR);
+        let user_dir = user_state_dir(&invocation.session, &invocation.cwd);
         if !invocation.args.dry_run {
             prepare_state_dir(&private_dir, user_dir.as_deref()).map_err(|error| {
                 format!(
@@ -211,11 +210,7 @@ impl Adapter for Pi {
             env.extend(proxy_environment(&proxy.port_text()));
         }
         let port = invocation.proxy.as_ref().map(ProxyEndpoint::port_text);
-        let login = || {
-            user_dir
-                .as_deref()
-                .and_then(|dir| std::fs::canonicalize(dir.join(LOGIN_FILE)).ok())
-        };
+        let login = || login_file(user_dir.as_deref());
         let bwrap = invocation
             .sandbox
             .bwrap
@@ -374,6 +369,23 @@ fn link_existing(source: &Path, link: &Path) -> std::io::Result<()> {
     }
 }
 
+pub fn user_state_dir(session: &Session, cwd: &Path) -> Option<PathBuf> {
+    session.runtime_dir(cwd, STATE_DIR_VARIABLE, STATE_HOME_SUBDIR)
+}
+
+pub fn login_file(user_dir: Option<&Path>) -> Option<PathBuf> {
+    user_dir.and_then(|dir| std::fs::canonicalize(dir.join(LOGIN_FILE)).ok())
+}
+
+pub fn default_model(settings: &Path) -> Option<Model> {
+    let settings = default_model_settings(settings);
+    let value = |key: &str| settings.get(key)?.as_str().map(str::to_string);
+    Some(Model {
+        provider: value(DEFAULT_PROVIDER_KEY)?,
+        model: value(DEFAULT_MODEL_KEY)?,
+    })
+}
+
 pub fn service_host(provider: &str) -> Option<&'static str> {
     SERVICE_HOSTS
         .iter()
@@ -443,7 +455,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::cli::{Cli, Format, SandboxMode};
+    use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::event::SandboxKind;
     use crate::network::ProxyEndpoint;
     use crate::sandbox::Sandbox;
@@ -493,7 +505,10 @@ mod tests {
         fn invocation(&self, env: &[(&str, &str)], sandboxed: bool, extra: &[&str]) -> Invocation {
             let mut args = vec!["agentrun", "pi", "--prompt", "hi"];
             args.extend(extra);
-            let (runtime, args) = Cli::try_parse_from(args).unwrap().command.into_parts();
+            let (runtime, args) = match Cli::try_parse_from(args).unwrap().command.into_parsed() {
+                Parsed::Run(runtime, args) => (runtime, args),
+                _ => unreachable!("the tests parse runtime subcommands"),
+            };
             let caller_env: Vec<(OsString, OsString)> = env
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value)))

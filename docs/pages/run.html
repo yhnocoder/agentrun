@@ -87,28 +87,48 @@ removed: (none)</div>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 
 <h2 id="doctor_check">doctor 检查</h2>
-<pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
-<p>按当前环境检查运行时能否使用。不写运行时时检查全部三个。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致。</p>
+<pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
+<p>按当前环境检查运行时能否使用。不写运行时时检查全部三个，顺序固定为 claude-code、codex、pi。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
 <table>
   <thead>
     <tr><th>检查项</th><th>通过条件</th></tr>
   </thead>
   <tbody>
-    <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到</td></tr>
-    <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时按令牌登录检查，不要求登录文件。pi 报告它实际选中的服务商与模型：给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败</td></tr>
-    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、文件写出、目录外写不进去；pi 还要在包裹下实际启动一次 pi 与 node。检查结束后删除该目录，给了 <code>--debug</code> 时保留。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
-    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查：启动过滤代理，在该运行时实际使用的沙箱里请求一个允许的主机确认能连上，再请求一个不允许的主机确认被拒绝</td></tr>
+    <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到，说明里写出路径</td></tr>
+    <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 运行 <code>claude auth status</code>，读它输出的 JSON 里的 <code>loggedIn</code>；设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时说明写这个变量名，否则写 <code>authMethod</code>。codex 先检查登录文件存在，再用私有 <code>CODEX_HOME</code> 运行 <code>codex login status</code>，退出码 0 为通过。pi 用 <code>--mode json</code> 启动一次，读到 assistant 的 <code>message_start</code> 事件就终止它，不等模型回复；事件里的 <code>provider</code> 与 <code>model</code> 是 pi 实际选中的服务商与模型，给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败。pi 只在 stderr 上警告模型名不存在，这个检查不验证模型名是否有效</td></tr>
+    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、目录内的文件写出、目录外写不进去。claude-code 的沙箱由它自己在进程内启动，无法单独调用，所以用 agentrun 给 pi 用的包裹代替：两者在 Linux 上都用 bwrap 与 socat，在 macOS 上都用 Seatbelt，检查的是同一组程序能否在当前环境启动。pi 用同一个包裹，并额外在包裹下实际启动一次 pi 与 node。codex 用 <code>codex sandbox</code> 执行同一条命令，文件系统与网络配置同实际运行。检查结束后删除该目录，给了 <code>--debug</code> 时保留并打印路径。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
+    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查，且沙箱检查没有运行时为 <code>skip</code>。启动过滤代理，在该运行时实际使用的沙箱里对一个允许的主机发 CONNECT 请求确认能连上，再对一个不允许的主机确认被拒绝。<code>custom</code> 时允许的主机是第一条 <code>--allow-host</code>（通配规则取 <code>www.</code> 加域名），不允许的主机是 <code>doctor-check.invalid:443</code>，要求拒绝原因为 <code>not_allowed</code>。<code>full</code> 时允许的主机是该运行时的模型服务主机（claude-code 为 <code>api.anthropic.com</code>，codex 为 <code>chatgpt.com</code>，pi 为选中服务商的主机），不允许的主机是 <code>169.254.169.254:80</code>，要求拒绝原因为 <code>private_address</code>。codex 的网络由它自己的代理控制：<code>full</code> 时不拦截私有地址，只检查允许的一半；<code>custom</code> 时拒绝来自 codex 代理，说明里不带原因。macOS 上 codex 的 <code>custom</code> 检查失败且主机解析到 <code>198.18.0.0/15</code> 时，说明里指出这是 fake-ip，需要关掉本机代理软件的 fake-ip 模式</td></tr>
   </tbody>
 </table>
-<p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒。默认输出每项一行；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
-<div class="term"><span class="prompt">$</span> agentrun doctor
-[ok]   claude-code  executable  /usr/local/bin/claude
+<p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒，超时按 <code>fail</code> 记并写明。可执行文件没找到时，登录与网络为 <code>skip</code>；沙箱对 claude-code 与 pi 仍然检查，对 codex 为 <code>fail</code>，因为它的沙箱就是 codex 本身。默认输出每项一行，四列对齐；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>，被信号中断时输出已完成的项。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code pi
+[ok]   claude-code  executable  /opt/node22/bin/claude
 [ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
 <span class="warn">[fail] claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</span>
+[skip] claude-code  network     --network none
+[ok]   pi           executable  /opt/node22/bin/pi
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 <span class="warn">[fail] pi           sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</span>
-<span class="dim">...</span></div>
-
+[skip] pi           network     --network none
+<span class="prompt">$</span> agentrun doctor claude-code pi --sandbox off --network full
+[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
+[skip] claude-code  sandbox     --sandbox off
+[skip] claude-code  network     sandbox not running
+[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           login       deepseek/deepseek-flash (from pi settings)
+[skip] pi           sandbox     --sandbox off
+[skip] pi           network     sandbox not running
+<span class="prompt">$</span> agentrun doctor claude-code pi --network custom --allow-host api.github.com
+[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  login       oauth_token
+[ok]   claude-code  sandbox     bubblewrap: wrote inside, blocked outside
+[ok]   claude-code  network     api.github.com:443 reachable, doctor-check.invalid:443 refused (not_allowed)
+[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           login       deepseek/deepseek-flash (from pi settings)
+[ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
+[ok]   pi           network     api.github.com:443 reachable, doctor-check.invalid:443 refused (not_allowed)</div>
+<p>前两条命令在没有用户命名空间权限的 docker 容器里运行，第三条在 Cloud Managed 容器里运行。</p>
 <h2 id="exit-codes">退出码</h2>
 <table>
   <thead>

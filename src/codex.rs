@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::adapter::{Adapter, Launch, Record};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
-use crate::network::proxy_environment;
+use crate::network::{HostRule, proxy_environment};
 use crate::run::Invocation;
 use crate::session::Session;
 use crate::usage::TokenCounts;
@@ -17,7 +17,7 @@ pub const HOME_VARIABLE: &str = "CODEX_HOME";
 pub const HOME_SUBDIR: &str = ".codex";
 pub const HOME_SUFFIX: &str = "-codex";
 const LOGIN_FILE: &str = "auth.json";
-const SERVICE_HOSTS: [&str; 4] = [
+pub const SERVICE_HOSTS: [&str; 4] = [
     "chatgpt.com",
     "ab.chatgpt.com",
     "auth.openai.com",
@@ -31,7 +31,7 @@ const FIXED_ARGS: [&str; 6] = [
     "--ignore-rules",
     "-C",
 ];
-const PROFILE: &str = "agentrun";
+pub const PROFILE: &str = "agentrun";
 const FULL_ACCESS_PROFILE: &str = "\":danger-full-access\"";
 const SETTINGS: [&str; 5] = [
     "approval_policy=\"never\"",
@@ -187,29 +187,8 @@ impl Adapter for Codex {
                 })?
             };
             argv.extend(config(format!("default_permissions={PROFILE}")));
-            argv.extend(config(format!(
-                "permissions.{PROFILE}.filesystem={{\":root\"=\"read\", \":workspace_roots\"={{\".\"=\"write\"}}, {}=\"write\"}}",
-                toml_string(&tempdir.to_string_lossy())
-            )));
-            match network {
-                NetworkMode::None => {
-                    argv.extend(config(format!(
-                        "permissions.{PROFILE}.network.enabled=false"
-                    )));
-                }
-                NetworkMode::Full => {
-                    argv.extend(config(format!(
-                        "permissions.{PROFILE}.network.enabled=true"
-                    )));
-                }
-                NetworkMode::Custom => {
-                    argv.extend(["--enable", "network_proxy"].map(str::to_string));
-                    argv.extend(config(format!(
-                        "permissions.{PROFILE}.network={{enabled=true, enable_socks5=false, enable_socks5_udp=false, allow_upstream_proxy=true, domains={{{}}}}}",
-                        domains(invocation)
-                    )));
-                }
-            }
+            argv.extend(config(filesystem_setting(&tempdir)));
+            argv.extend(network_settings(network, &invocation.allow_hosts));
         } else {
             argv.extend(config(format!("default_permissions={FULL_ACCESS_PROFILE}")));
         }
@@ -350,13 +329,37 @@ pub fn create_home(home: &Path, login: &Path) -> Result<(), String> {
         })
 }
 
-fn config(value: String) -> [String; 2] {
+pub fn config(value: String) -> [String; 2] {
     ["-c".to_string(), value]
 }
 
-fn domains(invocation: &Invocation) -> String {
+pub fn filesystem_setting(tempdir: &Path) -> String {
+    format!(
+        "permissions.{PROFILE}.filesystem={{\":root\"=\"read\", \":workspace_roots\"={{\".\"=\"write\"}}, {}=\"write\"}}",
+        toml_string(&tempdir.to_string_lossy())
+    )
+}
+
+pub fn network_settings(network: NetworkMode, allow_hosts: &[HostRule]) -> Vec<String> {
+    match network {
+        NetworkMode::None => {
+            config(format!("permissions.{PROFILE}.network.enabled=false")).to_vec()
+        }
+        NetworkMode::Full => config(format!("permissions.{PROFILE}.network.enabled=true")).to_vec(),
+        NetworkMode::Custom => {
+            let mut settings = ["--enable", "network_proxy"].map(str::to_string).to_vec();
+            settings.extend(config(format!(
+                "permissions.{PROFILE}.network={{enabled=true, enable_socks5=false, enable_socks5_udp=false, allow_upstream_proxy=true, domains={{{}}}}}",
+                domains(allow_hosts)
+            )));
+            settings
+        }
+    }
+}
+
+fn domains(allow_hosts: &[HostRule]) -> String {
     let mut hosts: Vec<String> = Vec::new();
-    for rule in &invocation.allow_hosts {
+    for rule in allow_hosts {
         let pattern = rule.pattern();
         if !hosts.contains(&pattern) {
             hosts.push(pattern);
@@ -411,7 +414,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::cli::{Cli, Format, SandboxMode};
+    use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::event::SandboxKind;
     use crate::network::{self, ProxyEndpoint};
     use crate::sandbox::Sandbox;
@@ -441,7 +444,10 @@ mod tests {
         fn invocation(&self, sandboxed: bool, extra: &[&str]) -> Invocation {
             let mut args = vec!["agentrun", "codex", "--prompt", "hi"];
             args.extend(extra);
-            let (runtime, args) = Cli::try_parse_from(args).unwrap().command.into_parts();
+            let (runtime, args) = match Cli::try_parse_from(args).unwrap().command.into_parsed() {
+                Parsed::Run(runtime, args) => (runtime, args),
+                _ => unreachable!("the tests parse runtime subcommands"),
+            };
             let allow_hosts = network::check_usage(args.network, &args.allow_host).unwrap();
             let proxy = (sandboxed && args.network == NetworkMode::Custom).then(|| ProxyEndpoint {
                 port: Some(4321),

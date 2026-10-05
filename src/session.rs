@@ -10,6 +10,7 @@ const AGENTRUN_PREFIX: &[u8] = b"AGENTRUN_";
 const CODEX_REMOVED: [&str; 3] = ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"];
 const CLAUDE_CODE_REMOVED_PREFIXES: [&[u8]; 2] = [b"ANTHROPIC_", b"CLAUDE_CODE_USE_"];
 
+#[derive(Clone)]
 pub struct Session {
     pub env: BTreeMap<OsString, OsString>,
     pub path: OsString,

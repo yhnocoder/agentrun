@@ -241,7 +241,7 @@ pub struct ProxyAddress {
 }
 
 impl ProxyAddress {
-    fn parse(value: &str) -> Option<ProxyAddress> {
+    pub fn parse(value: &str) -> Option<ProxyAddress> {
         let rest = match value.split_once("://") {
             Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => rest,
             Some(_) => return None,
