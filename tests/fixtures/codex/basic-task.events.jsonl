@@ -1,0 +1,7 @@
+{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents."}
+{"schema":1,"type":"text","parent":null,"text":"I’ll create `probe.txt` with the exact text, then read it back."}
+{"schema":1,"type":"tool","id":"item_1","parent":null,"name":"command_execution","summary":"shell: /bin/zsh -c \"printf %s 'hello probe' > probe.txt\"","denied":false}
+{"schema":1,"type":"tool","id":"item_2","parent":null,"name":"command_execution","summary":"shell: /bin/zsh -c 'cat probe.txt'","denied":false}
+{"schema":1,"type":"text","parent":null,"text":"hello probe"}
+{"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":18458,"output_tokens":73,"cache_read_tokens":0,"cache_write_tokens":0,"context_tokens":18458}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":18458,"output_tokens":73,"cache_read_tokens":0,"cache_write_tokens":0,"by_model":{"unknown":{"input_tokens":18458,"output_tokens":73,"cache_read_tokens":0,"cache_write_tokens":0}}},"result":"hello probe"}

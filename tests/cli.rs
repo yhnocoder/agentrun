@@ -123,8 +123,8 @@ fn unknown_option_is_rejected() {
 
 #[test]
 fn unknown_subcommand_is_rejected() {
-    let detail = assert_rejected(&Env::new().run(&["doctor"]));
-    assert!(detail.contains("doctor"), "{detail}");
+    let detail = assert_rejected(&Env::new().run(&["nurse"]));
+    assert!(detail.contains("nurse"), "{detail}");
 }
 
 #[test]
@@ -278,8 +278,8 @@ fn runtime_missing_from_path_is_rejected() {
 
 #[cfg(target_os = "linux")]
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+#[cfg(target_os = "linux")]
 const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
-const ADAPTER_MISSING: &str = "codex support is not implemented in this build";
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -340,6 +340,7 @@ fn bwrap_that_cannot_start_is_rejected_with_its_message() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn codex_is_rejected_when_bwrap_cannot_start_and_needs_no_socat() {
     let env = Env::with_fake_codex();
@@ -357,7 +358,8 @@ fn codex_is_rejected_when_bwrap_cannot_start_and_needs_no_socat() {
         )
     );
     env.install("bwrap", "#!/bin/sh\nexit 0\n");
-    assert_eq!(assert_rejected(&env.run(&args)), ADAPTER_MISSING);
+    let detail = assert_rejected(&env.run(&args));
+    assert!(detail.starts_with("codex login file "), "{detail}");
     assert_eq!(
         assert_rejected(&env.run(&["codex", "--prompt", "hi"])),
         "sandbox is not available: bwrap not found in PATH. Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off"
@@ -756,16 +758,6 @@ fn sandbox_exec_passes_the_sandbox_step() {
 }
 
 #[test]
-fn missing_adapter_is_rejected_without_tempdir() {
-    let env = Env::with_fake_codex();
-    assert_eq!(
-        assert_rejected(&env.run(&["codex", "--sandbox", "off", "--prompt", "hi"])),
-        ADAPTER_MISSING
-    );
-    assert!(env.no_leftover_tempdirs());
-}
-
-#[test]
 fn env_without_caller_value_is_rejected() {
     let env = Env::new();
     assert_eq!(
@@ -829,7 +821,11 @@ fn runtime_is_found_through_path_option() {
         .env("PATH", &empty)
         .output()
         .unwrap();
-    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
+    assert_eq!(
+        assert_rejected(&output),
+        "codex login file $HOME/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH"
+    );
+    assert!(env.no_leftover_tempdirs());
     let output = env
         .command(&["codex", "--sandbox", "off", "--prompt", "hi"])
         .env("PATH", &empty)

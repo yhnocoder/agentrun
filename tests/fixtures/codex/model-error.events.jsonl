@@ -1,0 +1,2 @@
+{"schema":1,"type":"prompt","text":"Reply with the single word OK."}
+{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'no-such-model-probe' model is not supported when using Codex with a ChatGPT account.\"}}","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}

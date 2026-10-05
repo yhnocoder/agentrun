@@ -1,0 +1,2 @@
+{"schema":1,"type":"prompt","text":"Reply with the single word OK."}
+{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"unexpected status 401 Unauthorized: Incorrect API key provided: invalid. You can find your API key at https://platform.openai.com/account/api-keys., url: https://api.openai.com/v1/responses, cf-ray: a453298559285825-LAX, request id: req_d47d3fd2b0a448049acd482851602f52","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}

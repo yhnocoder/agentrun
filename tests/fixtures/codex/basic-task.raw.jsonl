@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a1063c-e610-7821-b185-b66bb68742fa"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll create `probe.txt` with the exact text, then read it back."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -c \"printf %s 'hello probe' > probe.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -c \"printf %s 'hello probe' > probe.txt\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -c 'cat probe.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -c 'cat probe.txt'","aggregated_output":"hello probe","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"hello probe"}}
+{"type":"turn.completed","usage":{"input_tokens":18458,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":73,"reasoning_output_tokens":0}}

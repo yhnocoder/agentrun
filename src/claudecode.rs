@@ -558,7 +558,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::cli::{Cli, Format, SandboxMode};
+    use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::event::SandboxKind;
     use crate::network;
     use crate::sandbox::Sandbox;
@@ -567,7 +567,10 @@ mod tests {
     fn invocation(sandboxed: bool, extra: &[&str]) -> Invocation {
         let mut args = vec!["agentrun", "claude-code", "--prompt", "hi"];
         args.extend(extra);
-        let (runtime, args) = Cli::try_parse_from(args).unwrap().command.into_parts();
+        let (runtime, args) = match Cli::try_parse_from(args).unwrap().command.into_parsed() {
+            Parsed::Run(runtime, args) => (runtime, args),
+            _ => unreachable!("the tests parse runtime subcommands"),
+        };
         Invocation {
             runtime,
             args,
@@ -590,6 +593,7 @@ mod tests {
             session: Session::assemble(runtime, &[], &[], &[], &[]),
             allow_hosts: Vec::new(),
             proxy: None,
+            codex_home: None,
         }
     }
 

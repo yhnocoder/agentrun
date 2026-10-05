@@ -18,9 +18,12 @@ use tempfile::TempDir;
 use crate::adapter::{Adapter, Launch, Record};
 use crate::aggregate::Aggregator;
 use crate::cli::{
-    Cli, Format, RunArgs, Runtime, SandboxMode, default_format, prescan_format, usage_error_detail,
+    Cli, Format, Parsed, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
+    usage_error_detail,
 };
+use crate::codex;
 use crate::credential::write_session_credential;
+use crate::doctor;
 use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Start};
 use crate::network::{self, FilterProxy, HostRule, Policy, ProxyEndpoint, Upstream};
 use crate::output::Output;
@@ -36,6 +39,7 @@ const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
+const TEMPDIR_PREFIX: &str = "agentrun-";
 
 pub type AdapterLookup = dyn Fn(Runtime) -> Option<Box<dyn Adapter>>;
 
@@ -52,7 +56,7 @@ pub struct Caller {
 }
 
 impl Caller {
-    fn var(&self, key: &str) -> Option<&OsStr> {
+    pub fn var(&self, key: &str) -> Option<&OsStr> {
         self.env
             .iter()
             .rev()
@@ -60,7 +64,7 @@ impl Caller {
             .map(|(_, value)| value.as_os_str())
     }
 
-    fn print_error_line(&self, line: &str) {
+    pub fn print_error_line(&self, line: &str) {
         if let Ok(mut stderr) = self.stderr.lock() {
             let _ = writeln!(stderr, "{line}");
             let _ = stderr.flush();
@@ -77,7 +81,7 @@ impl Caller {
         }
     }
 
-    fn print_lines(&self, lines: &[String]) {
+    pub fn print_lines(&self, lines: &[String]) {
         if let Ok(mut stdout) = self.stdout.lock() {
             for line in lines {
                 let _ = writeln!(stdout, "{line}");
@@ -104,6 +108,7 @@ pub struct Invocation {
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
     pub proxy: Option<ProxyEndpoint>,
+    pub codex_home: Option<PathBuf>,
 }
 
 struct Ready {
@@ -117,12 +122,6 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     let started = Instant::now();
     let fallback_format =
         prescan_format(&caller.args).unwrap_or(default_format(caller.stdout_is_terminal));
-    if let Err(code) = caller
-        .signals
-        .prepare(Arc::clone(&caller.stdout), fallback_format, started)
-    {
-        return code;
-    }
     let cli = match Cli::try_parse_from(&caller.args) {
         Ok(cli) => cli,
         Err(error) => match error.kind() {
@@ -133,13 +132,27 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
             }
             _ => {
                 let detail = usage_error_detail(&error.render().to_string());
+                if doctor::selected(&caller.args) {
+                    caller.signals.finishing();
+                    caller.print_error_line(&format!("agentrun: {detail}"));
+                    return doctor::USAGE_EXIT_CODE;
+                }
                 return reject(&mut caller, fallback_format, &detail, started);
             }
         },
     };
-    let (runtime, args) = cli.command.into_parts();
+    let (runtime, args) = match cli.command.into_parsed() {
+        Parsed::Run(runtime, args) => (runtime, args),
+        Parsed::Doctor(args) => return doctor::run(caller, args, doctor::COMMAND_TIMEOUT),
+        Parsed::Connect(args) => return doctor::connect(&caller, &args),
+    };
     let format = args.format.unwrap_or(fallback_format);
-    caller.signals.format(format);
+    if let Err(code) = caller
+        .signals
+        .prepare(Arc::clone(&caller.stdout), format, started)
+    {
+        return code;
+    }
     let mut ready = match prepare(&mut caller, runtime, args, format, adapters) {
         Ok(ready) => ready,
         Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -149,12 +162,20 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ready.invocation.args.network,
         ready.invocation.sandbox.runs(),
     );
+    let codex_login = (ready.invocation.runtime == Runtime::Codex)
+        .then(|| codex::login_file(&ready.invocation.session, &ready.invocation.cwd));
     if ready.invocation.args.dry_run {
         ready.invocation.tempdir = PathBuf::from(DRY_RUN_TEMPDIR);
         ready.invocation.proxy = proxy_needed.then(|| ProxyEndpoint {
             port: None,
             socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
         });
+        if let Some(login) = &codex_login {
+            if let Err(detail) = codex::check_login(&ready.invocation.session, login) {
+                return reject(&mut caller, format, &detail, started);
+            }
+            ready.invocation.codex_home = Some(codex::home_path(&ready.invocation.tempdir));
+        }
         let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
             Ok(launch) => launch,
             Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -184,7 +205,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ),
         None => "credentials: (none)".to_string(),
     };
-    let tempdir = match create_tempdir(&caller) {
+    let tempdir = match create_tempdir(&caller, TEMPDIR_PREFIX) {
         Ok(tempdir) => tempdir,
         Err(detail) => return reject(&mut caller, format, &detail, started),
     };
@@ -192,6 +213,25 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         .signals
         .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
+    let _codex_home = match &codex_login {
+        Some(login) => {
+            let home = codex::home_path(tempdir.path());
+            if let Err(detail) = codex::check_login(&ready.invocation.session, login)
+                .and_then(|()| codex::create_home(&home, login))
+            {
+                return reject(&mut caller, format, &detail, started);
+            }
+            caller
+                .signals
+                .tempdir(home.clone(), ready.invocation.args.debug);
+            ready.invocation.codex_home = Some(home.clone());
+            Some(PrivateDir {
+                path: home,
+                keep: ready.invocation.args.debug,
+            })
+        }
+        None => None,
+    };
     let mut proxy = None;
     if proxy_needed {
         match FilterProxy::bind(tempdir.path()) {
@@ -216,6 +256,19 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
     plan.push(credential_line);
     execute(caller, ready, launch, plan, tempdir, proxy, started)
+}
+
+struct PrivateDir {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
@@ -287,6 +340,7 @@ fn prepare(
         session,
         allow_hosts,
         proxy: None,
+        codex_home: None,
     };
     Ok(Ready {
         invocation,
@@ -344,13 +398,13 @@ fn create_raw(path: &Path) -> Result<File, String> {
         .map_err(|error| format!("cannot create raw file {}: {error}", path.display()))
 }
 
-fn create_tempdir(caller: &Caller) -> Result<TempDir, String> {
+pub fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
     let base = match caller.var("TMPDIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from("/tmp"),
     };
     tempfile::Builder::new()
-        .prefix("agentrun-")
+        .prefix(prefix)
         .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir_in(&base)
         .map_err(|error| {
@@ -456,6 +510,9 @@ fn execute(
             caller.print_error_line(&format!("[debug] {line}"));
         }
         caller.print_error_line(&format!("[debug] tempdir: {}", tempdir.path().display()));
+        if let Some(home) = &invocation.codex_home {
+            caller.print_error_line(&format!("[debug] codex home: {}", home.display()));
+        }
         if let Some((path, _)) = &raw {
             caller.print_error_line(&format!("[debug] raw: {}", path.display()));
         }

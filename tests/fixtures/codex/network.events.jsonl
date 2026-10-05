@@ -1,0 +1,7 @@
+{"schema":1,"type":"prompt","text":"Run these two shell commands and reply with one line each giving only the HTTP status code printed, or the error message if it fails: curl -sS -m 20 -o /dev/null -w '%{http_code}' https://api.github.com/ ; curl -sS -m 20 -o /dev/null -w '%{http_code}' https://example.com/"}
+{"schema":1,"type":"text","parent":null,"text":"I’ll run both commands and report their results.\n"}
+{"schema":1,"type":"tool","id":"item_1","parent":null,"name":"command_execution","summary":"shell: /bin/zsh -c \"curl -sS -m 20 -o /dev/null -w '%{http_code}' https://example.com/\"","denied":false}
+{"schema":1,"type":"tool","id":"item_2","parent":null,"name":"command_execution","summary":"shell: /bin/zsh -c \"curl -sS -m 20 -o /dev/null -w '%{http_code}' https://api.github.com/\"","denied":false}
+{"schema":1,"type":"text","parent":null,"text":"200\ncurl: (56) CONNECT tunnel failed, response 403"}
+{"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":9579,"output_tokens":137,"cache_read_tokens":9088,"cache_write_tokens":0,"context_tokens":18667}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":9579,"output_tokens":137,"cache_read_tokens":9088,"cache_write_tokens":0,"by_model":{"unknown":{"input_tokens":9579,"output_tokens":137,"cache_read_tokens":9088,"cache_write_tokens":0}}},"result":"200\ncurl: (56) CONNECT tunnel failed, response 403"}
