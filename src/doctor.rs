@@ -773,7 +773,7 @@ impl Doctor {
                             .clone()
                             .ok_or_else(|| "socat not found in PATH".to_string())?,
                         port: port.to_string(),
-                        socket: dirs.tmp.join(SOCKET_FILE),
+                        socket: self.tempdir.join(SOCKET_FILE),
                     }),
                     None => None,
                 };
@@ -963,7 +963,7 @@ impl Doctor {
         let mut env = Vec::new();
         let mut port = None;
         if filtered {
-            let mut bound = FilterProxy::bind(&dirs.tmp)
+            let mut bound = FilterProxy::bind(&self.tempdir)
                 .map_err(|error| format!("cannot start the filter proxy: {error}"))?;
             let port_text = bound.endpoint().port_text();
             let service_hosts = match runtime {

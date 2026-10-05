@@ -776,7 +776,11 @@ fn doctor_connect_tunnels_through_the_proxy_or_connects_directly() {
     let output = doctor_connect(&env, None, "127.0.0.1", server.port);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout_lines(&output), ["connected"]);
-    let output = doctor_connect(&env, None, "doctor-check.invalid", 443);
+    let closed_port = {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let output = doctor_connect(&env, None, "127.0.0.1", closed_port);
     assert_eq!(output.status.code(), Some(1));
     let lines = stdout_lines(&output);
     assert_eq!(lines.len(), 1);
