@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use agentrun::adapter::Adapter;
 use agentrun::aggregate::Aggregator;
-use agentrun::cli::{Cli, Format, Runtime, SandboxMode};
+use agentrun::cli::{Cli, Format, Parsed, Runtime, SandboxMode};
 use agentrun::event::SandboxKind;
 use agentrun::run::{Exit, Invocation, conclude, stderr_tail, translate_line};
 use agentrun::sandbox::Sandbox;
@@ -31,7 +31,9 @@ pub fn read_meta(path: &Path) -> Option<Meta> {
 
 pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -> Invocation {
     let cli = Cli::try_parse_from(["agentrun", runtime.name(), "--prompt", prompt]).unwrap();
-    let (runtime, args) = cli.command.into_parts();
+    let Parsed::Run(runtime, args) = cli.command.into_parsed() else {
+        unreachable!("the tests parse runtime subcommands");
+    };
     Invocation {
         runtime,
         args,

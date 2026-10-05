@@ -65,8 +65,30 @@ struct State {
 enum Phase {
     Starting,
     Preparing(Preparation),
+    Doctoring(Doctoring),
     Running(Running),
     Finishing,
+}
+
+struct Doctoring {
+    check_pid: Option<i32>,
+    tempdir: Option<PathBuf>,
+    keep_tempdir: bool,
+    report: Box<dyn Fn(Signal) + Send>,
+}
+
+impl Doctoring {
+    fn abort(&self, signal: Signal) -> u8 {
+        if let Some(pid) = self.check_pid {
+            kill_group(pid, libc::SIGKILL);
+            kill_process(pid, libc::SIGKILL);
+        }
+        if let (Some(tempdir), false) = (&self.tempdir, self.keep_tempdir) {
+            let _ = std::fs::remove_dir_all(tempdir);
+        }
+        (self.report)(signal);
+        signal.exit_code()
+    }
 }
 
 struct Preparation {
@@ -155,6 +177,21 @@ impl Signals {
         }
     }
 
+    pub fn doctoring(&self, report: Box<dyn Fn(Signal) + Send>) -> Result<(), u8> {
+        let mut state = self.shared.lock();
+        if let Some(signal) = state.first_signal {
+            state.phase = Phase::Finishing;
+            return Err(signal.exit_code());
+        }
+        state.phase = Phase::Doctoring(Doctoring {
+            check_pid: None,
+            tempdir: None,
+            keep_tempdir: false,
+            report,
+        });
+        Ok(())
+    }
+
     pub fn format(&self, format: Format) {
         if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
             preparation.format = format;
@@ -162,15 +199,24 @@ impl Signals {
     }
 
     pub fn checking(&self, pid: Option<i32>) {
-        if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
-            preparation.check_pid = pid;
+        match &mut self.shared.lock().phase {
+            Phase::Preparing(preparation) => preparation.check_pid = pid,
+            Phase::Doctoring(doctoring) => doctoring.check_pid = pid,
+            _ => {}
         }
     }
 
     pub fn tempdir(&self, path: PathBuf, keep: bool) {
-        if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
-            preparation.tempdirs.push(path);
-            preparation.keep_tempdir = keep;
+        match &mut self.shared.lock().phase {
+            Phase::Preparing(preparation) => {
+                preparation.tempdirs.push(path);
+                preparation.keep_tempdir = keep;
+            }
+            Phase::Doctoring(doctoring) => {
+                doctoring.tempdir = Some(path);
+                doctoring.keep_tempdir = keep;
+            }
+            _ => {}
         }
     }
 
@@ -227,6 +273,7 @@ impl Shared {
         match &mut state.phase {
             Phase::Starting | Phase::Finishing => {}
             Phase::Preparing(preparation) => std::process::exit(preparation.abort(first).into()),
+            Phase::Doctoring(doctoring) => std::process::exit(doctoring.abort(first).into()),
             Phase::Running(running) => {
                 running.terminate(signal.number());
                 self.changed.notify_all();

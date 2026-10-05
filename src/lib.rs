@@ -4,6 +4,7 @@ pub mod claudecode;
 pub mod cli;
 pub mod codex;
 pub mod credential;
+pub mod doctor;
 pub mod event;
 pub mod json;
 pub mod network;
