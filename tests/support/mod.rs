@@ -54,6 +54,8 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
         session: Session::assemble(runtime, &[], &[], &[], &[]),
         allow_hosts: Vec::new(),
         proxy: None,
+        codex_home: (runtime == Runtime::Codex)
+            .then(|| PathBuf::from("/tmp/agentrun-replay-codex")),
     }
 }
 

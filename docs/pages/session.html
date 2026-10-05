@@ -72,7 +72,7 @@ GREETING='hello world'</code></pre>
 <p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>、pi 的私有状态目录 <code>pi-agent/</code>。</p>
 
 <h2 id="runtime-home">pi 与 codex 的私有配置目录</h2>
-<p>pi 与 codex 不直接使用用户的状态目录。每次运行新建一个私有目录（0700），与会话临时目录同时删除，给了 <code>--debug</code> 时同样保留。用户的登录文件以符号链接放进去，其他内容不带进来。</p>
+<p>pi 与 codex 不直接使用用户的状态目录。每次运行新建一个私有目录（0700），与会话临时目录在同样的时机删除（正常结束、失败、超时、被中断，以及启动前收到信号），给了 <code>--debug</code> 时同样保留，codex 的目录另在标准错误写一行 <code>[debug] codex home: &lt;路径&gt;</code>。codex 的目录由运行框架在创建会话临时目录之后、启动 codex 之前创建，<code>--dry-run</code> 不创建。用户的登录文件以符号链接放进去，其他内容不带进来。</p>
 <table>
   <thead>
     <tr><th>运行时</th><th>位置</th><th>内容</th></tr>

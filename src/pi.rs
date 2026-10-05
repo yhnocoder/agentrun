@@ -522,6 +522,7 @@ mod tests {
                 session,
                 allow_hosts: Vec::new(),
                 proxy: None,
+                codex_home: None,
             }
         }
 

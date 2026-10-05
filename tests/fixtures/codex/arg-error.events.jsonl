@@ -1,0 +1,2 @@
+{"schema":1,"type":"prompt","text":"Reply with the single word OK."}
+{"schema":1,"type":"end","status":"failed","exit_code":2,"detail":"error: unexpected argument '--no-such-flag-probe' found\n\n  tip: to pass '--no-such-flag-probe' as a value, use '-- --no-such-flag-probe'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}

@@ -30,7 +30,6 @@
   </thead>
   <tbody>
     <tr><td>pi 与 codex 刷新 OAuth 令牌时经符号链接原地写回用户的登录文件（源码确认，macOS 实测时没有发生刷新）</td><td><a href="session.html#runtime-home">私有配置目录</a>的做法；运行时改为先写临时文件再重命名时，刷新后的令牌只留在私有目录里</td><td>用 OAuth 登录，在令牌过期后运行一次，检查私有目录里的链接仍在、用户登录文件的修改时间变了</td></tr>
-    <tr><td>本机 DNS 由代理工具做 fake-ip 时，公网域名解析到 198.18.0.0/15。codex 自带的代理把这个网段当作私有地址，放行列表里的主机也被拒绝（macOS 实测，加 <code>allow_local_binding=true</code> 后才通过）。agentrun 的过滤代理不把这个网段当作私有地址，见<a href="isolation.html#network">网络</a></td><td>codex 的 <code>--network custom</code> 在这类机器上不可用</td><td>codex 适配 Task 里决定是否加 <code>allow_local_binding=true</code>；doctor 检查这种情况并给出提示</td></tr>
     <tr><td>pi 的模型服务主机表对 deepseek 以外的服务商是否够用（deepseek 只需要 <code>api.deepseek.com</code>，云端实测）</td><td><code>--network none</code> 下 pi 能否访问模型</td><td>实现时用 <code>network</code> 事件核对</td></tr>
     <tr><td>Cloud Managed 容器里宿主设置的几十个 <code>CLAUDE_</code> 变量是否影响 claude-code 的行为。已知一例：<code>CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES</code> 让输出多出 <code>stream_event</code>，这类事件只写入 <code>--raw</code>，不影响结果</td><td>是否需要扩大删除规则；目前不扩大，因为其中有登录需要的变量</td><td>云端对比实测</td></tr>
   </tbody>
