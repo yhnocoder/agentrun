@@ -402,7 +402,7 @@ scenario_network_full() {
     if [ "$event" = "allowed=false reason=private_address" ]; then
       pass "a.txt 200, b.txt $b, 169.254.169.254:80 denied as private_address"
     elif [ "$RT" = claude-code ] && [ -z "$event" ]; then
-      pass "a.txt 200, b.txt $b; no network event: claude-code's sandbox does not send requests to IP literals through the proxy, the request failed inside the network namespace"
+      pass "a.txt 200, b.txt $b; no network event: claude-code lists private ranges in the sandbox's NO_PROXY, so the request bypassed the proxy and failed inside the network namespace"
     else
       fail "a.txt 200, b.txt $b, network event for 169.254.169.254:80 is '${event:-missing}'"
     fi
