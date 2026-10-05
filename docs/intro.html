@@ -65,7 +65,7 @@ sudo dnf install bubblewrap socat</code></pre>
 <p>运行时按它们各自的文档安装并登录。agentrun 在 PATH 里查找运行时，沿用用户已有的登录。pi 需要在它的设置里配置默认模型，或者每次用 <code>--model 服务商/模型</code> 指定。</p>
 
 <h2 id="first-run">第一次运行</h2>
-<p>在要让 agent 工作的目录里运行。下面的目录里只有一个 <code>greet.py</code>。</p>
+<p>第一次运行前，可以先用 <a href="#troubleshoot"><code>agentrun doctor</code></a> 检查环境。然后在要让 agent 工作的目录里运行，下面的目录里只有一个 <code>greet.py</code>。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "用一句话说明 greet.py 做什么"
 <span class="dim">[main]</span> prompt 用一句话说明 greet.py 做什么
 <span class="dim">[main]</span> tool Glob: **/greet.py
@@ -235,7 +235,23 @@ greet.py 定义了一个 `greet(name)` 函数，返回 `"hello " + name` 这个�
 
 <h2 id="troubleshoot">出了问题怎么查</h2>
 <h3>先运行 doctor</h3>
-<blockquote><p>待补：<code>agentrun doctor</code> 的用法与实际输出，在 doctor 完成后补上。它按当前环境逐项检查每个运行时的可执行文件、登录、沙箱与网络，每项一行 <code>ok</code>、<code>fail</code> 或 <code>skip</code>，失败时写出原因与修正方法。选项与运行时子命令相同，所以可以用和实际运行一样的条件检查。设计见<a href="pages/run.html#doctor_check">doctor 检查</a>。</p></blockquote>
+<p><code>agentrun doctor</code> 按当前环境逐项检查每个运行时的可执行文件、登录、沙箱与网络，每项一行，结果是 <code>ok</code>、<code>fail</code> 或 <code>skip</code>，失败时写出原因与修正方法。不写运行时时检查全部三个。它接受与运行时子命令相同的 <code>--model</code>、<code>--sandbox</code>、<code>--network</code>、<code>--allow-host</code>、<code>--path</code>、<code>--env</code> 与 <code>--env-file</code>，用和实际运行一样的条件检查。全部是 <code>ok</code> 或 <code>skip</code> 时退出码为 0，有 <code>fail</code> 时为 1；<code>--json</code> 输出一个 JSON 数组，给程序读。</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code pi --network custom --allow-host pypi.org
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  login       oauth_token
+<span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
+<span class="dim">[ok]  </span> claude-code  network     pypi.org:443 reachable, doctor-check.invalid:443 refused (not_allowed)
+<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi
+<span class="dim">[ok]  </span> pi           login       deepseek/deepseek-flash (from pi settings)
+<span class="dim">[ok]  </span> pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
+<span class="dim">[ok]  </span> pi           network     pypi.org:443 reachable, doctor-check.invalid:443 refused (not_allowed)</div>
+<p>沙箱一项在临时目录里实际执行一条写文件的命令，确认目录内能写、目录外写不进去。网络一项只在 <code>--network full</code> 或 <code>custom</code> 时检查。在没有登录、默认权限的 docker 容器里，同一个命令会报出两项失败：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="warn">[fail]</span> claude-code  login       not logged in. Run claude login, or set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token)
+<span class="warn">[fail]</span> claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor
+<span class="dim">[skip]</span> claude-code  network     --network none</div>
+<p>检查项的完整规则见<a href="pages/run.html#doctor_check">doctor 检查</a>。</p>
 
 <h3>常见失败</h3>
 <p>启动前发现的问题，标准错误有一行 <code>agentrun:</code> 开头的说明，退出码 2。</p>
@@ -260,8 +276,21 @@ Use /login to log into a provider via OAuth or API key. See:
 Use /login to log into a provider via OAuth or API key. See:
   /opt/node22/lib/node_modules/@earendil-works/pi-coding-agent/docs/providers.md
   /opt/node22/lib/node_modules/@earendil-works/pi-coding-agent/docs/models.md</div>
-<p><strong>pi 用了别的模型</strong>。pi 找不到指定的模型时，会不加提示地改用环境里其他可用的服务商。给了 <code>--model</code> 时，agentrun 在 pi 请求模型之前比较两者，不一致就终止 pi，结果为 <code>failed</code>，<code>detail</code> 写出 pi 实际选中的模型。没给 <code>--model</code> 时由 doctor 检查 pi 的设置。</p>
-<blockquote><p>待补：pi 用了别的模型与 codex 没有登录文件这两种情况的实际输出，在 doctor 与 codex 适配完成后补上。</p></blockquote>
+<p><strong>pi 用了别的模型</strong>。pi 找不到指定的模型时，只在标准错误打印一行警告，照样运行，没有设置默认模型时还会改用环境里其他可用的服务商。给了 <code>--model</code> 时，agentrun 在 pi 请求模型之前比较 pi 实际选中的模型，不一致就终止 pi，结果为 <code>failed</code>。模型名拼错与没有默认模型这两种情况，doctor 的登录一项都会报出来：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor pi --model deepseek/deepseek-flsh
+<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi
+<span class="warn">[fail]</span> pi           login       pi does not know deepseek/deepseek-flsh (from --model): Warning: Model "deepseek-flsh" not found for provider "deepseek". Using custom model id.
+<span class="dim">[ok]  </span> pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
+<span class="dim">[skip]</span> pi           network     --network none
+<span class="prompt">$</span> agentrun doctor pi --env PI_CODING_AGENT_DIR=/tmp/emptypi
+<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi
+<span class="warn">[fail]</span> pi           login       no --model given and /tmp/emptypi/settings.json has no defaultProvider and defaultModel
+<span class="dim">[ok]  </span> pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
+<span class="dim">[skip]</span> pi           network     --network none</div>
+<p><strong>codex 没有登录文件</strong>。codex 要求登录信息保存在文件里。本机先运行 <code>codex login</code>，容器里用 <code>AGENTRUN_CODEX_AUTH</code> 传入登录文件的内容：</p>
+<div class="term"><span class="prompt">$</span> agentrun codex --format text --prompt hi
+<span class="dim">[end]</span> rejected codex login file /root/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH
+agentrun: codex login file /root/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</div>
 
 <h3>看 agentrun 实际做了什么</h3>
 <table>
