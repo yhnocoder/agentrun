@@ -13,10 +13,14 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="code.js"></script>
+<script defer src="markdown.js"></script>
 </head>
 <body>
 <main>
+<div class="page-head">
 <p class="nav"><a href="index.html">设计总览</a> · 使用介绍</p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
 <h1>agentrun 使用介绍</h1>
 <p class="lead">agentrun 用一条命令在沙箱里运行 claude-code、codex 和 pi，在本机 macOS、本机 Linux、Cloud Managed 容器和 docker 容器里用法相同，输出同一种事件流，用退出码报告成败。</p>
 <p>本页讲怎么安装和使用。每个机制为什么这样设计，见<a href="index.html">设计文档</a>。页面里的示例输出都来自实际运行。</p>
@@ -235,16 +239,16 @@ greet.py 定义了一个 `greet(name)` 函数，返回 `"hello " + name` 这个�
 
 <h3>常见失败</h3>
 <p>启动前发现的问题，标准错误有一行 <code>agentrun:</code> 开头的说明，退出码 2。</p>
-<p><strong>沙箱启动不了。</strong>在 docker 里用 <code>--sandbox off</code>，见<a href="#environments">在四种环境里运行</a>。在本机 Linux 上，按报错的提示检查 <code>bwrap</code> 与 <code>socat</code> 是否安装，Ubuntu 23.10 及以后的版本还要加 <a href="pages/isolation.html#apparmor">AppArmor profile</a>。</p>
-<p><strong>找不到运行时。</strong>agentrun 在 PATH 里查找运行时。运行时装在 PATH 之外时，用 <code>--path</code> 把它所在的目录加到前面：</p>
+<p><strong>沙箱启动不了</strong>。在 docker 里用 <code>--sandbox off</code>，见<a href="#environments">在四种环境里运行</a>。在本机 Linux 上，按报错的提示检查 <code>bwrap</code> 与 <code>socat</code> 是否安装，Ubuntu 23.10 及以后的版本还要加 <a href="pages/isolation.html#apparmor">AppArmor profile</a>。</p>
+<p><strong>找不到运行时</strong>。agentrun 在 PATH 里查找运行时。运行时装在 PATH 之外时，用 <code>--path</code> 把它所在的目录加到前面：</p>
 <div class="term"><span class="prompt">$</span> agentrun codex --format text --prompt hi
 <span class="dim">[end]</span> rejected codex not found in PATH
 agentrun: codex not found in PATH</div>
-<p><strong>pi 的模型写法不对。</strong>pi 的 <code>--model</code> 必须带服务商：</p>
+<p><strong>pi 的模型写法不对</strong>。pi 的 <code>--model</code> 必须带服务商：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek-flash --format text --prompt hi
 <span class="dim">[end]</span> rejected --model for pi must be provider/model, got 'deepseek-flash'
 agentrun: --model for pi must be provider/model, got 'deepseek-flash'</div>
-<p><strong>pi 没有所选服务商的 key。</strong>这是运行时自己的报错，结果为 <code>failed</code>，退出码 1。给 pi 登录这个服务商，或用 <code>--env</code> 传入它的 key 变量：</p>
+<p><strong>pi 没有所选服务商的 key</strong>。这是运行时自己的报错，结果为 <code>failed</code>，退出码 1。给 pi 登录这个服务商，或用 <code>--env</code> 传入它的 key 变量：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model anthropic/claude-sonnet-4-5 --format text --prompt hi
 No API key found for anthropic.
 
@@ -256,7 +260,7 @@ Use /login to log into a provider via OAuth or API key. See:
 Use /login to log into a provider via OAuth or API key. See:
   /opt/node22/lib/node_modules/@earendil-works/pi-coding-agent/docs/providers.md
   /opt/node22/lib/node_modules/@earendil-works/pi-coding-agent/docs/models.md</div>
-<p><strong>pi 用了别的模型。</strong>pi 找不到指定的模型时，会不加提示地改用环境里其他可用的服务商。给了 <code>--model</code> 时，agentrun 在 pi 请求模型之前比较两者，不一致就终止 pi，结果为 <code>failed</code>，<code>detail</code> 写出 pi 实际选中的模型。没给 <code>--model</code> 时由 doctor 检查 pi 的设置。</p>
+<p><strong>pi 用了别的模型</strong>。pi 找不到指定的模型时，会不加提示地改用环境里其他可用的服务商。给了 <code>--model</code> 时，agentrun 在 pi 请求模型之前比较两者，不一致就终止 pi，结果为 <code>failed</code>，<code>detail</code> 写出 pi 实际选中的模型。没给 <code>--model</code> 时由 doctor 检查 pi 的设置。</p>
 <blockquote><p>待补：pi 用了别的模型与 codex 没有登录文件这两种情况的实际输出，在 doctor 与 codex 适配完成后补上。</p></blockquote>
 
 <h3>看 agentrun 实际做了什么</h3>
