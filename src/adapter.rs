@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::claudecode::ClaudeCode;
 use crate::cli::Runtime;
+use crate::codex::Codex;
 use crate::event::SubagentStatus;
 use crate::pi::Pi;
 use crate::run::Invocation;
@@ -23,7 +24,7 @@ pub fn builtin(runtime: Runtime) -> Option<Box<dyn Adapter>> {
     match runtime {
         Runtime::ClaudeCode => Some(Box::new(ClaudeCode::new())),
         Runtime::Pi => Some(Box::new(Pi::new())),
-        Runtime::Codex => None,
+        Runtime::Codex => Some(Box::new(Codex::new())),
     }
 }
 

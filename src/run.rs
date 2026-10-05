@@ -20,6 +20,7 @@ use crate::aggregate::Aggregator;
 use crate::cli::{
     Cli, Format, RunArgs, Runtime, SandboxMode, default_format, prescan_format, usage_error_detail,
 };
+use crate::codex;
 use crate::credential::write_session_credential;
 use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Start};
 use crate::network::{self, FilterProxy, HostRule, Policy, ProxyEndpoint, Upstream};
@@ -104,6 +105,7 @@ pub struct Invocation {
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
     pub proxy: Option<ProxyEndpoint>,
+    pub codex_home: Option<PathBuf>,
 }
 
 struct Ready {
@@ -149,12 +151,20 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ready.invocation.args.network,
         ready.invocation.sandbox.runs(),
     );
+    let codex_login = (ready.invocation.runtime == Runtime::Codex)
+        .then(|| codex::login_file(&ready.invocation.session, &ready.invocation.cwd));
     if ready.invocation.args.dry_run {
         ready.invocation.tempdir = PathBuf::from(DRY_RUN_TEMPDIR);
         ready.invocation.proxy = proxy_needed.then(|| ProxyEndpoint {
             port: None,
             socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
         });
+        if let Some(login) = &codex_login {
+            if let Err(detail) = codex::check_login_file(login) {
+                return reject(&mut caller, format, &detail, started);
+            }
+            ready.invocation.codex_home = Some(codex::home_path(&ready.invocation.tempdir));
+        }
         let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
             Ok(launch) => launch,
             Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -192,6 +202,23 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         .signals
         .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
+    let mut codex_home: Option<PrivateDir> = None;
+    if let Some(login) = &codex_login {
+        let home = codex::home_path(tempdir.path());
+        if let Err(detail) =
+            codex::check_login_file(login).and_then(|()| codex::create_home(&home, login))
+        {
+            return reject(&mut caller, format, &detail, started);
+        }
+        caller
+            .signals
+            .tempdir(home.clone(), ready.invocation.args.debug);
+        codex_home = Some(PrivateDir {
+            path: home.clone(),
+            keep: ready.invocation.args.debug,
+        });
+        ready.invocation.codex_home = Some(home);
+    }
     let mut proxy = None;
     if proxy_needed {
         match FilterProxy::bind(tempdir.path()) {
@@ -215,7 +242,21 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     };
     let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
     plan.push(credential_line);
+    let _codex_home = codex_home;
     execute(caller, ready, launch, plan, tempdir, proxy, started)
+}
+
+struct PrivateDir {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
@@ -287,6 +328,7 @@ fn prepare(
         session,
         allow_hosts,
         proxy: None,
+        codex_home: None,
     };
     Ok(Ready {
         invocation,
@@ -456,6 +498,9 @@ fn execute(
             caller.print_error_line(&format!("[debug] {line}"));
         }
         caller.print_error_line(&format!("[debug] tempdir: {}", tempdir.path().display()));
+        if let Some(home) = &invocation.codex_home {
+            caller.print_error_line(&format!("[debug] codex home: {}", home.display()));
+        }
         if let Some((path, _)) = &raw {
             caller.print_error_line(&format!("[debug] raw: {}", path.display()));
         }

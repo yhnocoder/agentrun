@@ -65,7 +65,7 @@ pub fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> boo
         && match runtime {
             Runtime::Pi => true,
             Runtime::ClaudeCode => mode != NetworkMode::None,
-            Runtime::Codex => false,
+            Runtime::Codex => mode == NetworkMode::Custom,
         }
 }
 
@@ -1187,11 +1187,14 @@ mod tests {
             assert!(proxy_needed(Runtime::Pi, mode, true), "{mode:?}");
             assert!(!proxy_needed(Runtime::Pi, mode, false), "{mode:?}");
             assert!(!proxy_needed(Runtime::ClaudeCode, mode, false), "{mode:?}");
-            assert!(!proxy_needed(Runtime::Codex, mode, true), "{mode:?}");
+            assert!(!proxy_needed(Runtime::Codex, mode, false), "{mode:?}");
         }
         assert!(!proxy_needed(Runtime::ClaudeCode, NetworkMode::None, true));
         assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Full, true));
         assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Custom, true));
+        assert!(!proxy_needed(Runtime::Codex, NetworkMode::None, true));
+        assert!(!proxy_needed(Runtime::Codex, NetworkMode::Full, true));
+        assert!(proxy_needed(Runtime::Codex, NetworkMode::Custom, true));
     }
 
     #[test]

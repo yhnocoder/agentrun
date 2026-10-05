@@ -590,6 +590,7 @@ mod tests {
             session: Session::assemble(runtime, &[], &[], &[], &[]),
             allow_hosts: Vec::new(),
             proxy: None,
+            codex_home: None,
         }
     }
 

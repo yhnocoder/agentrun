@@ -47,7 +47,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--no-subagents</code></td><td>不允许 agent 启动 subagent。pi 没有 subagent，给出时不起作用</td><td>允许</td></tr>
     <tr><td><code>--format rich|text|jsonl</code></td><td>标准输出的格式，见<a href="events.html">事件与输出</a></td><td>标准输出是终端时 <code>rich</code>，否则 <code>jsonl</code></td></tr>
     <tr><td><code>--raw FILE</code></td><td>把运行时的原始标准输出逐行写入这个文件，包括无法解析的行</td><td>不写</td></tr>
-    <tr><td><code>--debug</code></td><td>在标准错误输出实际执行的命令、会话 PATH、被删除与被设置的环境变量名、凭据写入情况、沙箱检查结果与临时目录的路径；保留本次运行的临时目录；没有给 <code>--raw</code> 时，原始输出写入临时目录里的 <code>raw.jsonl</code></td><td>不开</td></tr>
+    <tr><td><code>--debug</code></td><td>在标准错误输出实际执行的命令、会话 PATH、被删除与被设置的环境变量名、凭据写入情况、沙箱检查结果、临时目录的路径与 codex 私有目录的路径（<code>codex home: </code>）；保留本次运行的临时目录与 codex 私有目录；没有给 <code>--raw</code> 时，原始输出写入临时目录里的 <code>raw.jsonl</code></td><td>不开</td></tr>
     <tr><td><code>--dry-run</code></td><td>完成命令行解析与启动前检查，把将执行的命令、会话 PATH 与变量名打印到标准输出后以 0 退出。不创建临时目录，不写凭据，不输出事件</td><td>不开</td></tr>
   </tbody>
 </table>
@@ -302,8 +302,24 @@ removed: (none)</div>
   [-m ID] [-c model_reasoning_effort="LEVEL"]
   &lt;-- 之后的调用方参数&gt; -</code></pre>
 <ul>
-  <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#runtime-home">私有配置目录</a>。最后的 <code>-</code> 表示从标准输入读提示词。</li>
-  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径。沙箱没有运行时把三行权限参数换成 <code>-c default_permissions=":danger-full-access"</code>。<code>--network full</code> 与 <code>custom</code> 时的网络部分见<a href="isolation.html#network">网络</a>。</li>
+  <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#runtime-home">私有配置目录</a>；它不出现在 argv、<code>start.env</code> 与 <code>set:</code> 行里。最后的 <code>-</code> 表示从标准输入读提示词，提示词原文写入标准输入后关闭。</li>
+  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（<code>std::fs::canonicalize</code>，macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
+</ul>
+<table>
+  <thead>
+    <tr><th>沙箱</th><th><code>--network</code></th><th>权限参数</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>运行</td><td><code>none</code></td><td>上面的三行：<code>default_permissions=agentrun</code>、<code>permissions.agentrun.filesystem={...}</code>、<code>permissions.agentrun.network.enabled=false</code></td></tr>
+    <tr><td>运行</td><td><code>full</code></td><td>前两行同上，第三行为 <code>-c permissions.agentrun.network.enabled=true</code></td></tr>
+    <tr><td>运行</td><td><code>custom</code></td><td>前两行同上，第三行换成 <code>--enable network_proxy -c 'permissions.agentrun.network={enabled=true, enable_socks5=false, enable_socks5_udp=false, allow_upstream_proxy=true, domains={"&lt;主机1&gt;"="allow", ...}}'</code>。<code>domains</code> 写每条 <code>--allow-host</code> 的主机部分，不写端口，按给出的顺序去重，通配写成 <code>*.example.com</code>（codex 只匹配子域名，与 <code>--allow-host</code> 相同，codex 0.159.2 实测）；端口限制由过滤代理执行。不写 <code>allow_local_binding</code>，理由见<a href="isolation.html#network">网络</a></td></tr>
+    <tr><td>不运行</td><td>任意</td><td><code>-c default_permissions=":danger-full-access"</code></td></tr>
+  </tbody>
+</table>
+<ul>
+  <li>写进 <code>-c</code> 值的字符串按 TOML 基本字符串写：外加双引号，<code>\</code> 写成 <code>\\</code>，<code>"</code> 写成 <code>\"</code>，控制字符写成 <code>\uXXXX</code>。用于会话临时目录路径、<code>--effort</code> 的值与主机名。</li>
+  <li><code>--dry-run</code> 时会话临时目录写成 <code>&lt;tempdir&gt;</code>，私有目录写成 <code>&lt;tempdir&gt;-codex</code>（只在环境里，不在 argv 里）。</li>
+  <li>用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）不存在时启动前报错，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>codex login file &lt;路径&gt; not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</code>。私有目录创建失败的 <code>detail</code> 为 <code>cannot create the codex home directory &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
   <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除。</li>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
@@ -327,6 +343,7 @@ removed: (none)</div>
 <p><code>denied</code> 恒为 false。codex 的输出里没有 subagent 的启动事件，也没有 subagent 自己的命令与文件改动，只有主 agent 等待 subagent 的 <code>collab_tool_call</code>（<code>tool</code> 为 <code>wait</code>，codex 0.159.2 实测）。所以 codex 不输出 <code>subagent_start</code> 与 <code>subagent_end</code>，<code>parent</code> 全部为 null。</p>
 <h3>失败判定</h3>
 <ol>
+  <li>沙箱运行时，有 <code>item.completed</code> 的 <code>command_execution</code> 的 <code>aggregated_output</code> 以 <code>bwrap: </code> 开头：<code>detail</code> 为 <code>sandbox failed to start: </code> 加这一行（<code>aggregated_output</code> 的第一行）去掉 <code>bwrap: </code> 的部分，有多条时取第一条。沙箱没有运行时不看这一条。</li>
   <li><code>turn.failed</code>：取最后一个的 <code>error.message</code> 前 500 个字符。</li>
   <li>没有 <code>turn.completed</code> 时的 <code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。codex 重试连接时也输出 <code>error</code>，重试成功后照常完成，所以有 <code>turn.completed</code> 时不看 <code>error</code>。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。</li>

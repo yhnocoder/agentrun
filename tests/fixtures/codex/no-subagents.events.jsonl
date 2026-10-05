@@ -1,0 +1,5 @@
+{"schema":1,"type":"prompt","text":"Start two subagents in parallel. The first subagent must create a file sub1.txt in the current working directory containing the text: one. The second subagent must create sub2.txt containing the text: two. Wait for both to finish, then reply with the word done. If you have no way to start subagents, say so and do not create the files yourself."}
+{"schema":1,"type":"text","parent":null,"text":"I’ll check whether subagent tools are available."}
+{"schema":1,"type":"text","parent":null,"text":"I have no way to start subagents in this session, so I did not create the files."}
+{"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":7632,"output_tokens":56,"cache_read_tokens":0,"cache_write_tokens":0,"context_tokens":7632}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":7632,"output_tokens":56,"cache_read_tokens":0,"cache_write_tokens":0,"by_model":{"unknown":{"input_tokens":7632,"output_tokens":56,"cache_read_tokens":0,"cache_write_tokens":0}}},"result":"I have no way to start subagents in this session, so I did not create the files."}

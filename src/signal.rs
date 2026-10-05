@@ -73,7 +73,7 @@ struct Preparation {
     stdout: SharedWriter,
     format: Format,
     started: Instant,
-    tempdir: Option<PathBuf>,
+    tempdirs: Vec<PathBuf>,
     keep_tempdir: bool,
     check_pid: Option<i32>,
 }
@@ -139,7 +139,7 @@ impl Signals {
             stdout,
             format,
             started,
-            tempdir: None,
+            tempdirs: Vec::new(),
             keep_tempdir: false,
             check_pid: None,
         };
@@ -169,7 +169,7 @@ impl Signals {
 
     pub fn tempdir(&self, path: PathBuf, keep: bool) {
         if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
-            preparation.tempdir = Some(path);
+            preparation.tempdirs.push(path);
             preparation.keep_tempdir = keep;
         }
     }
@@ -286,8 +286,10 @@ impl Preparation {
         if let Ok(mut stdout) = self.stdout.lock() {
             Output::new(self.format, SandboxMode::On, "").write(&mut *stdout, &end, &|_| None);
         }
-        if let (Some(tempdir), false) = (&self.tempdir, self.keep_tempdir) {
-            let _ = std::fs::remove_dir_all(tempdir);
+        if !self.keep_tempdir {
+            for tempdir in &self.tempdirs {
+                let _ = std::fs::remove_dir_all(tempdir);
+            }
         }
         status.exit_code()
     }

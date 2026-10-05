@@ -277,7 +277,6 @@ fn runtime_missing_from_path_is_rejected() {
 }
 
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
-const ADAPTER_MISSING: &str = "codex support is not implemented in this build";
 
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
@@ -664,16 +663,6 @@ fn real_bwrap_passes_the_sandbox_step() {
 }
 
 #[test]
-fn missing_adapter_is_rejected_without_tempdir() {
-    let env = Env::with_fake_codex();
-    assert_eq!(
-        assert_rejected(&env.run(&["codex", "--sandbox", "off", "--prompt", "hi"])),
-        ADAPTER_MISSING
-    );
-    assert!(env.no_leftover_tempdirs());
-}
-
-#[test]
 fn env_without_caller_value_is_rejected() {
     let env = Env::new();
     assert_eq!(
@@ -737,7 +726,11 @@ fn runtime_is_found_through_path_option() {
         .env("PATH", &empty)
         .output()
         .unwrap();
-    assert_eq!(assert_rejected(&output), ADAPTER_MISSING);
+    assert_eq!(
+        assert_rejected(&output),
+        "codex login file $HOME/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH"
+    );
+    assert!(env.no_leftover_tempdirs());
     let output = env
         .command(&["codex", "--sandbox", "off", "--prompt", "hi"])
         .env("PATH", &empty)

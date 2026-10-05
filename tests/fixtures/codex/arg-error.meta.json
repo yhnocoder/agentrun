@@ -1,0 +1,1 @@
+{"cwd": "/var/folders/xx/user/T/agentrun-probe-580e9928/failure-samples-codex/arg", "exit_code": 2, "stderr": "error: unexpected argument '--no-such-flag-probe' found\n\n  tip: to pass '--no-such-flag-probe' as a value, use '-- --no-such-flag-probe'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n"}
