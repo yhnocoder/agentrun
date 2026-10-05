@@ -558,17 +558,13 @@ fn text_format_shows_note_and_lines() {
         "\n",
         r#"{"record":"text","parent":null,"text":"done\nmore"}"#
     ));
-    sandbox.install(
-        "bwrap",
-        "#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n",
-    );
-    let outcome = sandbox.run(&["--format", "text", "--sandbox", "relax"], false);
+    let outcome = sandbox.run(&["--format", "text", "--sandbox", "off"], false);
     assert_eq!(outcome.code, 0);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(
         lines[..4],
         [
-            "[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent writes or which hosts it reaches",
+            "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches",
             "[main] prompt hi",
             "[main] agent start explore#1 (haiku): look around",
             "[explore#1] tool Grep: foo",
@@ -846,23 +842,23 @@ fn credential_write_failure_is_rejected_before_tempdir() {
 }
 
 #[test]
-fn start_event_records_bubblewrap_when_sandbox_is_on() {
-    if !support::bwrap_available() {
+fn start_event_records_the_platform_sandbox_when_sandbox_is_on() {
+    if !support::sandbox_available() {
         return;
     }
     let sandbox = Sandbox::with_output("");
     let outcome = sandbox.run(&["--sandbox", "on", "--format", "jsonl", "--debug"], false);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let start = &outcome.events()[0];
-    assert_eq!(start["sandbox"], "bubblewrap");
+    assert_eq!(start["sandbox"], support::SANDBOX_KIND);
     assert_eq!(start["network"]["enforced"], true);
     let first = outcome.stderr.lines().next().unwrap();
-    assert!(
-        first.starts_with(
-            "[debug] sandbox: bubblewrap (/usr/bin/bwrap, socat /usr/bin/socat, check "
-        ),
-        "{first}"
-    );
+    let expected = if cfg!(target_os = "macos") {
+        "[debug] sandbox: seatbelt (/usr/bin/sandbox-exec, check "
+    } else {
+        "[debug] sandbox: bubblewrap (/usr/bin/bwrap, socat /usr/bin/socat, check "
+    };
+    assert!(first.starts_with(expected), "{first}");
     assert!(first.ends_with("ms)"), "{first}");
     let text = sandbox.run(&["--sandbox", "on", "--format", "text"], false);
     assert!(!text.stdout.contains("[note]"), "{}", text.stdout);
@@ -871,22 +867,35 @@ fn start_event_records_bubblewrap_when_sandbox_is_on() {
 #[test]
 fn start_event_records_none_for_relax_and_off() {
     let sandbox = Sandbox::with_output("");
-    sandbox.install("bwrap", "#!/bin/sh\nexit 1\n");
-    let relax = sandbox.run(&["--sandbox", "relax", "--debug"], false);
-    assert_eq!(relax.code, 0, "{}", relax.stderr);
-    let start = &relax.events()[0];
-    assert_eq!(start["sandbox"], "none");
-    assert_eq!(start["network"]["enforced"], false);
-    assert_eq!(
-        relax.stderr.lines().next().unwrap(),
-        "[debug] sandbox: none (--sandbox relax: bwrap cannot start: exited with code 1)"
-    );
+    #[cfg(target_os = "linux")]
+    {
+        sandbox.install("bwrap", "#!/bin/sh\nexit 1\n");
+        let relax = sandbox.run(&["--sandbox", "relax", "--debug"], false);
+        assert_eq!(relax.code, 0, "{}", relax.stderr);
+        let start = &relax.events()[0];
+        assert_eq!(start["sandbox"], "none");
+        assert_eq!(start["network"]["enforced"], false);
+        assert_eq!(
+            relax.stderr.lines().next().unwrap(),
+            "[debug] sandbox: none (--sandbox relax: bwrap cannot start: exited with code 1)"
+        );
+        sandbox.install(
+            "bwrap",
+            "#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n",
+        );
+        let text = sandbox.run(&["--format", "text", "--sandbox", "relax"], false);
+        assert_eq!(
+            text.stdout.lines().next().unwrap(),
+            "[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent writes or which hosts it reaches"
+        );
+    }
     let off = sandbox.run(&["--sandbox", "off"], false);
     let start = &off.events()[0];
     assert_eq!(start["sandbox"], "none");
     assert_eq!(start["network"]["enforced"], false);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
     let sandbox = Sandbox::with_output("");

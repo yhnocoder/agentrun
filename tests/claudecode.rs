@@ -258,22 +258,7 @@ fn exit_without_result_fails() {
 
 #[test]
 fn dry_run_with_sandbox_writes_tempdir_placeholder() {
-    let available = Command::new("bwrap")
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--",
-            "/bin/true",
-        ])
-        .status()
-        .is_ok_and(|status| status.success());
-    if !available {
-        eprintln!("skipped: bwrap is not available here");
+    if !support::sandbox_available() {
         return;
     }
     let env = Env::new(FAKE_CLAUDE);
@@ -349,7 +334,7 @@ fn network_settings(argv: &Value) -> Value {
 
 #[test]
 fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
-    if !support::bwrap_available() {
+    if !support::sandbox_available() {
         return;
     }
     let server = support::WebServer::start();

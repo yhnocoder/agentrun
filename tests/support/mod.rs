@@ -195,7 +195,8 @@ impl Drop for WebServer {
     }
 }
 
-pub fn bwrap_available() -> bool {
+#[cfg(target_os = "linux")]
+pub fn sandbox_available() -> bool {
     let available = std::process::Command::new("bwrap")
         .args([
             "--ro-bind",
@@ -216,3 +217,14 @@ pub fn bwrap_available() -> bool {
     }
     available
 }
+
+#[cfg(target_os = "macos")]
+pub fn sandbox_available() -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+pub const SANDBOX_KIND: &str = "bubblewrap";
+
+#[cfg(target_os = "macos")]
+pub const SANDBOX_KIND: &str = "seatbelt";

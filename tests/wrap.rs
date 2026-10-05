@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::io::{BufRead, Read};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
@@ -7,6 +9,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use agentrun::event::SandboxKind;
 use agentrun::sandbox::{ProxyForward, wrap_pi, wrapper_failure};
 use tempfile::TempDir;
 
@@ -218,7 +221,10 @@ fn exit_code_passes_through() {
     };
     let output = wrapped.run("exit 7\n", &[]);
     assert_eq!(output.status.code(), Some(7));
-    assert_eq!(wrapper_failure(output.status.code(), ""), None);
+    assert_eq!(
+        wrapper_failure(SandboxKind::Bubblewrap, output.status.code(), ""),
+        None
+    );
 }
 
 fn process_is_gone(pid: i32) -> bool {
@@ -293,7 +299,7 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
     let output = Command::new(&bad[0]).args(&bad[1..]).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let detail = wrapper_failure(output.status.code(), &stderr).unwrap();
+    let detail = wrapper_failure(SandboxKind::Bubblewrap, output.status.code(), &stderr).unwrap();
     assert!(detail.starts_with("sandbox failed to start: "), "{detail}");
     assert!(detail.contains("missing"), "{detail}");
     assert!(Path::new(&bad[0]).is_absolute());

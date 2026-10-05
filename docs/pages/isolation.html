@@ -39,7 +39,7 @@
 <h3>判断沙箱能不能用</h3>
 <p>只看 <code>bwrap</code> 是否存在不够：docker 容器、关闭了非特权用户命名空间的系统、被 AppArmor 限制的系统里，<code>bwrap</code> 装了也启动不了。所以 <code>on</code> 与 <code>relax</code> 在每次运行前都实际检查一次：</p>
 <ul>
-  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。</li>
+  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。<code>sandbox-exec</code> 只用 <code>/usr/bin/sandbox-exec</code> 这个绝对路径，不在会话 PATH 里查找，因为 Seatbelt 是系统组件，PATH 里同名的程序不是它。macOS 上不查找 <code>socat</code>：claude-code 在 macOS 上不用它，pi 直接连接过滤代理的端口。</li>
   <li>Linux：会话 PATH 里有 <code>bwrap</code>；claude-code 与 pi 还要有 <code>socat</code>。然后执行一次 <code>bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent --unshare-net -- /bin/true</code>，最多等 5 秒。耗时通常是毫秒级。检查创建的命名空间与 pi 的包裹相同，网络命名空间也在检查之内。</li>
   <li>Linux 上的 codex 同样执行这条检查，不要求 <code>socat</code>。查找 <code>bwrap</code> 时跳过工作目录之内的 PATH 项，找不到时报缺少 <code>bwrap</code>。理由：codex 的沙箱启动失败时，<code>codex exec</code> 仍以退出码 0 结束并输出 <code>turn.completed</code>，没有失败事件，运行中发现不了（codex 0.160.0 在本机 Linux 与 docker 实测）。codex 用 PATH 上第一个不在工作目录之内的 <code>bwrap</code>，找不到时才用 npm 包里自带的 <code>bwrap</code>；agentrun 按同样的规则查找，检查的就是 codex 会用的那一个，并且不让 codex 退回到没有检查过的自带 <code>bwrap</code>。运行中的附加信号见<a href="run.html#codex">codex 的失败判定</a>。</li>
 </ul>
@@ -83,6 +83,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。另外只放行用户 pi 登录文件 <code>auth.json</code> 这一个文件。网络见下一节</td><td>不包裹</td></tr>
   </tbody>
 </table>
+<p>macOS 上 pi 的 Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、用户的 pi 登录文件（没有时不写）与 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。</p>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
   <li>pi 只放行登录文件，不放行整个状态目录：pi 刷新令牌时原地改写 <code>auth.json</code>，锁目录建在私有状态目录里，所以一个文件就够；状态目录里有 pi 的启动脚本与扩展，不能让沙箱里的 agent 改写，见<a href="session.html#runtime-home">私有配置目录</a>。Linux 上用 <code>--bind</code> 单独绑定这个文件；用户没有登录文件时不放行。</li>
