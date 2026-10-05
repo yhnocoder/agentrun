@@ -13,30 +13,42 @@ use serde::Serialize;
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: RuntimeCommand,
+    pub command: Command,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum RuntimeCommand {
+pub enum Command {
     #[command(about = "Run claude-code")]
     ClaudeCode(RunArgs),
     #[command(about = "Run codex")]
     Codex(RunArgs),
     #[command(about = "Run pi")]
     Pi(RunArgs),
+    #[command(about = "Check whether the runtimes can be used in this environment")]
+    Doctor(DoctorArgs),
+    #[command(hide = true)]
+    DoctorConnect(ConnectArgs),
 }
 
-impl RuntimeCommand {
-    pub fn into_parts(self) -> (Runtime, RunArgs) {
+pub enum Parsed {
+    Run(Runtime, RunArgs),
+    Doctor(DoctorArgs),
+    Connect(ConnectArgs),
+}
+
+impl Command {
+    pub fn into_parsed(self) -> Parsed {
         match self {
-            RuntimeCommand::ClaudeCode(args) => (Runtime::ClaudeCode, args),
-            RuntimeCommand::Codex(args) => (Runtime::Codex, args),
-            RuntimeCommand::Pi(args) => (Runtime::Pi, args),
+            Command::ClaudeCode(args) => Parsed::Run(Runtime::ClaudeCode, args),
+            Command::Codex(args) => Parsed::Run(Runtime::Codex, args),
+            Command::Pi(args) => Parsed::Run(Runtime::Pi, args),
+            Command::Doctor(args) => Parsed::Doctor(args),
+            Command::DoctorConnect(args) => Parsed::Connect(args),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 pub enum Runtime {
     #[serde(rename = "claude-code")]
     ClaudeCode,
@@ -146,6 +158,59 @@ pub struct RunArgs {
         help = "Arguments passed to the runtime"
     )]
     pub runtime_args: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DoctorArgs {
+    #[arg(
+        value_enum,
+        value_name = "RUNTIME",
+        help = "Runtimes to check, in the order claude-code, codex, pi (default: all)"
+    )]
+    pub runtimes: Vec<Runtime>,
+    #[arg(long, value_name = "ID", help = "Model, checked for every runtime")]
+    pub model: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "What to do when the sandbox is not available (default: AGENTRUN_SANDBOX, or on)"
+    )]
+    pub sandbox: Option<SandboxMode>,
+    #[arg(long, value_enum, default_value_t = NetworkMode::None, help = "Which hosts commands may reach")]
+    pub network: NetworkMode,
+    #[arg(long, value_name = "HOST[:PORT]", help = "Allowed host, repeatable")]
+    pub allow_host: Vec<String>,
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Directory prepended to the session PATH, repeatable"
+    )]
+    pub path: Vec<PathBuf>,
+    #[arg(
+        long,
+        value_name = "KEY[=VALUE]",
+        help = "Environment variable for the session, repeatable"
+    )]
+    pub env: Vec<String>,
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Read environment variables from a file, repeatable"
+    )]
+    pub env_file: Vec<PathBuf>,
+    #[arg(long, help = "Print one JSON array instead of one line per check")]
+    pub json: bool,
+    #[arg(
+        long,
+        help = "Print each command to standard error and keep the temporary directory"
+    )]
+    pub debug: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ConnectArgs {
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]

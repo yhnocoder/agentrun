@@ -123,8 +123,8 @@ fn unknown_option_is_rejected() {
 
 #[test]
 fn unknown_subcommand_is_rejected() {
-    let detail = assert_rejected(&Env::new().run(&["doctor"]));
-    assert!(detail.contains("doctor"), "{detail}");
+    let detail = assert_rejected(&Env::new().run(&["nurse"]));
+    assert!(detail.contains("nurse"), "{detail}");
 }
 
 #[test]

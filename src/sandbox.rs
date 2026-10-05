@@ -14,9 +14,11 @@ use crate::signal::Signals;
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_POLL: Duration = Duration::from_millis(10);
-const BWRAP_PREFIX: &str = "bwrap: ";
+pub const BWRAP_PREFIX: &str = "bwrap: ";
+pub const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
 const SANDBOX_EXEC_PREFIX: &str = "sandbox-exec: ";
 pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+pub const UNAVAILABLE_PREFIX: &str = "sandbox is not available: ";
 pub const SEATBELT_FILE: &str = "seatbelt.sb";
 const FORWARD_SCRIPT: &str = r#""$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2>/dev/null & shift 2; exec "$@""#;
 
@@ -94,7 +96,7 @@ pub fn check(
             description: available.description,
         }),
         Err(unavailable) if mode == SandboxMode::On => Err(format!(
-            "sandbox is not available: {}. {}",
+            "{UNAVAILABLE_PREFIX}{}. {}",
             unavailable.reason, unavailable.hint
         )),
         Err(unavailable) => Ok(Sandbox {
@@ -162,7 +164,7 @@ mod bubblewrap {
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
-    use super::{Available, BWRAP_PREFIX, Unavailable, start_check};
+    use super::{Available, BWRAP_PREFIX, CANNOT_START_HINT, Unavailable, start_check};
     use crate::cli::Runtime;
     use crate::event::SandboxKind;
     use crate::session::{Session, find_executable, is_executable};
@@ -170,7 +172,6 @@ mod bubblewrap {
 
     const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
     const CODEX_INSTALL_HINT: &str = "Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off";
-    const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
 
     pub(super) fn probe(
         runtime: Runtime,
