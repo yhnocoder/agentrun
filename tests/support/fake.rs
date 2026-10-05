@@ -3,9 +3,10 @@ use std::path::Path;
 
 use agentrun::adapter::{Adapter, Launch, Record};
 use agentrun::cli::Runtime;
+use agentrun::event::SandboxKind;
 use agentrun::event::SubagentStatus;
 use agentrun::run::Invocation;
-use agentrun::sandbox::wrap_pi;
+use agentrun::sandbox::{wrap_pi, wrap_seatbelt, write_seatbelt_profile};
 use agentrun::usage::{TokenCounts, Usage};
 use serde_json::Value;
 
@@ -46,6 +47,11 @@ impl Adapter for FakeAdapter {
                 None,
                 &argv,
             );
+        } else if invocation.sandbox.kind == SandboxKind::Seatbelt {
+            let port = invocation.proxy.as_ref().map(|proxy| proxy.port_text());
+            write_seatbelt_profile(&invocation.cwd, &invocation.tempdir, None, port.as_deref())
+                .map_err(|error| error.to_string())?;
+            argv = wrap_seatbelt(&invocation.tempdir, &argv);
         }
         Ok(Launch {
             argv,

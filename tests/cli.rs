@@ -276,9 +276,11 @@ fn runtime_missing_from_path_is_rejected() {
     );
 }
 
+#[cfg(target_os = "linux")]
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
 const ADAPTER_MISSING: &str = "codex support is not implemented in this build";
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
     let env = Env::with_fake_claude();
@@ -293,6 +295,7 @@ fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
     assert!(env.no_leftover_tempdirs());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
     let env = Env::with_fake_pi();
@@ -312,6 +315,7 @@ fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn bwrap_that_cannot_start_is_rejected_with_its_message() {
     let env = Env::with_fake_claude();
@@ -331,6 +335,7 @@ fn bwrap_that_cannot_start_is_rejected_with_its_message() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn bwrap_that_hangs_is_killed_after_five_seconds() {
     let env = Env::with_fake_claude();
@@ -346,6 +351,7 @@ fn bwrap_that_hangs_is_killed_after_five_seconds() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn missing_socat_is_rejected() {
     let env = Env::with_fake_claude();
@@ -361,6 +367,12 @@ fn assert_dry_run(output: &Output) {
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     assert!(stdout.starts_with("command: "), "{stdout}");
 }
+
+#[cfg(target_os = "linux")]
+const SANDBOX_ON_WITHOUT_PROVIDER: &str = "sandbox is not available: bwrap not found in PATH. Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+
+#[cfg(target_os = "macos")]
+const SANDBOX_ON_WITHOUT_PROVIDER: &str = "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>";
 
 #[test]
 fn sandbox_variable_from_every_source_and_option_precedence() {
@@ -416,7 +428,7 @@ fn sandbox_variable_from_every_source_and_option_precedence() {
             "--prompt",
             "hi"
         ])),
-        format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
+        SANDBOX_ON_WITHOUT_PROVIDER
     );
     let output = env
         .command(&["pi", "--prompt", "hi"])
@@ -538,6 +550,7 @@ fn start_network_reports_mode_allow_and_enforcement() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn real_bwrap_passes_the_sandbox_step() {
     let Some(bwrap) = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
@@ -661,6 +674,54 @@ fn real_bwrap_passes_the_sandbox_step() {
         "{command}"
     );
     assert!(!command.contains("proxy port"), "{command}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_exec_passes_the_sandbox_step() {
+    let env = Env::with_fake_claude();
+    env.install("pi", "#!/bin/sh\nexit 0\n");
+    let output = env.run(&[
+        "pi",
+        "--debug",
+        "--dry-run",
+        "--model",
+        "deepseek/deepseek-flash",
+        "--prompt",
+        "hi",
+    ]);
+    assert_dry_run(&output);
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    let first = stderr.lines().next().unwrap_or_default();
+    assert!(
+        first.starts_with("[debug] sandbox: seatbelt (/usr/bin/sandbox-exec, check "),
+        "{first}"
+    );
+    assert!(first.ends_with("ms)"), "{first}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout.lines().next().unwrap();
+    assert!(
+        command.starts_with(&format!(
+            "command: /usr/bin/sandbox-exec -f '<tempdir>/seatbelt.sb' {}/pi -p ",
+            env.bin().display()
+        )),
+        "{command}"
+    );
+    assert!(!command.contains("socat"), "{command}");
+    assert!(env.no_leftover_tempdirs());
+    let output = env.run(&["pi", "--sandbox", "off", "--dry-run", "--prompt", "hi"]);
+    assert_dry_run(&output);
+    assert!(
+        !String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("sandbox-exec"),
+        "the unsandboxed command is not wrapped"
+    );
+    let output = env.run(&["claude-code", "--dry-run", "--prompt", "hi"]);
+    assert_dry_run(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#""sandbox":{"enabled":true"#), "{stdout}");
+    assert!(!stdout.contains("sandbox-exec"), "{stdout}");
 }
 
 #[test]

@@ -434,6 +434,13 @@ fn unresolvable_hosts_go_to_the_upstream_or_fail_with_502() {
         .unwrap();
     assert!(read_head(&mut stream).starts_with("HTTP/1.1 200"));
     assert!(upstream.requests()[0].starts_with("CONNECT nonexistent.invalid:443 HTTP/1.1\r\n"));
+    if let Ok(addresses) = std::net::ToSocketAddrs::to_socket_addrs("nonexistent.invalid:443") {
+        eprintln!(
+            "skipped the direct 502 check: the local DNS rewrites resolution results (for example fake-ip) and resolved nonexistent.invalid to {:?}",
+            addresses.collect::<Vec<_>>()
+        );
+        return;
+    }
     let direct = Running::start(
         custom(vec![rule("nonexistent.invalid", None)]),
         Upstream::default(),

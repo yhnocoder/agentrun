@@ -1,6 +1,11 @@
 use std::ffi::OsStr;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
 use crate::event::SandboxKind;
@@ -8,7 +13,11 @@ use crate::session::Session;
 use crate::signal::Signals;
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const CHECK_POLL: Duration = Duration::from_millis(10);
 const BWRAP_PREFIX: &str = "bwrap: ";
+const SANDBOX_EXEC_PREFIX: &str = "sandbox-exec: ";
+pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+pub const SEATBELT_FILE: &str = "seatbelt.sb";
 const FORWARD_SCRIPT: &str = r#""$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2>/dev/null & shift 2; exec "$@""#;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,7 +84,17 @@ pub fn check(
             description: "none (--sandbox off)".to_string(),
         });
     }
-    match probe(runtime, session, cwd, signals) {
+    let probed = if runtime == Runtime::Codex {
+        Ok(Available {
+            kind: SandboxKind::Codex,
+            bwrap: None,
+            socat: None,
+            description: "codex".to_string(),
+        })
+    } else {
+        probe(session, cwd, signals)
+    };
+    match probed {
         Ok(available) => Ok(Sandbox {
             mode,
             kind: available.kind,
@@ -102,52 +121,57 @@ pub fn check(
 #[cfg(target_os = "linux")]
 use bubblewrap::probe;
 
-#[cfg(not(target_os = "linux"))]
-fn probe(
-    _runtime: Runtime,
-    _session: &Session,
-    _cwd: &Path,
-    _signals: &Signals,
-) -> Result<Available, Unavailable> {
-    Err(Unavailable {
-        reason: "the macOS sandbox is not implemented in this build".to_string(),
+#[cfg(target_os = "macos")]
+fn probe(session: &Session, cwd: &Path, signals: &Signals) -> Result<Available, Unavailable> {
+    let unavailable = |reason: String| Unavailable {
+        reason,
         hint: "Use --sandbox relax or --sandbox off",
+    };
+    if !Path::new(SANDBOX_EXEC).exists() {
+        return Err(unavailable(format!(
+            "sandbox-exec not found at {SANDBOX_EXEC}"
+        )));
+    }
+    let started = Instant::now();
+    start_check(
+        Path::new(SANDBOX_EXEC),
+        &["-p", "(version 1)(allow default)", "/usr/bin/true"],
+        SANDBOX_EXEC_PREFIX,
+        session,
+        cwd,
+        signals,
+    )
+    .map_err(|reason| unavailable(format!("sandbox-exec cannot start: {reason}")))?;
+    Ok(Available {
+        kind: SandboxKind::Seatbelt,
+        bwrap: None,
+        socat: None,
+        description: format!(
+            "seatbelt ({SANDBOX_EXEC}, check {}ms)",
+            started.elapsed().as_millis()
+        ),
     })
 }
 
 #[cfg(target_os = "linux")]
 mod bubblewrap {
-    use std::io::Read;
     use std::path::Path;
-    use std::process::{Child, Command, Stdio};
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
-    use super::{Available, CHECK_TIMEOUT, Unavailable, failure_reason};
-    use crate::cli::Runtime;
+    use super::{Available, BWRAP_PREFIX, Unavailable, start_check};
     use crate::event::SandboxKind;
     use crate::session::{Session, find_executable};
     use crate::signal::Signals;
 
-    const CHECK_POLL: Duration = Duration::from_millis(10);
     const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
     const CANNOT_START_HINT: &str =
         "bwrap cannot create a sandbox here. In a docker container use --sandbox off";
 
     pub(super) fn probe(
-        runtime: Runtime,
         session: &Session,
         cwd: &Path,
         signals: &Signals,
     ) -> Result<Available, Unavailable> {
-        if runtime == Runtime::Codex {
-            return Ok(Available {
-                kind: SandboxKind::Codex,
-                bwrap: None,
-                socat: None,
-                description: "codex".to_string(),
-            });
-        }
         let missing = |name: &str| Unavailable {
             reason: format!("{name} not found in PATH"),
             hint: INSTALL_HINT,
@@ -155,7 +179,26 @@ mod bubblewrap {
         let bwrap = find_executable("bwrap", &session.path, cwd).ok_or_else(|| missing("bwrap"))?;
         let socat = find_executable("socat", &session.path, cwd).ok_or_else(|| missing("socat"))?;
         let started = Instant::now();
-        start_bwrap(&bwrap, session, cwd, signals).map_err(|reason| Unavailable {
+        start_check(
+            &bwrap,
+            &[
+                "--ro-bind",
+                "/",
+                "/",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--die-with-parent",
+                "--",
+                "/bin/true",
+            ],
+            BWRAP_PREFIX,
+            session,
+            cwd,
+            signals,
+        )
+        .map_err(|reason| Unavailable {
             reason: format!("bwrap cannot start: {reason}"),
             hint: CANNOT_START_HINT,
         })?;
@@ -171,76 +214,68 @@ mod bubblewrap {
             socat: Some(socat),
         })
     }
+}
 
-    fn start_bwrap(
-        bwrap: &Path,
-        session: &Session,
-        cwd: &Path,
-        signals: &Signals,
-    ) -> Result<(), String> {
-        let mut child = Command::new(bwrap)
-            .args([
-                "--ro-bind",
-                "/",
-                "/",
-                "--dev",
-                "/dev",
-                "--proc",
-                "/proc",
-                "--die-with-parent",
-                "--",
-                "/bin/true",
-            ])
-            .current_dir(cwd)
-            .env_clear()
-            .envs(&session.env)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| error.to_string())?;
-        signals.checking(Some(child.id() as i32));
-        let outcome = wait_for_check(&mut child);
-        signals.checking(None);
-        outcome
-    }
+fn start_check(
+    program: &Path,
+    args: &[&str],
+    prefix: &str,
+    session: &Session,
+    cwd: &Path,
+    signals: &Signals,
+) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .envs(&session.env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    signals.checking(Some(child.id() as i32));
+    let outcome = wait_for_check(&mut child, prefix);
+    signals.checking(None);
+    outcome
+}
 
-    fn wait_for_check(child: &mut Child) -> Result<(), String> {
-        let mut stderr = child.stderr.take().expect("stderr is piped");
-        let reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stderr.read_to_end(&mut bytes);
-            bytes
-        });
-        let deadline = Instant::now() + CHECK_TIMEOUT;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => return Ok(()),
-                Ok(Some(status)) => {
-                    let bytes = reader.join().unwrap_or_default();
-                    return Err(failure_reason(
-                        status.code(),
-                        &String::from_utf8_lossy(&bytes),
-                    ));
-                }
-                Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "timed out after {} seconds",
-                        CHECK_TIMEOUT.as_secs()
-                    ));
-                }
-                Ok(None) => thread::sleep(CHECK_POLL),
-                Err(error) => return Err(error.to_string()),
+fn wait_for_check(child: &mut Child, prefix: &str) -> Result<(), String> {
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + CHECK_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                let bytes = reader.join().unwrap_or_default();
+                return Err(failure_reason(
+                    status.code(),
+                    &String::from_utf8_lossy(&bytes),
+                    prefix,
+                ));
             }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "timed out after {} seconds",
+                    CHECK_TIMEOUT.as_secs()
+                ));
+            }
+            Ok(None) => thread::sleep(CHECK_POLL),
+            Err(error) => return Err(error.to_string()),
         }
     }
 }
 
-pub fn failure_reason(exit_code: Option<i32>, stderr: &str) -> String {
+fn failure_reason(exit_code: Option<i32>, stderr: &str, prefix: &str) -> String {
     if let Some(line) = stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
-        return line.strip_prefix(BWRAP_PREFIX).unwrap_or(line).to_string();
+        return line.strip_prefix(prefix).unwrap_or(line).to_string();
     }
     match exit_code {
         Some(code) => format!("exited with code {code}"),
@@ -305,13 +340,85 @@ pub fn wrap_pi(
     wrapped
 }
 
-pub fn wrapper_failure(exit_code: Option<i32>, stderr_tail: &str) -> Option<String> {
+pub fn seatbelt_profile(
+    cwd: &Path,
+    tempdir: &Path,
+    login_file: Option<&Path>,
+    port: Option<&str>,
+) -> String {
+    let quoted = |path: &Path| {
+        let text = path.to_string_lossy();
+        format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+    };
+    let mut profile =
+        String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
+    profile.push_str(&format!("  (subpath {})\n", quoted(cwd)));
+    profile.push_str(&format!("  (subpath {})\n", quoted(tempdir)));
+    if let Some(login_file) = login_file {
+        profile.push_str(&format!("  (literal {})\n", quoted(login_file)));
+    }
+    profile.push_str(concat!(
+        "  (literal \"/dev/null\")\n",
+        "  (literal \"/dev/zero\")\n",
+        "  (literal \"/dev/tty\")\n",
+        "  (regex #\"^/dev/ttys[0-9]+$\")\n",
+        "  (literal \"/dev/dtracehelper\"))\n",
+        "(deny network*)\n",
+    ));
+    if let Some(port) = port {
+        profile.push_str(&format!(
+            "(allow network-outbound (remote tcp \"localhost:{port}\"))\n"
+        ));
+    }
+    profile
+}
+
+pub fn write_seatbelt_profile(
+    cwd: &Path,
+    tempdir: &Path,
+    login_file: Option<&Path>,
+    port: Option<&str>,
+) -> std::io::Result<()> {
+    let profile = seatbelt_profile(
+        &std::fs::canonicalize(cwd)?,
+        &std::fs::canonicalize(tempdir)?,
+        login_file,
+        port,
+    );
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(tempdir.join(SEATBELT_FILE))?
+        .write_all(profile.as_bytes())
+}
+
+pub fn wrap_seatbelt(tempdir: &Path, argv: &[String]) -> Vec<String> {
+    let mut wrapped = vec![
+        SANDBOX_EXEC.to_string(),
+        "-f".to_string(),
+        tempdir.join(SEATBELT_FILE).to_string_lossy().into_owned(),
+    ];
+    wrapped.extend(argv.iter().cloned());
+    wrapped
+}
+
+pub fn wrapper_failure(
+    kind: SandboxKind,
+    exit_code: Option<i32>,
+    stderr_tail: &str,
+) -> Option<String> {
+    let prefix = match kind {
+        SandboxKind::Bubblewrap => BWRAP_PREFIX,
+        SandboxKind::Seatbelt => SANDBOX_EXEC_PREFIX,
+        SandboxKind::Codex | SandboxKind::None => return None,
+    };
     if exit_code == Some(0) {
         return None;
     }
     stderr_tail
         .lines()
-        .find_map(|line| line.strip_prefix(BWRAP_PREFIX))
+        .find_map(|line| line.strip_prefix(prefix))
         .map(|rest| format!("sandbox failed to start: {rest}"))
 }
 
@@ -380,14 +487,152 @@ mod tests {
         assert_eq!(
             failure_reason(
                 Some(1),
-                "\n  \nbwrap: No permissions to create new namespace\nbwrap: second\n"
+                "\n  \nbwrap: No permissions to create new namespace\nbwrap: second\n",
+                BWRAP_PREFIX
             ),
             "No permissions to create new namespace"
         );
-        assert_eq!(failure_reason(Some(1), "plain error\n"), "plain error");
-        assert_eq!(failure_reason(Some(3), ""), "exited with code 3");
-        assert_eq!(failure_reason(Some(3), " \n\t\n"), "exited with code 3");
-        assert_eq!(failure_reason(None, ""), "terminated by a signal");
+        assert_eq!(
+            failure_reason(
+                Some(65),
+                "sandbox-exec: sandbox_apply: Operation not permitted\n",
+                SANDBOX_EXEC_PREFIX
+            ),
+            "sandbox_apply: Operation not permitted"
+        );
+        assert_eq!(
+            failure_reason(Some(1), "bwrap: kept\n", SANDBOX_EXEC_PREFIX),
+            "bwrap: kept"
+        );
+        assert_eq!(
+            failure_reason(Some(1), "plain error\n", BWRAP_PREFIX),
+            "plain error"
+        );
+        assert_eq!(
+            failure_reason(Some(3), "", BWRAP_PREFIX),
+            "exited with code 3"
+        );
+        assert_eq!(
+            failure_reason(Some(3), " \n\t\n", SANDBOX_EXEC_PREFIX),
+            "exited with code 3"
+        );
+        assert_eq!(
+            failure_reason(None, "", SANDBOX_EXEC_PREFIX),
+            "terminated by a signal"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn seatbelt_is_available_on_macos_and_codex_uses_its_own() {
+        let signals = Signals::install();
+        let session = Session::assemble(Runtime::Pi, &[], &[], &[], &[]);
+        for runtime in [Runtime::Pi, Runtime::ClaudeCode] {
+            let sandbox =
+                check(SandboxMode::On, runtime, &session, Path::new("/"), &signals).unwrap();
+            assert_eq!(sandbox.kind, SandboxKind::Seatbelt);
+            assert_eq!(sandbox.bwrap, None);
+            assert_eq!(sandbox.socat, None);
+            let description = &sandbox.description;
+            let millis = description
+                .strip_prefix("seatbelt (/usr/bin/sandbox-exec, check ")
+                .and_then(|rest| rest.strip_suffix("ms)"))
+                .unwrap_or_else(|| panic!("{description}"));
+            assert!(millis.parse::<u128>().unwrap() < 5000, "{description}");
+        }
+        let codex = check(
+            SandboxMode::On,
+            Runtime::Codex,
+            &session,
+            Path::new("/"),
+            &signals,
+        )
+        .unwrap();
+        assert_eq!(codex.kind, SandboxKind::Codex);
+        assert_eq!(codex.description, "codex");
+    }
+
+    #[test]
+    fn seatbelt_profile_allows_writes_to_the_given_paths_and_the_proxy_port() {
+        let profile = seatbelt_profile(
+            Path::new("/private/var/work"),
+            Path::new("/private/tmp/agentrun-x"),
+            Some(Path::new("/Users/me/.pi/agent/auth.json")),
+            Some("41234"),
+        );
+        assert_eq!(
+            profile,
+            concat!(
+                "(version 1)\n",
+                "(allow default)\n",
+                "(deny file-write*)\n",
+                "(allow file-write*\n",
+                "  (subpath \"/private/var/work\")\n",
+                "  (subpath \"/private/tmp/agentrun-x\")\n",
+                "  (literal \"/Users/me/.pi/agent/auth.json\")\n",
+                "  (literal \"/dev/null\")\n",
+                "  (literal \"/dev/zero\")\n",
+                "  (literal \"/dev/tty\")\n",
+                "  (regex #\"^/dev/ttys[0-9]+$\")\n",
+                "  (literal \"/dev/dtracehelper\"))\n",
+                "(deny network*)\n",
+                "(allow network-outbound (remote tcp \"localhost:41234\"))\n",
+            )
+        );
+    }
+
+    #[test]
+    fn seatbelt_profile_without_login_file_or_port_and_with_quotes_in_paths() {
+        let profile = seatbelt_profile(Path::new("/work/a\"b"), Path::new("/tmp/c\\d"), None, None);
+        assert!(
+            profile.contains("  (subpath \"/work/a\\\"b\")\n  (subpath \"/tmp/c\\\\d\")\n  (literal \"/dev/null\")\n"),
+            "{profile}"
+        );
+        assert!(!profile.contains("auth.json"), "{profile}");
+        assert!(profile.ends_with("(deny network*)\n"), "{profile}");
+    }
+
+    #[test]
+    fn written_seatbelt_profile_uses_real_paths_and_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(root.path()).unwrap();
+        let work = real.join("work");
+        let session = real.join("session");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir(&session).unwrap();
+        std::os::unix::fs::symlink(&work, real.join("work-link")).unwrap();
+        std::os::unix::fs::symlink(&session, real.join("session-link")).unwrap();
+        write_seatbelt_profile(
+            &real.join("work-link"),
+            &real.join("session-link"),
+            None,
+            Some("7"),
+        )
+        .unwrap();
+        let path = session.join("seatbelt.sb");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            seatbelt_profile(&work, &session, None, Some("7"))
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn seatbelt_wrapper_runs_the_command_after_the_profile() {
+        assert_eq!(
+            wrap_seatbelt(Path::new("<tempdir>"), &strings(&["/opt/bin/pi", "-p"])),
+            strings(&[
+                "/usr/bin/sandbox-exec",
+                "-f",
+                "<tempdir>/seatbelt.sb",
+                "/opt/bin/pi",
+                "-p"
+            ])
+        );
     }
 
     #[test]
@@ -556,16 +801,47 @@ mod tests {
 
     #[test]
     fn wrapper_failure_needs_nonzero_exit_and_bwrap_line() {
+        let bwrap = SandboxKind::Bubblewrap;
         assert_eq!(
-            wrapper_failure(Some(1), "noise\nbwrap: Can't mkdir /x: Permission denied\n"),
+            wrapper_failure(
+                bwrap,
+                Some(1),
+                "noise\nbwrap: Can't mkdir /x: Permission denied\n"
+            ),
             Some("sandbox failed to start: Can't mkdir /x: Permission denied".to_string())
         );
         assert_eq!(
-            wrapper_failure(None, "bwrap: setting up uid map: Permission denied"),
+            wrapper_failure(bwrap, None, "bwrap: setting up uid map: Permission denied"),
             Some("sandbox failed to start: setting up uid map: Permission denied".to_string())
         );
-        assert_eq!(wrapper_failure(Some(0), "bwrap: ignored"), None);
-        assert_eq!(wrapper_failure(Some(1), "pi: something else\n"), None);
-        assert_eq!(wrapper_failure(Some(1), " bwrap: indented\n"), None);
+        assert_eq!(wrapper_failure(bwrap, Some(0), "bwrap: ignored"), None);
+        assert_eq!(
+            wrapper_failure(bwrap, Some(1), "pi: something else\n"),
+            None
+        );
+        assert_eq!(wrapper_failure(bwrap, Some(1), " bwrap: indented\n"), None);
+        assert_eq!(
+            wrapper_failure(bwrap, Some(1), "sandbox-exec: not this one\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn wrapper_failure_on_macos_looks_for_sandbox_exec_lines() {
+        let seatbelt = SandboxKind::Seatbelt;
+        assert_eq!(
+            wrapper_failure(
+                seatbelt,
+                Some(65),
+                "noise\nsandbox-exec: unbound variable: x\n"
+            ),
+            Some("sandbox failed to start: unbound variable: x".to_string())
+        );
+        assert_eq!(wrapper_failure(seatbelt, Some(0), "sandbox-exec: x"), None);
+        assert_eq!(wrapper_failure(seatbelt, Some(1), "bwrap: x\n"), None);
+        for kind in [SandboxKind::Codex, SandboxKind::None] {
+            assert_eq!(wrapper_failure(kind, Some(1), "bwrap: x\n"), None);
+            assert_eq!(wrapper_failure(kind, Some(1), "sandbox-exec: x\n"), None);
+        }
     }
 }
