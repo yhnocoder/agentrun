@@ -117,8 +117,9 @@ fn probe(
 
 #[cfg(target_os = "linux")]
 mod bubblewrap {
+    use std::ffi::OsStr;
     use std::io::Read;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -126,13 +127,13 @@ mod bubblewrap {
     use super::{Available, CHECK_TIMEOUT, Unavailable, failure_reason};
     use crate::cli::Runtime;
     use crate::event::SandboxKind;
-    use crate::session::{Session, find_executable};
+    use crate::session::{Session, find_executable, is_executable};
     use crate::signal::Signals;
 
     const CHECK_POLL: Duration = Duration::from_millis(10);
     const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
-    const CANNOT_START_HINT: &str =
-        "bwrap cannot create a sandbox here. In a docker container use --sandbox off";
+    const CODEX_INSTALL_HINT: &str = "Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off";
+    const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
 
     pub(super) fn probe(
         runtime: Runtime,
@@ -140,25 +141,32 @@ mod bubblewrap {
         cwd: &Path,
         signals: &Signals,
     ) -> Result<Available, Unavailable> {
+        let missing = |name: &str, hint: &'static str| Unavailable {
+            reason: format!("{name} not found in PATH"),
+            hint,
+        };
         if runtime == Runtime::Codex {
+            let bwrap = find_executable_outside("bwrap", &session.path, cwd)
+                .ok_or_else(|| missing("bwrap", CODEX_INSTALL_HINT))?;
+            let started = Instant::now();
+            check_bwrap(&bwrap, session, cwd, signals)?;
             return Ok(Available {
                 kind: SandboxKind::Codex,
-                bwrap: None,
+                description: format!(
+                    "codex (bubblewrap {}, check {}ms)",
+                    bwrap.display(),
+                    started.elapsed().as_millis()
+                ),
+                bwrap: Some(bwrap),
                 socat: None,
-                description: "codex".to_string(),
             });
         }
-        let missing = |name: &str| Unavailable {
-            reason: format!("{name} not found in PATH"),
-            hint: INSTALL_HINT,
-        };
-        let bwrap = find_executable("bwrap", &session.path, cwd).ok_or_else(|| missing("bwrap"))?;
-        let socat = find_executable("socat", &session.path, cwd).ok_or_else(|| missing("socat"))?;
+        let bwrap = find_executable("bwrap", &session.path, cwd)
+            .ok_or_else(|| missing("bwrap", INSTALL_HINT))?;
+        let socat = find_executable("socat", &session.path, cwd)
+            .ok_or_else(|| missing("socat", INSTALL_HINT))?;
         let started = Instant::now();
-        start_bwrap(&bwrap, session, cwd, signals).map_err(|reason| Unavailable {
-            reason: format!("bwrap cannot start: {reason}"),
-            hint: CANNOT_START_HINT,
-        })?;
+        check_bwrap(&bwrap, session, cwd, signals)?;
         Ok(Available {
             kind: SandboxKind::Bubblewrap,
             description: format!(
@@ -170,6 +178,28 @@ mod bubblewrap {
             bwrap: Some(bwrap),
             socat: Some(socat),
         })
+    }
+
+    fn check_bwrap(
+        bwrap: &Path,
+        session: &Session,
+        cwd: &Path,
+        signals: &Signals,
+    ) -> Result<(), Unavailable> {
+        start_bwrap(bwrap, session, cwd, signals).map_err(|reason| Unavailable {
+            reason: format!("bwrap cannot start: {reason}"),
+            hint: CANNOT_START_HINT,
+        })
+    }
+
+    pub(super) fn find_executable_outside(name: &str, path: &OsStr, cwd: &Path) -> Option<PathBuf> {
+        let cwd = std::path::absolute(cwd).ok()?;
+        std::env::split_paths(path)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .filter_map(|dir| std::path::absolute(cwd.join(dir)).ok())
+            .filter(|dir| !dir.starts_with(&cwd))
+            .map(|dir| dir.join(name))
+            .find(|candidate| is_executable(candidate))
     }
 
     fn start_bwrap(
@@ -188,6 +218,7 @@ mod bubblewrap {
                 "--proc",
                 "/proc",
                 "--die-with-parent",
+                "--unshare-net",
                 "--",
                 "/bin/true",
             ])
@@ -454,17 +485,47 @@ mod tests {
             relaxed.description,
             "none (--sandbox relax: bwrap not found in PATH)"
         );
-        let codex = check(
-            SandboxMode::On,
-            Runtime::Codex,
-            &session,
-            Path::new("/"),
-            &signals,
-        )
-        .unwrap();
-        assert_eq!(codex.kind, SandboxKind::Codex);
-        assert_eq!(codex.description, "codex");
-        assert!(codex.runs());
+        assert_eq!(
+            check(
+                SandboxMode::On,
+                Runtime::Codex,
+                &session,
+                Path::new("/"),
+                &signals
+            ),
+            Err(
+                "sandbox is not available: bwrap not found in PATH. Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off"
+                    .to_string()
+            )
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn codex_ignores_bwrap_inside_the_working_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        let inside = work.join("bin");
+        let outside = root.path().join("bin");
+        for dir in [&inside, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+            let file = dir.join("bwrap");
+            std::fs::write(&file, "#!/bin/sh\nexit 1\n").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path =
+            std::env::join_paths(["bin", inside.to_str().unwrap(), outside.to_str().unwrap()])
+                .unwrap();
+        assert_eq!(
+            bubblewrap::find_executable_outside("bwrap", &path, &work),
+            Some(outside.join("bwrap"))
+        );
+        let only_inside = std::env::join_paths(["bin"]).unwrap();
+        assert_eq!(
+            bubblewrap::find_executable_outside("bwrap", &only_inside, &work),
+            None
+        );
     }
 
     #[test]
