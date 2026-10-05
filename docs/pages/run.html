@@ -104,9 +104,9 @@ removed: (none)</div>
 <div class="term"><span class="prompt">$</span> agentrun doctor
 [ok]   claude-code  executable  /usr/local/bin/claude
 [ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
-<span class="warn">[fail] claude-code  sandbox     bwrap cannot start: no user namespaces. In a docker container use --sandbox off</span>
+<span class="warn">[fail] claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</span>
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
-<span class="warn">[fail] pi           sandbox     bwrap cannot start: no user namespaces. In a docker container use --sandbox off</span>
+<span class="warn">[fail] pi           sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</span>
 <span class="dim">...</span></div>
 
 <h2 id="exit-codes">退出码</h2>
@@ -327,6 +327,7 @@ removed: (none)</div>
 <p><code>denied</code> 恒为 false。codex 的输出里没有 subagent 的启动事件，也没有 subagent 自己的命令与文件改动，只有主 agent 等待 subagent 的 <code>collab_tool_call</code>（<code>tool</code> 为 <code>wait</code>，codex 0.159.2 实测）。所以 codex 不输出 <code>subagent_start</code> 与 <code>subagent_end</code>，<code>parent</code> 全部为 null。</p>
 <h3>失败判定</h3>
 <ol>
+  <li>Linux 上沙箱运行时，有 <code>command_execution</code> 的 <code>aggregated_output</code> 以 <code>bwrap: </code> 开头：detail 为 <code>sandbox failed to start: </code> 加这一行去掉 <code>bwrap: </code> 的部分。启动前检查已经覆盖已知的失败情况，这一条是附加信号：codex 的沙箱启动失败时仍以退出码 0 结束并输出 <code>turn.completed</code>，只有命令的输出里有 <code>bwrap</code> 的报错；模型改用 <code>file_change</code> 写文件时连这条报错也没有（codex 0.160.0 实测）。</li>
   <li><code>turn.failed</code>：取最后一个的 <code>error.message</code> 前 500 个字符。</li>
   <li>没有 <code>turn.completed</code> 时的 <code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。codex 重试连接时也输出 <code>error</code>，重试成功后照常完成，所以有 <code>turn.completed</code> 时不看 <code>error</code>。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。</li>
@@ -334,7 +335,7 @@ removed: (none)</div>
 </ol>
 <table>
   <thead>
-    <tr><th>实测情况（codex 0.159.2，macOS）</th><th>退出码</th><th>输出</th></tr>
+    <tr><th>实测情况（未注明的为 codex 0.159.2，macOS）</th><th>退出码</th><th>输出</th></tr>
   </thead>
   <tbody>
     <tr><td>正常完成</td><td>0</td><td>以 <code>turn.completed</code> 结束</td></tr>
@@ -343,6 +344,8 @@ removed: (none)</div>
     <tr><td>未知选项</td><td>2</td><td>没有事件；标准错误 <code>error: unexpected argument ...</code></td></tr>
     <tr><td>SIGINT</td><td>1</td><td>最后是 <code>item.completed</code>，没有 <code>turn.completed</code></td></tr>
     <tr><td>SIGTERM</td><td>143</td><td>同上</td></tr>
+    <tr><td>SIGTERM（codex 0.160.0，Linux）</td><td>0</td><td>同上</td></tr>
+    <tr><td>沙箱启动失败（codex 0.160.0，本机 Linux 未放行 AppArmor 与 docker 默认权限）</td><td>0</td><td>以 <code>turn.completed</code> 结束，没有 <code>error</code> 与 <code>turn.failed</code>；失败的 <code>command_execution</code> 的 <code>aggregated_output</code> 是 <code>bwrap: </code> 开头的报错</td></tr>
   </tbody>
 </table>
 </main>

@@ -225,7 +225,7 @@ pub fn find_executable(name: &str, path: &OsStr, cwd: &Path) -> Option<PathBuf> 
         .and_then(|candidate| std::path::absolute(candidate).ok())
 }
 
-fn is_executable(path: &Path) -> bool {
+pub fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)

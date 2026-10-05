@@ -277,6 +277,7 @@ fn runtime_missing_from_path_is_rejected() {
 }
 
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
+const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
 const ADAPTER_MISSING: &str = "codex support is not implemented in this build";
 
 #[test]
@@ -322,12 +323,40 @@ fn bwrap_that_cannot_start_is_rejected_with_its_message() {
     env.install("socat", "#!/bin/sh\nexit 0\n");
     assert_eq!(
         assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
-        "sandbox is not available: bwrap cannot start: No permissions to create new namespace. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+        format!(
+            "sandbox is not available: bwrap cannot start: No permissions to create new namespace. {CANNOT_START_HINT}"
+        )
     );
     env.install("bwrap", "#!/bin/sh\nexit 3\n");
     assert_eq!(
         assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
-        "sandbox is not available: bwrap cannot start: exited with code 3. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+        format!(
+            "sandbox is not available: bwrap cannot start: exited with code 3. {CANNOT_START_HINT}"
+        )
+    );
+}
+
+#[test]
+fn codex_is_rejected_when_bwrap_cannot_start_and_needs_no_socat() {
+    let env = Env::with_fake_codex();
+    let work = env.root.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let args = ["codex", "--cwd", work.to_str().unwrap(), "--prompt", "hi"];
+    env.install(
+        "bwrap",
+        "#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n",
+    );
+    assert_eq!(
+        assert_rejected(&env.run(&args)),
+        format!(
+            "sandbox is not available: bwrap cannot start: setting up uid map: Permission denied. {CANNOT_START_HINT}"
+        )
+    );
+    env.install("bwrap", "#!/bin/sh\nexit 0\n");
+    assert_eq!(assert_rejected(&env.run(&args)), ADAPTER_MISSING);
+    assert_eq!(
+        assert_rejected(&env.run(&["codex", "--prompt", "hi"])),
+        "sandbox is not available: bwrap not found in PATH. Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off"
     );
 }
 
@@ -342,7 +371,9 @@ fn bwrap_that_hangs_is_killed_after_five_seconds() {
     assert!((4.5..9.0).contains(&elapsed), "took {elapsed:.2}s");
     assert_eq!(
         detail,
-        "sandbox is not available: bwrap cannot start: timed out after 5 seconds. bwrap cannot create a sandbox here. In a docker container use --sandbox off"
+        format!(
+            "sandbox is not available: bwrap cannot start: timed out after 5 seconds. {CANNOT_START_HINT}"
+        )
     );
 }
 
