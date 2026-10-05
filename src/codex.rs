@@ -16,7 +16,7 @@ use crate::usage::TokenCounts;
 pub const HOME_VARIABLE: &str = "CODEX_HOME";
 pub const HOME_SUBDIR: &str = ".codex";
 pub const HOME_SUFFIX: &str = "-codex";
-const LOGIN_FILE: &str = "auth.json";
+pub const LOGIN_FILE: &str = "auth.json";
 pub const SERVICE_HOSTS: [&str; 4] = [
     "chatgpt.com",
     "ab.chatgpt.com",

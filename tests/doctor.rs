@@ -21,6 +21,7 @@ use tempfile::TempDir;
 
 const CLAUDE_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s\\n' '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'; exit 0; fi\nexit 0\n";
 const PI_DEEPSEEK: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"system\"}}'\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"deepseek-flash\"}}'\n/bin/sleep 30\n";
+const PI_UNKNOWN_MODEL: &str = "#!/bin/sh\necho 'Warning: Model \"no-such-model\" not found for provider \"deepseek\". Using custom model id.' >&2\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"no-such-model\"}}'\n/bin/sleep 30\n";
 const CODEX_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = sandbox ]; then while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"; fi\nexit 0\n";
 
 struct Env {
@@ -341,10 +342,7 @@ fn codex_login_needs_the_login_file_and_reads_login_status() {
         .unwrap_or_else(|| panic!("{debug}"));
     assert!(kept.starts_with(env.tmp().join("agentrun-doctor-").to_str().unwrap()));
     let home = PathBuf::from(kept).join("codex-home");
-    assert_eq!(
-        std::fs::read_link(home.join("auth.json")).unwrap(),
-        env.home().join(".codex/auth.json")
-    );
+    assert!(std::fs::symlink_metadata(home.join("auth.json")).is_err());
     assert_eq!(
         std::fs::metadata(&home).unwrap().permissions().mode() & 0o777,
         0o700
@@ -404,6 +402,19 @@ fn pi_login_compares_the_chosen_model() {
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[fail] pi           login       pi uses deepseek/deepseek-flash, expected anthropic/claude-sonnet-4-5 (from --model). Check the API key for anthropic"
+    );
+    env.install("pi", PI_UNKNOWN_MODEL);
+    let output = env.run(&[
+        "pi",
+        "--sandbox",
+        "off",
+        "--model",
+        "deepseek/no-such-model",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        line_for(&stdout_lines(&output), "pi", "login"),
+        "[fail] pi           login       pi does not know deepseek/no-such-model (from --model): Warning: Model \"no-such-model\" not found for provider \"deepseek\". Using custom model id."
     );
     env.install(
         "pi",

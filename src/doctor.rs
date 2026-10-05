@@ -46,6 +46,8 @@ const INSIDE_FILE: &str = "inside.txt";
 const OUTSIDE_FILE: &str = "outside.txt";
 const CODEX_HOME_DIR: &str = "codex-home";
 const PI_LOGIN_DIR: &str = "pi-login";
+const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
+const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
 const SERVICE_PORT: u16 = 443;
 const DENIED_HOST: &str = "doctor-check.invalid";
 const PRIVATE_HOST: &str = "169.254.169.254";
@@ -225,6 +227,7 @@ pub fn run(caller: Caller, args: DoctorArgs, timeout: Duration) -> u8 {
         write_json(&caller.stdout, &items);
     }
     if args.debug {
+        remove_login_links(tempdir.path());
         caller.print_error_line(&format!("[debug] kept {}", tempdir.path().display()));
         let _ = tempdir.keep();
     }
@@ -655,9 +658,13 @@ impl Doctor {
             .iter()
             .find_map(|line| assistant_start(line));
         match chosen {
-            Some(actual) if actual == expected => {
-                Ok(format!("{}/{} ({source})", actual.provider, actual.model))
-            }
+            Some(actual) if actual == expected => match unknown_model_warning(&finished) {
+                Some(warning) => Err(format!(
+                    "pi does not know {}/{} ({source}): {warning}",
+                    actual.provider, actual.model
+                )),
+                None => Ok(format!("{}/{} ({source})", actual.provider, actual.model)),
+            },
             Some(actual) => Err(format!(
                 "pi uses {}/{}, expected {}/{} ({source}). Check the API key for {}",
                 actual.provider, actual.model, expected.provider, expected.model, expected.provider
@@ -1094,6 +1101,27 @@ impl Doctor {
             }
         }
         detail
+    }
+}
+
+fn unknown_model_warning(finished: &Finished) -> Option<&str> {
+    finished.stderr.lines().map(str::trim).find(|line| {
+        line.starts_with(PI_UNKNOWN_MODEL_PREFIX) && line.contains(PI_UNKNOWN_MODEL_TEXT)
+    })
+}
+
+fn remove_login_links(tempdir: &Path) {
+    let links = [
+        tempdir.join(CODEX_HOME_DIR).join(codex::LOGIN_FILE),
+        tempdir
+            .join(PI_LOGIN_DIR)
+            .join(pi::PRIVATE_STATE_DIR)
+            .join(pi::LOGIN_FILE),
+    ];
+    for link in links {
+        if std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink()) {
+            let _ = std::fs::remove_file(&link);
+        }
     }
 }
 

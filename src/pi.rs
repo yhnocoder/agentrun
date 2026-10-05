@@ -30,8 +30,8 @@ const SERVICE_HOSTS: [(&str, &str); 5] = [
 ];
 const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
-const PRIVATE_STATE_DIR: &str = "pi-agent";
-const LOGIN_FILE: &str = "auth.json";
+pub const PRIVATE_STATE_DIR: &str = "pi-agent";
+pub const LOGIN_FILE: &str = "auth.json";
 const MODELS_FILE: &str = "models.json";
 pub const SETTINGS_FILE: &str = "settings.json";
 const BIN_DIR: &str = "bin";
