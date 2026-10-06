@@ -9,16 +9,16 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::process_tree;
 use super::signal::Signals;
 use super::{Caller, Ready, create_raw, elapsed_ms, reject};
 use crate::cli::{Format, Runtime};
 use crate::network::{FilterProxy, Policy};
 use crate::output::{
-    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD, Rich,
-    Signal, Start, Usage, terminal_size,
+    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD, Record,
+    Rich, Signal, Start, Usage, terminal_size,
 };
-use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Launch, Record, detail_tail};
+use crate::process_tree;
+use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Launch, detail_tail};
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];

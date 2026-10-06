@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::cli::{Runtime, SandboxMode};
 use crate::network::ProxyEndpoint;
 use crate::output::SandboxKind;
-use crate::run::{Signals, wait_for_exit};
+use crate::process_tree::wait_for_exit;
 use crate::session::Session;
 #[cfg(target_os = "linux")]
 use bubblewrap::probe;
@@ -94,7 +94,7 @@ pub(crate) fn check(
     runtime: Runtime,
     session: &Session,
     cwd: &Path,
-    signals: &Signals,
+    checking: &dyn Fn(Option<i32>),
 ) -> Result<Sandbox, String> {
     if mode == SandboxMode::Off {
         return Ok(Sandbox {
@@ -104,7 +104,7 @@ pub(crate) fn check(
             description: "none (--sandbox off)".to_string(),
         });
     }
-    match probe(runtime, session, cwd, signals) {
+    match probe(runtime, session, cwd, checking) {
         Ok(available) => Ok(Sandbox {
             mode,
             wrapper: available.wrapper,
@@ -130,7 +130,7 @@ fn start_check(
     prefix: &str,
     session: &Session,
     cwd: &Path,
-    signals: &Signals,
+    checking: &dyn Fn(Option<i32>),
 ) -> Result<(), String> {
     let mut child = Command::new(program)
         .args(args)
@@ -143,7 +143,7 @@ fn start_check(
         .spawn()
         .map_err(|error| error.to_string())?;
     let pid = child.id() as i32;
-    signals.checking(Some(pid));
+    checking(Some(pid));
     let mut stderr = child.stderr.take().expect("stderr is piped");
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -154,7 +154,7 @@ fn start_check(
     if !exited {
         let _ = child.kill();
     }
-    signals.checking(None);
+    checking(None);
     let status = child.wait().map_err(|error| error.to_string())?;
     if !exited {
         return Err(format!(
@@ -392,11 +392,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn seatbelt_is_available_on_macos_and_codex_uses_its_own() {
-        let signals = Signals::install();
         let session = Session::assemble(Runtime::Pi, &[], &[], &[], &[]);
         for runtime in [Runtime::Pi, Runtime::ClaudeCode] {
             let sandbox =
-                check(SandboxMode::On, runtime, &session, Path::new("/"), &signals).unwrap();
+                check(SandboxMode::On, runtime, &session, Path::new("/"), &|_| {}).unwrap();
             assert_eq!(sandbox.wrapper, Wrapper::Seatbelt);
             let description = &sandbox.description;
             let millis = description
@@ -410,7 +409,7 @@ mod tests {
             Runtime::Codex,
             &session,
             Path::new("/"),
-            &signals,
+            &|_| {},
         )
         .unwrap();
         assert_eq!(codex.wrapper, Wrapper::Codex);
@@ -565,14 +564,13 @@ mod tests {
 
     #[test]
     fn off_mode_skips_the_check() {
-        let signals = Signals::install();
         let session = Session::assemble(Runtime::Pi, &[], &[], &[], &[]);
         let sandbox = check(
             SandboxMode::Off,
             Runtime::Pi,
             &session,
             Path::new("/"),
-            &signals,
+            &|_| {},
         )
         .unwrap();
         assert_eq!(
@@ -590,7 +588,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn missing_bwrap_rejects_on_and_passes_relax() {
-        let signals = Signals::install();
         let session = Session::assemble(
             Runtime::ClaudeCode,
             &pairs(&[("PATH", "/nonexistent")]),
@@ -604,7 +601,7 @@ mod tests {
                 Runtime::ClaudeCode,
                 &session,
                 Path::new("/"),
-                &signals
+                &|_| {}
             ),
             Err(
                 "sandbox is not available: bwrap not found in PATH. Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off"
@@ -616,7 +613,7 @@ mod tests {
             Runtime::ClaudeCode,
             &session,
             Path::new("/"),
-            &signals,
+            &|_| {},
         )
         .unwrap();
         assert_eq!(relaxed.wrapper, Wrapper::None);
@@ -631,7 +628,7 @@ mod tests {
                 Runtime::Codex,
                 &session,
                 Path::new("/"),
-                &signals
+                &|_| {}
             ),
             Err(
                 "sandbox is not available: bwrap not found in PATH. Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off"

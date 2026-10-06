@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record, detail_head};
+use super::{Adapter, Invocation, Launch, detail_head};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
-use crate::output::TokenCounts;
+use crate::output::{Record, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 

@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record, detail_head};
+use super::{Adapter, Invocation, Launch, detail_head};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
-use crate::output::{SandboxKind, TokenCounts};
+use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{self, PiState, wrapper_failure};
 use crate::session::Session;
 

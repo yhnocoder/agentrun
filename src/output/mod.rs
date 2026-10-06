@@ -8,7 +8,7 @@ use std::io::Write;
 
 use crate::cli::{Format, SandboxMode};
 
-pub use aggregate::Aggregator;
+pub use aggregate::{Aggregator, Record};
 pub use event::{Event, Network, NetworkReason, SandboxKind, SubagentStatus};
 pub use rich::Rich;
 pub use text::TextFormatter;

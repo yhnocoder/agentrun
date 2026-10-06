@@ -19,7 +19,8 @@ use crate::network::{
     proxy_environment,
 };
 use crate::output::{Network, NetworkReason, Signal};
-use crate::run::{Caller, create_tempdir, kill_group_members, shell_quote, wait_for_exit};
+use crate::process_tree::{kill_group_members, wait_for_exit};
+use crate::run::{Caller, create_tempdir, shell_quote};
 use crate::runtime::codex;
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{Adapter, Invocation};
@@ -690,27 +691,24 @@ impl Doctor {
             );
             return None;
         }
-        let sandbox = match sandbox::check(
-            target.mode,
-            runtime,
-            &target.session,
-            &self.cwd,
-            &self.caller.signals,
-        ) {
-            Ok(sandbox) if sandbox.runs() => sandbox,
-            Ok(sandbox) => {
-                self.record(runtime, Check::Sandbox, Status::Skip, sandbox.reason);
-                return None;
-            }
-            Err(detail) => {
-                let detail = detail
-                    .strip_prefix(UNAVAILABLE_PREFIX)
-                    .unwrap_or(&detail)
-                    .to_string();
-                self.record(runtime, Check::Sandbox, Status::Fail, detail);
-                return None;
-            }
-        };
+        let sandbox =
+            match sandbox::check(target.mode, runtime, &target.session, &self.cwd, &|pid| {
+                self.caller.signals.checking(pid)
+            }) {
+                Ok(sandbox) if sandbox.runs() => sandbox,
+                Ok(sandbox) => {
+                    self.record(runtime, Check::Sandbox, Status::Skip, sandbox.reason);
+                    return None;
+                }
+                Err(detail) => {
+                    let detail = detail
+                        .strip_prefix(UNAVAILABLE_PREFIX)
+                        .unwrap_or(&detail)
+                        .to_string();
+                    self.record(runtime, Check::Sandbox, Status::Fail, detail);
+                    return None;
+                }
+            };
         let result = match (runtime, executable) {
             (Runtime::Codex, None) => Err("executable not found".to_string()),
             _ => self.sandbox_test(target, executable, &sandbox),

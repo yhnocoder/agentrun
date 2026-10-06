@@ -1,5 +1,4 @@
 mod execute;
-mod process_tree;
 mod signal;
 
 use std::ffi::{OsStr, OsString};
@@ -29,10 +28,7 @@ use execute::execute;
 use signal::SharedWriter;
 
 pub use execute::{Exit, Translated, conclude, stderr_tail, translate_line};
-pub use process_tree::claim_orphans;
 pub use signal::Signals;
-
-pub(crate) use process_tree::{kill_group_members, wait_for_exit};
 
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
 const TEMPDIR_PREFIX: &str = "agentrun-";
@@ -292,7 +288,9 @@ fn prepare(
     let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;
     let executable = find_executable(runtime.executable(), &session.path, &cwd)
         .ok_or_else(|| format!("{} not found in PATH", runtime.executable()))?;
-    let sandbox = sandbox::check(mode, runtime, &session, &cwd, &caller.signals)?;
+    let sandbox = sandbox::check(mode, runtime, &session, &cwd, &|pid| {
+        caller.signals.checking(pid)
+    })?;
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }

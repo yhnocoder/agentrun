@@ -12,7 +12,9 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub use platform::{ForkWatcher, RECORDS_DESCENDANTS, claim_orphans};
+pub use platform::claim_orphans;
+
+pub(crate) use platform::{ForkWatcher, RECORDS_DESCENDANTS};
 
 pub const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
 const REAP_WAIT: Duration = Duration::from_millis(200);

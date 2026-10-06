@@ -3,9 +3,51 @@ use std::time::Instant;
 
 use super::event::{self, Body, Event, SubagentStatus};
 use super::usage::{TokenCounts, Usage};
-use crate::runtime::Record;
 
 const SUMMARY_MAX_CHARS: usize = 120;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Record {
+    PromptEcho {
+        text: String,
+    },
+    ToolStart {
+        id: String,
+        parent: Option<String>,
+        name: String,
+        summary: String,
+    },
+    ToolEnd {
+        id: String,
+        denied: bool,
+    },
+    SubagentStart {
+        id: String,
+        parent: Option<String>,
+        kind: String,
+        model: Option<String>,
+        description: String,
+    },
+    SubagentEnd {
+        id: String,
+        status: SubagentStatus,
+    },
+    Text {
+        parent: Option<String>,
+        text: String,
+    },
+    Usage {
+        parent: Option<String>,
+        model: Option<String>,
+        counts: TokenCounts,
+    },
+    RunUsage(Usage),
+    Result {
+        text: String,
+    },
+    Debug(String),
+    Terminate,
+}
 
 pub struct Aggregator {
     echoes_prompt: bool,

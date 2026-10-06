@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator;
 
-use super::process_tree::{
+use crate::cli::{Format, SandboxMode};
+use crate::output::{Body, End, EndStatus, Event, Output, Signal, Usage};
+use crate::process_tree::{
     self, ForkWatcher, PROC_ROOT, ProcessTable, RECORDS_DESCENDANTS, Recorded, SNAPSHOT_PERIOD,
     wrapped_child,
 };
-use crate::cli::{Format, SandboxMode};
-use crate::output::{Body, End, EndStatus, Event, Output, Signal, Usage};
 
 const GRACE_PERIOD: Duration = Duration::from_secs(5);
 

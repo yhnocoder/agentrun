@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::cli::{Format, RunArgs, Runtime};
 use crate::network::{HostRule, ProxyEndpoint};
-use crate::output::{SubagentStatus, TokenCounts, Usage};
+use crate::output::Record;
 use crate::sandbox::Sandbox;
 use crate::session::Session;
 use claudecode::ClaudeCode;
@@ -65,49 +65,6 @@ pub struct Launch {
     pub env: Vec<(OsString, OsString)>,
     pub signal_wrapped_child: bool,
     pub service_hosts: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Record {
-    PromptEcho {
-        text: String,
-    },
-    ToolStart {
-        id: String,
-        parent: Option<String>,
-        name: String,
-        summary: String,
-    },
-    ToolEnd {
-        id: String,
-        denied: bool,
-    },
-    SubagentStart {
-        id: String,
-        parent: Option<String>,
-        kind: String,
-        model: Option<String>,
-        description: String,
-    },
-    SubagentEnd {
-        id: String,
-        status: SubagentStatus,
-    },
-    Text {
-        parent: Option<String>,
-        text: String,
-    },
-    Usage {
-        parent: Option<String>,
-        model: Option<String>,
-        counts: TokenCounts,
-    },
-    RunUsage(Usage),
-    Result {
-        text: String,
-    },
-    Debug(String),
-    Terminate,
 }
 
 #[cfg(test)]

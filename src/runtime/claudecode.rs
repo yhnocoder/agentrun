@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
-use crate::output::{SubagentStatus, TokenCounts, Usage};
+use crate::output::{Record, SubagentStatus, TokenCounts, Usage};
 
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
