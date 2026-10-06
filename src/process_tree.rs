@@ -51,10 +51,6 @@ impl Recorded {
         }
         new
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.processes.is_empty() && self.groups.is_empty()
-    }
 }
 
 pub struct ProcessTable {
@@ -477,7 +473,6 @@ mod tests {
         write_proc(root.path(), 200, 100, None);
         write_proc(root.path(), 300, 200, None);
         let mut recorded = Recorded::default();
-        assert!(recorded.is_empty());
         let new = recorded.refresh(&ProcessTable::read_proc(root.path()), 100);
         assert_eq!(new, vec![200, 300]);
         assert_eq!(
@@ -494,7 +489,6 @@ mod tests {
             recorded.groups.iter().copied().collect::<Vec<_>>(),
             vec![200, 300, 400]
         );
-        assert!(!recorded.is_empty());
     }
 
     #[test]

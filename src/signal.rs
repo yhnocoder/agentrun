@@ -241,12 +241,6 @@ impl Signals {
         Ok(())
     }
 
-    pub fn format(&self, format: Format) {
-        if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
-            preparation.format = format;
-        }
-    }
-
     pub fn checking(&self, pid: Option<i32>) {
         match &mut self.shared.lock().phase {
             Phase::Preparing(preparation) => preparation.check_pid = pid,

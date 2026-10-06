@@ -221,32 +221,12 @@ pub enum SandboxMode {
     Off,
 }
 
-impl SandboxMode {
-    pub fn name(self) -> &'static str {
-        match self {
-            SandboxMode::On => "on",
-            SandboxMode::Relax => "relax",
-            SandboxMode::Off => "off",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
     None,
     Full,
     Custom,
-}
-
-impl NetworkMode {
-    pub fn name(self) -> &'static str {
-        match self {
-            NetworkMode::None => "none",
-            NetworkMode::Full => "full",
-            NetworkMode::Custom => "custom",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
