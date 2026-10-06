@@ -73,6 +73,12 @@ impl Env {
         env
     }
 
+    pub fn with(name: &str, script: &str) -> Env {
+        let env = Env::new();
+        env.install(name, script);
+        env
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }
@@ -327,6 +333,15 @@ impl Agentrun {
             events: self.events(),
             stderr,
             elapsed,
+        }
+    }
+}
+
+impl Drop for Agentrun {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }

@@ -75,14 +75,8 @@ fn replay_sigint() {
     );
 }
 
-fn with_codex(script: &str) -> Env {
-    let env = Env::new();
-    env.install("codex", script);
-    env
-}
-
 fn with_login(script: &str) -> Env {
-    let env = with_codex(script);
+    let env = Env::with("codex", script);
     write_login(&env);
     env
 }
@@ -257,7 +251,7 @@ fn field(report: &str, name: &str) -> String {
 
 #[test]
 fn private_home_links_the_login_file_and_is_removed_afterwards() {
-    let env = with_codex(REPORTING_CODEX);
+    let env = Env::with("codex", REPORTING_CODEX);
     let login = write_login(&env);
     let output = run(
         &env,
@@ -291,7 +285,7 @@ fn private_home_links_the_login_file_and_is_removed_afterwards() {
 #[test]
 fn codex_auth_variable_is_written_and_linked_into_the_private_home() {
     const VALUE: &str = r#"{"tokens":{"id_token":"codex-credential-5d1e8b"}}"#;
-    let env = with_codex(REPORTING_CODEX);
+    let env = Env::with("codex", REPORTING_CODEX);
     let args = ["--sandbox", "off", "--debug", "--prompt", "hi"];
     let output = command(&env, &args)
         .env("AGENTRUN_CODEX_AUTH", VALUE)
@@ -354,7 +348,7 @@ fn codex_auth_variable_is_written_and_linked_into_the_private_home() {
 
 #[test]
 fn login_file_follows_codex_home_from_the_session_environment() {
-    let env = with_codex(REPORTING_CODEX);
+    let env = Env::with("codex", REPORTING_CODEX);
     let state = env.root().join("state");
     std::fs::create_dir(&state).unwrap();
     std::fs::write(state.join("auth.json"), "{}").unwrap();
@@ -376,7 +370,7 @@ fn login_file_follows_codex_home_from_the_session_environment() {
 
 #[test]
 fn missing_login_file_is_rejected_with_and_without_dry_run() {
-    let env = with_codex(FAKE_CODEX);
+    let env = Env::with("codex", FAKE_CODEX);
     let detail = format!(
         "codex login file {} not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH",
         login(&env).display()
@@ -411,7 +405,7 @@ fn missing_login_file_is_rejected_with_and_without_dry_run() {
 
 #[test]
 fn dry_run_accepts_login_content_without_the_login_file() {
-    let env = with_codex(FAKE_CODEX);
+    let env = Env::with("codex", FAKE_CODEX);
     let output = command(&env, &["--sandbox", "off", "--dry-run", "--prompt", "hi"])
         .env("AGENTRUN_CODEX_AUTH", "{\"tokens\":{}}")
         .output()
