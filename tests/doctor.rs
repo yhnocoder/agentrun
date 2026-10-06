@@ -17,7 +17,8 @@ use agentrun::signal::Signals;
 use clap::Parser;
 use serde_json::Value;
 use support::WebServer;
-use support::env::Env;
+use support::env::{Env, WAIT_LIMIT, poll_until, wait_until};
+use support::process::{describe, process_is_gone};
 
 const CLAUDE_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s\\n' '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'; exit 0; fi\nexit 0\n";
 const PI_DEEPSEEK: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"system\"}}'\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"deepseek-flash\"}}'\n/bin/sleep 30\n";
@@ -821,10 +822,9 @@ fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !marker.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
+    wait_until("the fake pi to write its pid", || {
+        std::fs::read_to_string(&marker).is_ok_and(|text| !text.trim().is_empty())
+    });
     let pi_pid: i32 = std::fs::read_to_string(&marker)
         .unwrap()
         .trim()
@@ -834,14 +834,10 @@ fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
         libc::kill(child.id() as i32, libc::SIGINT);
     }
     let output = child.wait_with_output().unwrap();
-    let gone_deadline = Instant::now() + Duration::from_secs(5);
-    while unsafe { libc::kill(pi_pid, 0) } == 0 && Instant::now() < gone_deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert_ne!(
-        unsafe { libc::kill(pi_pid, 0) },
-        0,
-        "the fake pi is still running"
+    assert!(
+        poll_until(WAIT_LIMIT, || process_is_gone(pi_pid)),
+        "the fake pi is still running: {}",
+        describe(pi_pid)
     );
     std::fs::remove_file(&marker).unwrap();
     output

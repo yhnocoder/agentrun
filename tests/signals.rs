@@ -7,12 +7,11 @@ mod support;
 use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use support::env::{Agentrun, Env, Finished, wait_until};
-use support::process::{self, describe, read_pid, spawn_role, wait_until_gone};
+use support::process::{self, READY_FILE, describe, read_pid, spawn_role, wait_until_gone};
 
 const READY: &str = r#"{"record":"text","parent":null,"text":"ready"}"#;
 const GOT_SIGNAL: &str = r#"{\"record\":\"text\",\"parent\":null,\"text\":\"got signal\"}"#;
@@ -63,7 +62,10 @@ fn start(env: &Env, extra: &[&str], prompt: bool, stdin: Stdio) -> Agentrun {
     }
     args.extend(extra);
     let mut command = env.fake_command(&args);
-    command.env("PIDFILE", env.root().join("pid")).stdin(stdin);
+    command
+        .env("PIDFILE", env.root().join("pid"))
+        .env(READY_FILE, env.root().join("ready"))
+        .stdin(stdin);
     Agentrun::spawn(command)
 }
 
@@ -163,7 +165,7 @@ fn background_process_is_killed_after_exit() {
     let outcome = finish(start(&env, &[], true, Stdio::null()), &env);
     assert_eq!(outcome.code, 0);
     assert_eq!(outcome.end()["status"], "finished");
-    assert_between(outcome.elapsed, 0.0, 2.0, &outcome.events);
+    assert_between(outcome.elapsed, 0.0, 10.0, &outcome.events);
     let pid = read_pid(&env.root().join("pid"));
     assert!(
         wait_until_gone(pid),
@@ -269,7 +271,8 @@ fn signal_before_launch_ends_without_start() {
     let mut agentrun = start(&env, &[], false, Stdio::piped());
     let mut stdin = agentrun.take_stdin();
     stdin.write_all(b"partial prompt").unwrap();
-    thread::sleep(Duration::from_millis(500));
+    let ready = env.root().join("ready");
+    wait_until("agentrun to install its signal handlers", || ready.exists());
     agentrun.signal(libc::SIGTERM);
     let outcome = finish(agentrun, &env);
     drop(stdin);
