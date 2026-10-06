@@ -22,7 +22,7 @@
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
 <h1>测试与发布</h1>
-<p class="lead">改动 agentrun 的代码后怎么证明它还能用：<code>scripts/test.sh</code> 跑哪些检查，<code>tests/</code> 里的文件各负责什么，回放样本从哪里来、怎么更新，验收脚本在四种环境里怎么运行，以及 CI 与 Release 流程。<mark>单元与集成测试不需要任何运行时与账号</mark>，验收脚本需要真实的运行时与登录。</p>
+<p class="lead">改动 agentrun 的代码后怎么证明它还能用：<code>scripts/test.sh</code> 跑哪些检查，<code>tests/</code> 里的文件各负责什么，回放样本从哪里来、怎么更新，以及验收脚本在四种环境里怎么运行。<mark>单元与集成测试不需要任何运行时与账号</mark>，验收脚本需要真实的运行时与登录。</p>
 
 <h2 id="code">代码位置</h2>
 <table>
@@ -30,20 +30,19 @@
     <tr><th>位置</th><th>内容</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>scripts/test.sh</code></td><td>本机与 CI 运行的全部检查</td><td>scripts/test.sh</td></tr>
+    <tr><td><code>scripts/test.sh</code></td><td>提交前运行的全部检查</td><td>scripts/test.sh</td></tr>
     <tr><td><code>scripts/check_comment.py</code></td><td>注释检查，规则见 <code>CLAUDE.md</code>「代码规范」</td><td>scripts/test.sh</td></tr>
     <tr><td><code>scripts/check_docs.py</code></td><td>设计文档的截图与机械检查，改动 <code>docs/</code> 后运行</td><td>scripts/test.sh</td></tr>
     <tr><td><code>tests/*.rs</code>、<code>tests/support/</code></td><td>cargo 集成测试与共用的辅助代码：<code>support/mod.rs</code>（<code>Meta</code>、<code>invocation</code>、<code>replay</code>、<code>assert_replay</code>、<code>WebServer</code>、<code>sandbox_available</code>）、<code>support/fake.rs</code>（<code>FakeAdapter</code>）、<code>support/harness.rs</code>（<code>run_tests</code>）</td><td>tests/ 的分工</td></tr>
     <tr><td><code>tests/fixtures/</code></td><td>回放样本：三个运行时的原始输出与期望的事件流</td><td>回放样本</td></tr>
     <tr><td><code>scripts/probe/</code></td><td>直接运行三个运行时并记录原始输出的脚本，回放样本的来源</td><td>回放样本</td></tr>
     <tr><td><code>scripts/accept/</code></td><td>验收脚本 <code>accept.sh</code>、<code>lib/util.sh</code>、<code>lib/scenarios.sh</code> 与 docker 镜像的 <code>Dockerfile</code></td><td>验收脚本</td></tr>
-    <tr><td><code>.github/workflows/</code></td><td><code>ci.yml</code> 与 <code>release.yml</code></td><td>CI 与 Release</td></tr>
   </tbody>
 </table>
 <p><code>src/</code> 里每个文件末尾的 <code>#[cfg(test)] mod tests</code> 是该文件的单元测试，测试纯函数与适配器生成的参数；跨模块的行为、真实的子进程与沙箱放在 <code>tests/</code>。</p>
 
 <h2>scripts/test.sh</h2>
-<p>一条命令运行全部检查，任何一步失败就停止并以非 0 退出。本机提交前与 CI 里运行的是同一个脚本，理由：CI 不另写一份步骤，本机通过就能在 CI 通过。</p>
+<p>一条命令运行全部检查，任何一步失败就停止并以非 0 退出。提交前在本机运行。</p>
 <pre><code class="language-bash">cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -94,7 +93,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 <p>新增或更新样本前检查 <code>raw.jsonl</code> 与 <code>meta.json</code> 里没有令牌、API key 与用户目录的路径，仓库是公开的。</p>
 
 <h2 id="accept">验收脚本</h2>
-<p><code>scripts/accept/accept.sh</code> 用真实的运行时与登录把 agentrun 跑一遍，按退出码、事件流与工作目录里的文件判定每个场景，输出一张总表。它是「Validate」步骤的工具，不在 <code>scripts/test.sh</code> 与 CI 里运行，理由：需要三个运行时的账号，并且要消耗模型调用。</p>
+<p><code>scripts/accept/accept.sh</code> 用真实的运行时与登录把 agentrun 跑一遍，按退出码、事件流与工作目录里的文件判定每个场景，输出一张总表。它是「Validate」步骤的工具，不在 <code>scripts/test.sh</code> 里运行，理由：需要三个运行时的账号，并且要消耗模型调用。</p>
 <pre><code class="language-bash">scripts/accept/accept.sh [--agentrun PATH] [--runtimes claude-code,pi,codex] [--sandbox on|relax|off]
                          [--label NAME] [--out DIR] [--only NAME,...] [--claude-model ID] [--pi-model ID]</code></pre>
 <table>
@@ -137,26 +136,6 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 </table>
 <p>输出目录 <code>&lt;out&gt;/&lt;label&gt;-&lt;时间戳&gt;/</code>：<code>env.txt</code> 记录运行时版本、沙箱程序与每个运行时的 <code>--dry-run</code> 命令；<code>summary.md</code> 每个场景与运行时一行，列为场景、运行时、<code>pass|fail|skip</code> 与说明；每个组合一个 <code>&lt;场景&gt;-&lt;运行时&gt;/</code> 目录，内有 <code>cmd.txt</code>、<code>stdout.jsonl</code>（text 格式的场景为 <code>stdout.txt</code>）、<code>stderr.txt</code>、<code>exit_code</code>、<code>duration_ms</code>、<code>raw.jsonl</code> 与 <code>check.txt</code>。有任何 <code>fail</code> 时脚本以 1 退出。分享输出目录前先读 <code>stderr.txt</code>，运行时的诊断信息写在那里。</p>
 <p><code>scripts/accept/Dockerfile</code> 基于 <code>ubuntu:24.04</code>，装 Node 22、用 npm 装三个运行时、<code>bubblewrap</code>、<code>socat</code>、<code>curl</code> 与 <code>procps</code>，并写入一份选中 <code>deepseek/deepseek-flash</code> 的 pi <code>settings.json</code>。镜像里不含 agentrun 与凭据：agentrun 由宿主用 <code>rust:1-bookworm</code> 容器交叉构建后挂载，凭据只经环境变量进入，不挂载用户的 HOME。</p>
-
-<h2 id="ci">CI 与 Release</h2>
-<p>本节按 issue #35 的设计写，两个 workflow 以合并后的 <code>.github/workflows/</code> 为准。</p>
-<h3>ci.yml</h3>
-<ul>
-  <li>触发：pull request 与 push 到 <code>main</code>。同一个分支的新一次运行取消还在进行的旧运行。权限只有 <code>contents: read</code>。</li>
-  <li>矩阵：<code>ubuntu-24.04</code> 与 <code>macos-15</code>。两边都装 rustup 的 stable 工具链（<code>minimal</code> 加 <code>rustfmt</code> 与 <code>clippy</code>）与 uv（<code>setup-uv@v6</code>）。Linux 另装沙箱程序与 shellcheck，并放开 AppArmor 对用户命名空间的限制，让 <code>bwrap</code> 能在 runner 上启动，这样沙箱路径的测试在 CI 里实际运行而不是跳过：</li>
-</ul>
-<pre><code class="language-bash">sudo apt-get install -y bubblewrap socat shellcheck
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0</code></pre>
-<ul>
-  <li>步骤：运行 <code>scripts/test.sh</code>；Linux 上另跑 <code>cargo publish --dry-run --locked</code>，确认发布到 crates.io 的包能构建。</li>
-</ul>
-<h3>release.yml</h3>
-<ul>
-  <li>触发：推送 <code>v*</code> 标签。</li>
-  <li>构建四个目标：<code>x86_64-unknown-linux-musl</code>、<code>aarch64-unknown-linux-musl</code>、<code>x86_64-apple-darwin</code>、<code>aarch64-apple-darwin</code>。Linux 用 musl 静态链接，理由：同一个可执行文件能在任何发行版与 docker 镜像里运行，不依赖 glibc 版本。</li>
-  <li>产物：每个目标一个压缩包、<code>SHA256SUMS</code>、用 <code>cargo-about</code> 生成的 <code>THIRD-PARTY-LICENSES.txt</code>。workflow 产物保留 14 天。</li>
-  <li>用 <code>gh</code> 创建草稿 release 并上传产物，由用户检查后发布；crates.io 的发布由用户在本机执行 <code>cargo publish</code>，不在 workflow 里做。</li>
-</ul>
 
 <h2 id="environments">四种环境里的验收</h2>
 <p>验收由用户执行，AI 提供步骤与脚本。每种环境里先跑 <code>scripts/test.sh</code>，再跑验收脚本；沙箱打开与关闭各跑一遍，因为两种模式走的是不同的代码路径。</p>
