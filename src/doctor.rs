@@ -29,8 +29,8 @@ use crate::sandbox::{
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 
-pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-pub const USAGE_EXIT_CODE: u8 = 2;
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const USAGE_EXIT_CODE: u8 = 2;
 const FAIL_EXIT_CODE: u8 = 1;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY: Duration = Duration::from_millis(50);
@@ -64,7 +64,7 @@ const CODEX_PROXY_NOT_ALLOWED: &str = "x-proxy-error: blocked-by-allowlist";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Check {
+enum Check {
     Executable,
     Login,
     Sandbox,
@@ -84,7 +84,7 @@ impl Check {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Status {
+enum Status {
     Ok,
     Fail,
     Skip,
@@ -101,7 +101,7 @@ impl Status {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Item {
+struct Item {
     pub runtime: Runtime,
     pub check: Check,
     pub status: Status,
@@ -120,7 +120,7 @@ impl Item {
     }
 }
 
-pub fn selected(args: &[OsString]) -> bool {
+pub(crate) fn selected(args: &[OsString]) -> bool {
     matches!(
         args.get(1).and_then(|arg| arg.to_str()),
         Some("doctor" | "doctor-connect")
@@ -1212,7 +1212,7 @@ impl Wrap {
     }
 }
 
-pub fn connect(caller: &Caller, args: &ConnectArgs) -> u8 {
+pub(crate) fn connect(caller: &Caller, args: &ConnectArgs) -> u8 {
     let proxy = PROXY_VARIABLES
         .iter()
         .find_map(|name| caller.var(name).filter(|value| !value.is_empty()));

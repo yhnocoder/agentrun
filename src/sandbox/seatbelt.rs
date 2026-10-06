@@ -18,7 +18,7 @@ use crate::run::Signals;
 use crate::session::Session;
 
 pub(super) const SANDBOX_EXEC_PREFIX: &str = "sandbox-exec: ";
-pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 pub const SEATBELT_FILE: &str = "seatbelt.sb";
 
 pub fn seatbelt_profile(

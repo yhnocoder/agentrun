@@ -9,12 +9,13 @@ use std::io::Write;
 use crate::cli::{Format, SandboxMode};
 
 pub use aggregate::Aggregator;
-pub(crate) use event::{Body, End, EndStatus, NetworkInfo, Signal, Start};
 pub use event::{Event, Network, NetworkReason, SandboxKind, SubagentStatus};
 pub use rich::Rich;
-pub(crate) use rich::{OpenTool, REFRESH_PERIOD, terminal_size};
 pub use text::TextFormatter;
 pub use usage::{TokenCounts, Usage};
+
+pub(crate) use event::{Body, End, EndStatus, NetworkInfo, Signal, Start};
+pub(crate) use rich::{OpenTool, REFRESH_PERIOD, terminal_size};
 
 pub(crate) enum Output {
     Jsonl,

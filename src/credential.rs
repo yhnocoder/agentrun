@@ -76,7 +76,7 @@ pub fn write_session_credential(
     }))
 }
 
-pub fn write_credential(path: &Path, value: &[u8]) -> std::io::Result<CredentialStatus> {
+fn write_credential(path: &Path, value: &[u8]) -> std::io::Result<CredentialStatus> {
     let digest: String = Sha256::digest(value)
         .iter()
         .map(|byte| format!("{byte:02x}"))

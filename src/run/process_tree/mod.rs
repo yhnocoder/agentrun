@@ -21,7 +21,7 @@ const KILL_PASSES: usize = 3;
 pub const PROC_ROOT: &str = "/proc";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Process {
+struct Process {
     pub pid: i32,
     pub started: String,
     pub pgid: i32,
@@ -69,7 +69,7 @@ impl ProcessTable {
         platform::snapshot()
     }
 
-    pub fn read_proc(proc_root: &Path) -> ProcessTable {
+    fn read_proc(proc_root: &Path) -> ProcessTable {
         let mut entries: Vec<Entry> = std::fs::read_dir(proc_root)
             .map(|dir| {
                 dir.flatten()
@@ -82,14 +82,14 @@ impl ProcessTable {
         ProcessTable { entries }
     }
 
-    pub fn children_of(&self, parent: i32) -> impl Iterator<Item = Process> + '_ {
+    fn children_of(&self, parent: i32) -> impl Iterator<Item = Process> + '_ {
         self.entries
             .iter()
             .filter(move |entry| entry.parent == parent)
             .map(Entry::process)
     }
 
-    pub fn descendants(&self, roots: &[i32]) -> Vec<Process> {
+    fn descendants(&self, roots: &[i32]) -> Vec<Process> {
         let mut found = BTreeSet::new();
         let mut pending: Vec<i32> = roots.to_vec();
         while let Some(parent) = pending.pop() {
@@ -102,7 +102,7 @@ impl ProcessTable {
         found.into_iter().collect()
     }
 
-    pub fn still_running(&self, process: &Process) -> bool {
+    fn still_running(&self, process: &Process) -> bool {
         self.find(process.pid)
             .is_some_and(|entry| entry.started == process.started)
     }

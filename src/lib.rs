@@ -1,7 +1,7 @@
 pub mod cli;
-pub mod credential;
+mod credential;
 pub mod doctor;
-pub mod json;
+mod json;
 pub mod network;
 pub mod output;
 pub mod run;

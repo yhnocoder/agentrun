@@ -12,11 +12,11 @@ use crate::network::{HostRule, proxy_environment};
 use crate::output::TokenCounts;
 use crate::session::Session;
 
-pub const HOME_VARIABLE: &str = "CODEX_HOME";
-pub const HOME_SUBDIR: &str = ".codex";
-pub const HOME_SUFFIX: &str = "-codex";
-pub const LOGIN_FILE: &str = "auth.json";
-pub const SERVICE_HOSTS: [&str; 4] = [
+pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
+const HOME_SUBDIR: &str = ".codex";
+const HOME_SUFFIX: &str = "-codex";
+pub(crate) const LOGIN_FILE: &str = "auth.json";
+pub(crate) const SERVICE_HOSTS: [&str; 4] = [
     "chatgpt.com",
     "ab.chatgpt.com",
     "auth.openai.com",
@@ -30,7 +30,7 @@ const FIXED_ARGS: [&str; 6] = [
     "--ignore-rules",
     "-C",
 ];
-pub const PROFILE: &str = "agentrun";
+pub(crate) const PROFILE: &str = "agentrun";
 const FULL_ACCESS_PROFILE: &str = "\":danger-full-access\"";
 const SETTINGS: [&str; 5] = [
     "approval_policy=\"never\"",
@@ -270,14 +270,14 @@ impl Adapter for Codex {
     }
 }
 
-pub fn login_file(session: &Session, cwd: &Path) -> PathBuf {
+pub(crate) fn login_file(session: &Session, cwd: &Path) -> PathBuf {
     session
         .runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
         .unwrap_or_else(|| PathBuf::from("$HOME").join(HOME_SUBDIR))
         .join(LOGIN_FILE)
 }
 
-pub fn check_login(session: &Session, login: &Path) -> Result<(), String> {
+pub(crate) fn check_login(session: &Session, login: &Path) -> Result<(), String> {
     let provided = session
         .codex_auth
         .as_ref()
@@ -292,13 +292,13 @@ pub fn check_login(session: &Session, login: &Path) -> Result<(), String> {
     }
 }
 
-pub fn home_path(tempdir: &Path) -> PathBuf {
+pub(crate) fn home_path(tempdir: &Path) -> PathBuf {
     let mut name = tempdir.as_os_str().to_owned();
     name.push(HOME_SUFFIX);
     PathBuf::from(name)
 }
 
-pub fn create_home(home: &Path, login: &Path) -> Result<(), String> {
+pub(crate) fn create_home(home: &Path, login: &Path) -> Result<(), String> {
     DirBuilder::new()
         .mode(0o700)
         .create(home)
@@ -315,18 +315,18 @@ pub fn create_home(home: &Path, login: &Path) -> Result<(), String> {
         })
 }
 
-pub fn config(value: String) -> [String; 2] {
+pub(crate) fn config(value: String) -> [String; 2] {
     ["-c".to_string(), value]
 }
 
-pub fn filesystem_setting(tempdir: &Path) -> String {
+pub(crate) fn filesystem_setting(tempdir: &Path) -> String {
     format!(
         "permissions.{PROFILE}.filesystem={{\":root\"=\"read\", \":workspace_roots\"={{\".\"=\"write\"}}, {}=\"write\"}}",
         toml_string(&tempdir.to_string_lossy())
     )
 }
 
-pub fn network_settings(network: NetworkMode, allow_hosts: &[HostRule]) -> Vec<String> {
+pub(crate) fn network_settings(network: NetworkMode, allow_hosts: &[HostRule]) -> Vec<String> {
     match network {
         NetworkMode::None => {
             config(format!("permissions.{PROFILE}.network.enabled=false")).to_vec()
@@ -358,7 +358,7 @@ fn domains(allow_hosts: &[HostRule]) -> String {
         .join(", ")
 }
 
-pub fn toml_string(text: &str) -> String {
+fn toml_string(text: &str) -> String {
     let mut quoted = String::with_capacity(text.len() + 2);
     quoted.push('"');
     for c in text.chars() {

@@ -17,9 +17,9 @@ pub use upstream::{ProxyAddress, Upstream, parse_no_proxy};
 
 pub(crate) use rule::check_usage;
 
-pub const SOCKET_FILE: &str = "proxy.sock";
-pub const PORT_PLACEHOLDER: &str = "<proxy port>";
-pub const PROXY_VARIABLES: [&str; 6] = [
+pub(crate) const SOCKET_FILE: &str = "proxy.sock";
+pub(crate) const PORT_PLACEHOLDER: &str = "<proxy port>";
+const PROXY_VARIABLES: [&str; 6] = [
     "HTTPS_PROXY",
     "HTTP_PROXY",
     "ALL_PROXY",
@@ -27,10 +27,10 @@ pub const PROXY_VARIABLES: [&str; 6] = [
     "http_proxy",
     "all_proxy",
 ];
-pub const NO_PROXY_VARIABLES: [&str; 2] = ["NO_PROXY", "no_proxy"];
+const NO_PROXY_VARIABLES: [&str; 2] = ["NO_PROXY", "no_proxy"];
 const LISTEN_ADDRESS: Ipv4Addr = Ipv4Addr::LOCALHOST;
 
-pub fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> bool {
+pub(crate) fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> bool {
     sandboxed
         && match runtime {
             Runtime::Pi => true,

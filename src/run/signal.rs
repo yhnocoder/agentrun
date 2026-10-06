@@ -14,7 +14,7 @@ use super::process_tree::{
 use crate::cli::{Format, SandboxMode};
 use crate::output::{Body, End, EndStatus, Event, Output, Signal, Usage};
 
-pub const GRACE_PERIOD: Duration = Duration::from_secs(5);
+const GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 pub type SharedWriter = Arc<Mutex<dyn Write + Send>>;
 

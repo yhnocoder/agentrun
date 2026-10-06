@@ -18,14 +18,15 @@ use seatbelt::SANDBOX_EXEC_PREFIX;
 #[cfg(target_os = "macos")]
 use seatbelt::probe;
 
-pub(crate) use bubblewrap::{BWRAP_PREFIX, CANNOT_START_HINT};
 pub use bubblewrap::{ProxyForward, wrap_pi};
-pub(crate) use seatbelt::SEATBELT_FILE;
 pub use seatbelt::{seatbelt_profile, wrap_seatbelt, write_seatbelt_profile};
 
-pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) use bubblewrap::{BWRAP_PREFIX, CANNOT_START_HINT};
+pub(crate) use seatbelt::SEATBELT_FILE;
+
+const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_POLL: Duration = Duration::from_millis(10);
-pub const UNAVAILABLE_PREFIX: &str = "sandbox is not available: ";
+pub(crate) const UNAVAILABLE_PREFIX: &str = "sandbox is not available: ";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sandbox {
@@ -55,7 +56,7 @@ struct Unavailable {
     hint: &'static str,
 }
 
-pub fn resolve_mode(
+pub(crate) fn resolve_mode(
     option: Option<SandboxMode>,
     variable: Option<&OsStr>,
 ) -> Result<SandboxMode, String> {
@@ -74,7 +75,7 @@ pub fn resolve_mode(
     }
 }
 
-pub fn check(
+pub(crate) fn check(
     mode: SandboxMode,
     runtime: Runtime,
     session: &Session,

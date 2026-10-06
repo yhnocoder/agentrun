@@ -30,8 +30,9 @@ use signal::SharedWriter;
 
 pub use execute::{Exit, Translated, conclude, stderr_tail, translate_line};
 pub use process_tree::claim_orphans;
-pub(crate) use process_tree::{kill_group_members, wait_for_exit};
 pub use signal::Signals;
+
+pub(crate) use process_tree::{kill_group_members, wait_for_exit};
 
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
 const TEMPDIR_PREFIX: &str = "agentrun-";
@@ -372,7 +373,7 @@ fn create_raw(path: &Path) -> Result<File, String> {
         .map_err(|error| format!("cannot create raw file {}: {error}", path.display()))
 }
 
-pub fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
+pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
     let base = match caller.var("TMPDIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from("/tmp"),
@@ -422,7 +423,7 @@ fn name_list(names: &[String]) -> String {
     }
 }
 
-pub fn shell_quote(arg: &str) -> String {
+pub(crate) fn shell_quote(arg: &str) -> String {
     let plain = !arg.is_empty()
         && arg
             .chars()
