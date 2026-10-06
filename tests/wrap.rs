@@ -208,10 +208,7 @@ fn lock_directories_can_be_created_and_removed_in_the_state_dir() {
         .lines()
         .map(|line| line.split(':').next().unwrap())
         .collect();
-    assert_eq!(
-        lines,
-        ["created", "removed", "created", "removed", "created", "removed"]
-    );
+    assert_eq!(lines, ["created", "removed"].repeat(3));
     assert!(!state_dir.join("auth.json.lock").exists());
 }
 
