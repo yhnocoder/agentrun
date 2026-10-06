@@ -56,11 +56,13 @@ const CLAUDE_CODE_SERVICE_HOST: &str = "api.anthropic.com";
 const CODEX_SERVICE_HOST: &str = "chatgpt.com";
 const PI_FALLBACK_SERVICE_HOST: &str = "api.anthropic.com";
 const FAKE_IP_RANGE: (Ipv4Addr, u8) = (Ipv4Addr::new(198, 18, 0, 0), 15);
-const FAKE_IP_HINT: &str = "codex's network proxy treats this range as private; pass -- -c permissions.agentrun.network.allow_local_binding=true to allow it";
+const FAKE_IP_HINT: &str = "codex's network proxy treats this range as private; turn off the fake-ip mode of the local proxy software";
 const TOKEN_VARIABLE: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const NOT_LOGGED_IN: &str =
     "not logged in. Run claude login, or set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token)";
 const PROXY_VARIABLES: [&str; 2] = ["https_proxy", "HTTPS_PROXY"];
+const PROXY_ERROR_HEADER: &str = "x-proxy-error";
+const CODEX_PROXY_NOT_ALLOWED: &str = "x-proxy-error: blocked-by-allowlist";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -964,12 +966,11 @@ impl Doctor {
             (_, Runtime::Codex) => None,
             _ => Some((PRIVATE_HOST, PRIVATE_PORT, NetworkReason::PrivateAddress)),
         };
-        let filtered = runtime != Runtime::Codex || mode == NetworkMode::Custom;
         let records: Arc<Mutex<Vec<Network>>> = Arc::default();
         let mut proxy = None;
         let mut env = Vec::new();
         let mut port = None;
-        if filtered {
+        if runtime != Runtime::Codex || mode == NetworkMode::Custom {
             let mut bound = FilterProxy::bind(&self.tempdir)
                 .map_err(|error| format!("cannot start the filter proxy: {error}"))?;
             let port_text = bound.endpoint().port_text();
@@ -1025,7 +1026,7 @@ impl Doctor {
                 |_| false,
             )
         };
-        let result = self.judge(&allowed, denied, filtered, &connect, &records);
+        let result = self.judge(&allowed, denied, &connect, &records);
         drop(proxy);
         result.map_err(|detail| self.fake_ip_hint(target, &allowed.0, detail))
     }
@@ -1034,7 +1035,6 @@ impl Doctor {
         &self,
         allowed: &(String, u16),
         denied: Option<(&str, u16, NetworkReason)>,
-        filtered: bool,
         connect: &dyn Fn(&str, u16) -> Result<Finished, String>,
         records: &Mutex<Vec<Network>>,
     ) -> Result<String, String> {
@@ -1056,10 +1056,6 @@ impl Doctor {
                 "{host}:{port} was not refused: {}",
                 second.output()
             ));
-        }
-        if !filtered {
-            detail.push_str(&format!(", {host}:{port} refused (by the codex proxy)"));
-            return Ok(detail);
         }
         let seen = records
             .lock()
@@ -1084,6 +1080,10 @@ impl Doctor {
                 "{host}:{port} was allowed by the filter proxy, but the connection failed: {}",
                 second.output()
             )),
+            None if second.output().contains(CODEX_PROXY_NOT_ALLOWED) => {
+                detail.push_str(&format!(", {host}:{port} refused (by the codex proxy)"));
+                Ok(detail)
+            }
             None => Err(format!(
                 "{host}:{port} refused, but the filter proxy did not see the request: {}",
                 second.output()
@@ -1292,21 +1292,26 @@ fn tunnel(
     stream.write_all(
         format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n").as_bytes(),
     )?;
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
-    while !line.ends_with(b"\n") {
-        if stream.read(&mut byte)? == 0 {
-            break;
-        }
-        line.push(byte[0]);
-    }
-    if line.is_empty() {
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line)?;
+    if status_line.is_empty() {
         return Err(std::io::Error::new(
             ErrorKind::UnexpectedEof,
             "the proxy closed the connection without a reply",
         ));
     }
-    Ok(String::from_utf8_lossy(&line).trim_end().to_string())
+    let mut reply = status_line.trim_end().to_string();
+    let mut header = String::new();
+    while reader.read_line(&mut header)? > 0 && !header.trim().is_empty() {
+        if let Some((name, value)) = header.split_once(':')
+            && name.trim().eq_ignore_ascii_case(PROXY_ERROR_HEADER)
+        {
+            reply.push_str(&format!(" ({PROXY_ERROR_HEADER}: {})", value.trim()));
+        }
+        header.clear();
+    }
+    Ok(reply)
 }
 
 fn connect_directly(host: &str, port: u16) -> (String, u8) {
@@ -1394,5 +1399,31 @@ mod tests {
         assert_eq!(fake_ip("198.18.0.1"), Some(Ipv4Addr::new(198, 18, 0, 1)));
         assert_eq!(fake_ip("198.20.0.1"), None);
         assert_eq!(fake_ip("127.0.0.1"), None);
+    }
+
+    #[test]
+    fn proxy_reply_keeps_the_codex_proxy_error_header() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 256];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nX-Proxy-Error: blocked-by-allowlist\r\n\r\n")
+                .unwrap();
+        });
+        let proxy = ProxyAddress {
+            host: "127.0.0.1".to_string(),
+            port,
+            authorization: None,
+        };
+        let (line, code) = connect_via_proxy(&proxy, DENIED_HOST, SERVICE_PORT);
+        server.join().unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(
+            line,
+            format!("proxy replied HTTP/1.1 403 Forbidden ({CODEX_PROXY_NOT_ALLOWED})")
+        );
     }
 }
