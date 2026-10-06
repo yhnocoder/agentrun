@@ -8,12 +8,9 @@ use super::{Adapter, Invocation, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};
-use crate::network::{ProxyEndpoint, proxy_environment};
+use crate::network::proxy_environment;
 use crate::output::{SandboxKind, TokenCounts};
-use crate::sandbox::{
-    PiState, ProxyForward, SEATBELT_FILE, Wrapper, wrap_pi, wrap_seatbelt, wrapper_failure,
-    write_seatbelt_profile,
-};
+use crate::sandbox::{self, PiState, wrapper_failure};
 use crate::session::Session;
 
 const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
@@ -154,7 +151,6 @@ impl Adapter for Pi {
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
-        self.sandbox = invocation.sandbox.kind();
         self.model_option = invocation.args.model.clone();
         self.expected = match &invocation.args.model {
             Some(model) => Some(parse_model(model)?),
@@ -204,50 +200,21 @@ impl Adapter for Pi {
             }
             env.extend(proxy_environment(&proxy.port_text()));
         }
-        let port = invocation.proxy.as_ref().map(ProxyEndpoint::port_text);
-        let bubblewrap = match &invocation.sandbox.wrapper {
-            Wrapper::Bubblewrap { bwrap, socat } => Some((bwrap, socat)),
-            _ => None,
-        };
-        if let Some((bwrap, socat)) = bubblewrap {
-            let forward = match (&invocation.proxy, &port) {
-                (Some(proxy), Some(port)) => Some(ProxyForward {
-                    socat,
-                    port,
-                    socket: &proxy.socket,
-                }),
-                _ => None,
-            };
-            argv = wrap_pi(
-                bwrap,
-                &invocation.cwd,
-                &invocation.tempdir,
-                state.as_ref(),
-                forward.as_ref(),
-                &argv,
-            );
-        } else if self.sandbox == SandboxKind::Seatbelt {
-            if !invocation.args.dry_run {
-                write_seatbelt_profile(
-                    &invocation.cwd,
-                    &invocation.tempdir,
-                    state.as_ref(),
-                    port.as_deref(),
-                )
-                .map_err(|error| {
-                    format!(
-                        "cannot write the sandbox profile {}: {error}",
-                        invocation.tempdir.join(SEATBELT_FILE).display()
-                    )
-                })?;
-            }
-            argv = wrap_seatbelt(&invocation.tempdir, &argv);
-        }
+        let wrapped = sandbox::wrap(
+            &invocation.sandbox,
+            &invocation.cwd,
+            &invocation.tempdir,
+            state.as_ref(),
+            invocation.proxy.as_ref(),
+            invocation.args.dry_run,
+        )?;
+        argv = wrapped.argv(&argv);
+        self.sandbox = wrapped.kind;
         Ok(Launch {
             argv,
             stdin: Vec::new(),
             env,
-            signal_wrapped_child: bubblewrap.is_some(),
+            signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts,
         })
     }
@@ -437,7 +404,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::network::ProxyEndpoint;
-    use crate::sandbox::Sandbox;
+    use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::{Session, parse_env_args};
 
     struct Setup {

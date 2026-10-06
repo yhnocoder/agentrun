@@ -30,7 +30,7 @@ pub struct ProxyForward<'a> {
     pub socket: &'a Path,
 }
 
-pub fn wrap_pi(
+pub fn wrap_bwrap(
     bwrap: &Path,
     cwd: &Path,
     tempdir: &Path,
@@ -237,7 +237,7 @@ mod tests {
                 "/nonexistent/home/.pi/agent/settings.json",
             ],
         );
-        let with_state = wrap_pi(
+        let with_state = wrap_bwrap(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
@@ -282,7 +282,7 @@ mod tests {
                 "hi",
             ])
         );
-        let without_state = wrap_pi(
+        let without_state = wrap_bwrap(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
@@ -305,7 +305,7 @@ mod tests {
             port: "41234",
             socket: Path::new("/nonexistent/tmp/agentrun-x/proxy.sock"),
         };
-        let wrapped = wrap_pi(
+        let wrapped = wrap_bwrap(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),

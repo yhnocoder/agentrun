@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::credential::write_session_credential;
 use crate::network::{
-    FilterProxy, HostRule, Policy, ProxyAddress, SOCKET_FILE, Upstream, check_usage,
+    FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, Upstream, check_usage,
     proxy_environment,
 };
 use crate::output::{Network, NetworkReason, Signal};
@@ -24,8 +24,7 @@ use crate::runtime::codex;
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{Adapter, Invocation};
 use crate::sandbox::{
-    self, BWRAP_PREFIX, CANNOT_START_HINT, PiState, ProxyForward, Sandbox, UNAVAILABLE_PREFIX,
-    Wrapper, wrap_pi, wrap_seatbelt, write_seatbelt_profile,
+    self, BWRAP_PREFIX, CANNOT_START_HINT, Sandbox, UNAVAILABLE_PREFIX, Wrapped, Wrapper,
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 
@@ -747,7 +746,7 @@ impl Doctor {
         sandbox: &Sandbox,
         dirs: &Dirs,
         network: NetworkMode,
-        port: Option<&str>,
+        proxy: Option<&ProxyEndpoint>,
     ) -> Result<Wrap, String> {
         let state = match target.runtime {
             Runtime::Pi => pi::user_state_dir(&target.session, &self.cwd)
@@ -756,28 +755,22 @@ impl Doctor {
             _ => None,
         };
         match &sandbox.wrapper {
-            Wrapper::Bubblewrap { bwrap, socat } => Ok(Wrap::Bubblewrap {
-                bwrap: bwrap.clone(),
-                socat: socat.clone(),
-                socket: self.tempdir.join(SOCKET_FILE),
-                work: dirs.work.clone(),
-                tmp: dirs.tmp.clone(),
-                state: state.map(Box::new),
-                port: port.map(str::to_string),
-            }),
-            Wrapper::Seatbelt => {
-                write_seatbelt_profile(&dirs.work, &dirs.tmp, state.as_ref(), port).map_err(
-                    |error| {
-                        format!(
-                            "cannot write the sandbox profile in {}: {error}",
-                            dirs.tmp.display()
-                        )
-                    },
-                )?;
-                Ok(Wrap::Seatbelt {
-                    tmp: dirs.tmp.clone(),
-                })
-            }
+            Wrapper::Bubblewrap { .. } => Ok(Wrap::Bubblewrap(sandbox::wrap(
+                sandbox,
+                &dirs.work,
+                &dirs.tmp,
+                state.as_ref(),
+                proxy,
+                false,
+            )?)),
+            Wrapper::Seatbelt => Ok(Wrap::Seatbelt(sandbox::wrap(
+                sandbox,
+                &dirs.work,
+                &dirs.tmp,
+                state.as_ref(),
+                proxy,
+                false,
+            )?)),
             Wrapper::Codex => {
                 let tmp = std::fs::canonicalize(&dirs.tmp)
                     .map_err(|error| format!("cannot resolve {}: {error}", dirs.tmp.display()))?;
@@ -940,11 +933,10 @@ impl Doctor {
         let records: Arc<Mutex<Vec<Network>>> = Arc::default();
         let mut proxy = None;
         let mut env = Vec::new();
-        let mut port = None;
+        let mut endpoint = None;
         if runtime != Runtime::Codex || mode == NetworkMode::Custom {
             let mut bound = FilterProxy::bind(&self.tempdir)
                 .map_err(|error| format!("cannot start the filter proxy: {error}"))?;
-            let port_text = bound.endpoint().port_text();
             let service_hosts = match runtime {
                 Runtime::Pi => self
                     .pi_provider(target)
@@ -973,11 +965,11 @@ impl Doctor {
                     }
                 },
             );
-            env.extend(proxy_environment(&port_text));
-            port = Some(port_text);
+            env.extend(proxy_environment(&bound.endpoint().port_text()));
+            endpoint = Some(bound.endpoint());
             proxy = Some(bound);
         }
-        let wrap = self.wrap(target, sandbox, &dirs, mode, port.as_deref())?;
+        let wrap = self.wrap(target, sandbox, &dirs, mode, endpoint.as_ref())?;
         env.extend(wrap.env(self));
         let connect = |host: &str, port: u16| {
             let argv = vec![
@@ -1127,51 +1119,23 @@ struct Dirs {
 }
 
 enum Wrap {
-    Bubblewrap {
-        bwrap: PathBuf,
-        socat: PathBuf,
-        socket: PathBuf,
-        work: PathBuf,
-        tmp: PathBuf,
-        state: Option<Box<PiState>>,
-        port: Option<String>,
-    },
-    Seatbelt {
-        tmp: PathBuf,
-    },
-    Codex {
-        prefix: Vec<String>,
-    },
+    Bubblewrap(Wrapped),
+    Seatbelt(Wrapped),
+    Codex { prefix: Vec<String> },
 }
 
 impl Wrap {
     fn name(&self) -> &'static str {
         match self {
-            Wrap::Bubblewrap { .. } => "bubblewrap",
-            Wrap::Seatbelt { .. } => "seatbelt",
+            Wrap::Bubblewrap(_) => "bubblewrap",
+            Wrap::Seatbelt(_) => "seatbelt",
             Wrap::Codex { .. } => "codex",
         }
     }
 
     fn argv(&self, executable: Option<&Path>, inner: &[String]) -> Vec<String> {
         match self {
-            Wrap::Bubblewrap {
-                bwrap,
-                socat,
-                socket,
-                work,
-                tmp,
-                state,
-                port,
-            } => {
-                let forward = port.as_deref().map(|port| ProxyForward {
-                    socat,
-                    port,
-                    socket,
-                });
-                wrap_pi(bwrap, work, tmp, state.as_deref(), forward.as_ref(), inner)
-            }
-            Wrap::Seatbelt { tmp } => wrap_seatbelt(tmp, inner),
+            Wrap::Bubblewrap(wrapped) | Wrap::Seatbelt(wrapped) => wrapped.argv(inner),
             Wrap::Codex { prefix } => {
                 let mut argv = vec![
                     executable
