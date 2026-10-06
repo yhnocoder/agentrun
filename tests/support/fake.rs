@@ -58,8 +58,10 @@ impl Adapter for FakeAdapter {
                 &argv,
             );
         } else if invocation.sandbox.kind == SandboxKind::Seatbelt {
-            write_seatbelt_profile(&invocation.cwd, &invocation.tempdir, None, port.as_deref())
-                .map_err(|error| error.to_string())?;
+            if !invocation.args.dry_run {
+                write_seatbelt_profile(&invocation.cwd, &invocation.tempdir, None, port.as_deref())
+                    .map_err(|error| error.to_string())?;
+            }
             argv = wrap_seatbelt(&invocation.tempdir, &argv);
         }
         Ok(Launch {
