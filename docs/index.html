@@ -75,7 +75,7 @@
 <figcaption>模块关系。运行框架调用会话环境、沙箱与过滤代理做启动前检查，通过适配器接口启动运行时并翻译它的输出；doctor 复用沙箱与过滤代理做检查。三个适配器在 runtime/ 下。</figcaption>
 </figure>
 <p>可见性按目录限定：每个目录下的文件都是私有子模块，外部只能用 <code>mod.rs</code> re-export 的项：<code>tests/</code> 或 <code>main.rs</code> 用到的写 <code>pub use</code>，只有 crate 内其他目录用到的写 <code>pub(crate) use</code>。私有子模块里的项可以保持 <code>pub</code>，能不能从外部访问由 <code>mod.rs</code> 是否 re-export 决定。唯一的例外是 <code>runtime/</code> 的 <code>claudecode</code>、<code>codex</code>、<code>pi</code> 三个子模块声明为 <code>pub mod</code>，因为每个适配器有自己的集成测试。理由：编译器只对外部访问不到的项报告未使用，可见性按目录限定后，新的死代码才会被报出来。<code>run/</code> 把 <code>doctor</code> 子命令分派给 <code>doctor.rs</code>，<code>doctor.rs</code> 复用 <code>run/</code> 的 <code>Caller</code> 与临时目录函数，这一处是有意保留的分派关系。</p>
-<p>平台相关的代码按平台分文件：<code>run/process_tree/</code> 的 <code>linux.rs</code> 与 <code>macos.rs</code>、<code>sandbox/</code> 的 <code>bubblewrap.rs</code> 与 <code>seatbelt.rs</code>，同一目录的两个文件提供同一组项，由 <code>mod.rs</code> 按操作系统选择；包裹命令与 Seatbelt 配置在两个平台都编译。理由：单元测试在 Linux 上也能检查 macOS 的包裹参数。</p>
+<p>平台相关的代码按平台分文件：<code>process_tree/</code> 的 <code>linux.rs</code> 与 <code>macos.rs</code>、<code>sandbox/</code> 的 <code>bubblewrap.rs</code> 与 <code>seatbelt.rs</code>，同一目录的两个文件提供同一组项，由 <code>mod.rs</code> 按操作系统选择；包裹命令与 Seatbelt 配置在两个平台都编译。理由：单元测试在 Linux 上也能检查 macOS 的包裹参数。</p>
 <p>agent 在什么样的环境里运行：会话环境变量、临时目录、凭据与进程，沙箱与网络限制，以及在四种环境里怎么调用。</p>
 <ul class="cards">
   <li><a class="card" href="pages/session.html">

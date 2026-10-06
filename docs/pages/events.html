@@ -30,15 +30,15 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/output/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>、<code>EndStatus</code> 与 <code>Signal</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
+    <tr><td><code>src/output/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code> 构造启动前或启动失败时的 <code>end</code>）、<code>EndStatus</code> 与 <code>Signal</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
     <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
-    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tool</code>）、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
-    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code></td><td>text 格式、rich 格式</td></tr>
-    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>、<code>subagent_label</code>、<code>first_line</code></td><td>text 格式、<code>[note]</code> 行</td></tr>
-    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>Panel</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
+    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>（处理一行的全部记录，返回 <code>Translated</code>）、<code>finish</code>、<code>open_tools</code>）、<code>Record</code>、<code>Translated</code>、<code>OpenTools</code>、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
+    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code> 按格式与标准输出是否为终端选择输出、<code>set_open_tools</code>）、<code>write_end</code>（只输出一个 <code>end</code>，用于被拒绝与启动前收到信号）</td><td>text 格式、rich 格式</td></tr>
+    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
+    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>Panel</code>（subagent 的标签与模型读 <code>TextFormatter</code> 记下的值）、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
-<p>适配器输出的是 <code>runtime::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，rich 另外通过 <code>open_tool</code> 读取还没有结束的调用来显示「正在执行的工具」。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
+<p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，运行框架每处理完一行原始输出，把 <code>Aggregator::open_tools</code> 的快照交给 rich，用来显示正在执行的工具。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
 
 <h2>统一事件流</h2>
 <p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
@@ -342,7 +342,7 @@ interface Usage extends TokenCounts {
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net denied 主机:端口 (原因)</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
-  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量与 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 里的每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量与 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
   <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
   <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
   <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>

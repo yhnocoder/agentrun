@@ -86,7 +86,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
     <tr><td><code>&lt;场景&gt;.events.jsonl</code></td><td>期望的统一事件流，不含 <code>start</code> 与 <code>end</code> 之前的启动过程，含 <code>end</code></td></tr>
   </tbody>
 </table>
-<p><code>support::replay</code> 读 <code>raw.jsonl</code>，按 <code>meta.json</code> 构造 <code>Invocation</code> 与 <code>Exit</code>，调用适配器的 <code>launch</code>，再把每行交给 <code>translate_line</code>，最后 <code>conclude</code>，得到的事件去掉 <code>time</code> 与 <code>duration_ms</code> 后与 <code>events.jsonl</code> 逐个比较。<code>tests/fixtures/fake/basic.*</code> 没有 <code>meta.json</code>，给 <code>FakeAdapter</code> 用。</p>
+<p><code>support::replay</code> 读 <code>raw.jsonl</code>，按 <code>meta.json</code> 构造 <code>Invocation</code> 与 <code>Exit</code>，以 dry-run 方式调用适配器的 <code>launch</code>（codex 另给 <code>AGENTRUN_CODEX_AUTH</code> 的内容使登录检查通过），再把每行交给 <code>translate_line</code>，最后调用 <code>conclude</code> 并传入 <code>Launch</code> 记录的包裹方式，得到的事件去掉 <code>time</code> 与 <code>duration_ms</code> 后与 <code>events.jsonl</code> 逐个比较。<code>tests/fixtures/fake/basic.*</code> 没有 <code>meta.json</code>，给 <code>FakeAdapter</code> 用。</p>
 <p>样本来源：<code>scripts/probe/probe.sh</code> 在 Cloud Managed 容器、docker 与 macOS 上直接运行三个运行时，每个场景一个目录，记录原始输出、退出码与标准错误；<code>meta.json</code> 里 <code>/tmp/agentrun-probe-&lt;随机&gt;/&lt;场景&gt;-&lt;运行时&gt;</code> 形式的 <code>cwd</code> 就是这些目录。<code>events.jsonl</code> 是写适配器时由当时的适配器生成、逐条核对后保存的。样本记录时的运行时版本见<a href="run.html">运行</a>页的「运行时版本」。</p>
 <p>更新样本的步骤：</p>
 <ol>

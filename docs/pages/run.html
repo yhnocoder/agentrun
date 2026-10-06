@@ -32,17 +32,17 @@
   <tbody>
     <tr><td><code>src/main.rs</code></td><td>入口：安装信号处理，把进程的参数、环境与标准流装进 <code>Caller</code>，调用 <code>run::run</code>，把返回的退出码交给进程</td><td>命令行界面、退出码</td></tr>
     <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Command</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
-    <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>（解析命令行后分派给运行时子命令、<code>doctor::run</code> 或 <code>doctor::connect</code>）、<code>prepare</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
-    <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code>、<code>Exit</code>、<code>translate_line</code>、<code>conclude</code></td><td>一次运行的顺序、退出码</td></tr>
-    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>、<code>Launch</code>、<code>Record</code>、<code>builtin</code>、<code>DETAIL_MAX_CHARS</code>（500）、<code>detail_head</code>、<code>detail_tail</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>（解析命令行后分派给运行时子命令、<code>doctor::run</code> 或 <code>doctor::connect</code>，被拒绝时在这一处输出 <code>end</code>）、<code>parse_command</code>、<code>prepare</code>、<code>set_up</code>、<code>dry_run</code>、<code>Resources</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
+    <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code>、<code>Relay</code>（把运行时的每条消息交给输出）、<code>supervise</code>、<code>spawn_runtime</code>、<code>spawn_pumps</code>、<code>translate_line</code>、<code>conclude</code>、<code>Exit</code></td><td>一次运行的顺序、退出码</td></tr>
+    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>，<code>failure</code> 返回 <code>Failure</code>）、<code>Invocation</code>、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_max_turns</code>、<code>DETAIL_MAX_CHARS</code>（500）、<code>detail_head</code>、<code>detail_tail</code></td><td>三个运行时各节的共同接口</td></tr>
     <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code></td><td>claude-code</td></tr>
-    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>、<code>service_provider</code>、<code>service_host</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
+    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>（由 <code>Pi::check_args</code> 与 <code>launch</code> 调用）、<code>service_provider</code>、<code>service_host</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
     <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>network_settings</code>、<code>filesystem_setting</code>、<code>toml_string</code></td><td>codex</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>Check</code>、<code>Status</code>、<code>Item</code>、<code>run</code>、<code>connect</code></td><td>doctor 检查</td></tr>
-    <tr><td><code>src/json.rs</code></td><td>读取原始 JSON 字段的辅助函数 <code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
+    <tr><td><code>src/json.rs</code></td><td>读取原始 JSON 字段的辅助函数 <code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code>（text 与 rich 格式也用它取第一行）</td><td>三个运行时的输出映射</td></tr>
   </tbody>
 </table>
-<p>每个运行时一个 <code>Adapter</code> 实现。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」给出 <code>detail</code>。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：新增运行时时只增加一个文件。</p>
+<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只有部分运行时支持的参数，例如 <code>--max-turns</code> 与 pi 的 <code>--model</code> 格式。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对三个运行时相同；运行时之间的差别写在适配器里，以及 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>network::proxy_needed</code>、<code>credential::write_session_credential</code> 这几个与 doctor 共用、按 <code>Runtime</code> 分支的函数里，运行框架只把 <code>Runtime</code> 传给它们。</p>
 
 <h2>命令行界面</h2>
 <p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>
@@ -105,11 +105,12 @@ agentrun variables: (none)</div>
   <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
-  <li>凭据写入失败；codex 的登录文件不存在。</li>
+  <li>凭据写入失败。</li>
   <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
   <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>。</li>
-  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的状态目录创建失败或 Seatbelt 配置文件写不出、codex 的私有目录创建失败。</li>
+  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的状态目录创建失败或 Seatbelt 配置文件写不出、codex 的登录文件不存在或私有目录创建失败。</li>
 </ul>
+<p>过滤代理启动失败先于 codex 登录文件与私有目录的检查：两者同时成立时，<code>detail</code> 是过滤代理那一条。</p>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 
 <h2 id="doctor_check">doctor 检查</h2>
@@ -367,7 +368,7 @@ agentrun variables: (none)</div>
 <ul>
   <li>写进 <code>-c</code> 值的字符串按 TOML 基本字符串写：外加双引号，<code>\</code> 写成 <code>\\</code>，<code>"</code> 写成 <code>\"</code>，控制字符写成 <code>\uXXXX</code>。用于会话临时目录路径、<code>--effort</code> 的值与主机名。</li>
   <li><code>--dry-run</code> 时会话临时目录写成 <code>&lt;tempdir&gt;</code>，私有目录写成 <code>&lt;tempdir&gt;-codex</code>（只在环境里，不在 argv 里）。</li>
-  <li>用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）不存在、也没有给出 <code>AGENTRUN_CODEX_AUTH</code> 时启动前报错，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>codex login file &lt;路径&gt; not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</code>。私有目录创建失败的 <code>detail</code> 为 <code>cannot create the codex home directory &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
+  <li>登录文件的检查与私有目录的创建由 <code>Codex::launch</code> 做。用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）不存在、也没有给出 <code>AGENTRUN_CODEX_AUTH</code> 时启动前报错，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>codex login file &lt;路径&gt; not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</code>。私有目录创建失败的 <code>detail</code> 为 <code>cannot create the codex home directory &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
   <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除。</li>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
