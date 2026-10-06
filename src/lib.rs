@@ -16,4 +16,5 @@ pub mod run;
 pub mod sandbox;
 pub mod session;
 pub mod signal;
+pub mod text;
 pub mod usage;
