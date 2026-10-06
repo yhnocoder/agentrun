@@ -696,6 +696,70 @@ fn plain_http_forwards_one_request_per_connection_with_its_body() {
     }
 }
 
+const SLOW_RESPONSE: &str =
+    "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world";
+
+fn start_slow_server() -> (u16, Receiver<bool>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, half_closed) = channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        read_head(&mut stream);
+        thread::sleep(Duration::from_millis(100));
+        stream.set_nonblocking(true).unwrap();
+        let mut byte = [0u8; 1];
+        let _ = sender.send(matches!(stream.read(&mut byte), Ok(0)));
+        stream.set_nonblocking(false).unwrap();
+        let _ = stream.write_all(SLOW_RESPONSE.as_bytes());
+        let _ = stream.shutdown(Shutdown::Both);
+    });
+    (port, half_closed)
+}
+
+fn get_and_half_close(running: &Running, url: &str) -> String {
+    let mut stream = running.tcp();
+    stream
+        .write_all(format!("GET {url} HTTP/1.1\r\nHost: ignored\r\n\r\n").as_bytes())
+        .unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    read_all(&mut stream)
+}
+
+#[test]
+fn half_closed_client_gets_the_direct_response() {
+    let (port, _) = start_slow_server();
+    let running = Running::start(
+        custom(vec![rule("127.0.0.1", Some(port))]),
+        Upstream::default(),
+    );
+    let response = get_and_half_close(&running, &format!("http://127.0.0.1:{port}/"));
+    assert_eq!(response, SLOW_RESPONSE);
+}
+
+#[test]
+fn half_closed_client_gets_the_response_through_the_upstream_proxy() {
+    let (port, half_closed) = start_slow_server();
+    let running = Running::start(
+        custom(vec![rule("example.com", None)]),
+        Upstream {
+            secure: None,
+            plain: Some(ProxyAddress {
+                host: "127.0.0.1".to_string(),
+                port,
+                authorization: None,
+            }),
+            no_proxy: Vec::new(),
+        },
+    );
+    let response = get_and_half_close(&running, "http://example.com/");
+    assert_eq!(response, SLOW_RESPONSE);
+    assert_eq!(half_closed.recv_timeout(Duration::from_secs(5)), Ok(false));
+}
+
 #[test]
 fn plain_http_rewrites_the_host_header_to_the_judged_target() {
     let server = Server::start(false);

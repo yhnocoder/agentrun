@@ -764,9 +764,9 @@ fn forward_request(
     });
     let mut discarded = [0u8; 4096];
     while matches!(client.read(&mut discarded), Ok(count) if count > 0) {}
-    let _ = server_stream.shutdown(Shutdown::Both);
     let _ = downstream.join();
     let _ = client.shutdown(Shutdown::Both);
+    let _ = server_stream.shutdown(Shutdown::Both);
 }
 
 fn handle_socks(mut client: Client, server: &Server) {
