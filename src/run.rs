@@ -206,6 +206,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ),
         None => "credentials: (none)".to_string(),
     };
+    let hold = caller.signals.hold();
     let tempdir = match create_tempdir(&caller, TEMPDIR_PREFIX) {
         Ok(tempdir) => tempdir,
         Err(detail) => return reject(&mut caller, format, &detail, started),
@@ -213,9 +214,11 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     caller
         .signals
         .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
+    drop(hold);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
     let _codex_home = match &codex_login {
         Some(login) => {
+            let hold = caller.signals.hold();
             let home = codex::home_path(tempdir.path());
             if let Err(detail) = codex::check_login(&ready.invocation.session, login)
                 .and_then(|()| codex::create_home(&home, login))
@@ -225,6 +228,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
             caller
                 .signals
                 .tempdir(home.clone(), ready.invocation.args.debug);
+            drop(hold);
             ready.invocation.codex_home = Some(home.clone());
             Some(PrivateDir {
                 path: home,
@@ -554,6 +558,7 @@ fn execute(
     for key in TEMP_ENV_VARS {
         command.env(key, tempdir.path());
     }
+    let hold = caller.signals.hold();
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -576,6 +581,7 @@ fn execute(
         invocation.args.timeout.map(Duration::from_secs),
         launch.signal_wrapped_child,
     );
+    drop(hold);
 
     let start = Event::now(Body::Start(Start {
         runtime: invocation.runtime,
