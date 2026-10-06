@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use agentrun::event::SandboxKind;
+use agentrun::pi::state;
 use agentrun::sandbox::{wrap_seatbelt, wrapper_failure, write_seatbelt_profile};
 use tempfile::TempDir;
 
@@ -23,6 +24,9 @@ impl Wrapped {
         for dir in [wrapped.cwd(), wrapped.tempdir(), wrapped.home()] {
             std::fs::create_dir(dir).unwrap();
         }
+        std::fs::create_dir_all(wrapped.state_dir()).unwrap();
+        std::fs::write(wrapped.state_dir().join("auth.json"), "{}").unwrap();
+        std::fs::write(wrapped.state_dir().join("settings.json"), "{}").unwrap();
         wrapped
     }
 
@@ -38,16 +42,17 @@ impl Wrapped {
         self.root.path().join("home")
     }
 
-    fn login_file(&self) -> PathBuf {
-        std::fs::canonicalize(self.home())
-            .unwrap()
-            .join("auth.json")
+    fn state_dir(&self) -> PathBuf {
+        self.home().join(".pi/agent")
+    }
+
+    fn real_state_dir(&self) -> PathBuf {
+        std::fs::canonicalize(self.state_dir()).unwrap()
     }
 
     fn run(&self, body: &str, args: &[&str], port: Option<&str>) -> Output {
-        std::fs::write(self.login_file(), "{}").unwrap();
-        write_seatbelt_profile(&self.cwd(), &self.tempdir(), Some(&self.login_file()), port)
-            .unwrap();
+        let state = state(&self.state_dir()).unwrap();
+        write_seatbelt_profile(&self.cwd(), &self.tempdir(), Some(&state), port).unwrap();
         let script = self.tempdir().join("script.sh");
         std::fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -71,22 +76,32 @@ fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
 }
 
+fn outcomes(output: &Output) -> Vec<String> {
+    stdout(output)
+        .lines()
+        .map(|line| line.split(':').next().unwrap().to_string())
+        .collect()
+}
+
 const WRITE_EACH: &str = "for f in \"$@\"; do if echo probe > \"$f\" 2>/dev/null; then echo \"written: $f\"; else echo \"blocked: $f\"; fi; done\n";
 
 #[test]
-fn writes_only_cwd_tempdir_and_login_file() {
+fn writes_only_cwd_tempdir_and_the_writable_state_entries() {
     let wrapped = Wrapped::new();
     let other_tmp = PathBuf::from(format!(
         "/tmp/agentrun-seatbelt-test-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
+    let state_dir = wrapped.real_state_dir();
     let output = wrapped.run(
         WRITE_EACH,
         &[
             wrapped.cwd().join("inside.txt").to_str().unwrap(),
             wrapped.tempdir().join("temp.txt").to_str().unwrap(),
-            wrapped.login_file().to_str().unwrap(),
+            state_dir.join("auth.json").to_str().unwrap(),
+            state_dir.join("models-store.json").to_str().unwrap(),
+            state_dir.join("settings.json").to_str().unwrap(),
             wrapped.home().join("outside.txt").to_str().unwrap(),
             other_tmp.to_str().unwrap(),
         ],
@@ -94,23 +109,53 @@ fn writes_only_cwd_tempdir_and_login_file() {
     );
     let _ = std::fs::remove_file(&other_tmp);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let text = stdout(&output);
-    let lines: Vec<&str> = text
-        .lines()
-        .map(|line| line.split(':').next().unwrap())
-        .collect();
     assert_eq!(
-        lines,
-        ["written", "written", "written", "blocked", "blocked"]
+        outcomes(&output),
+        [
+            "written", "written", "written", "written", "blocked", "blocked", "blocked"
+        ]
     );
     assert!(wrapped.cwd().join("inside.txt").exists());
     assert!(wrapped.tempdir().join("temp.txt").exists());
     assert_eq!(
-        std::fs::read_to_string(wrapped.login_file()).unwrap(),
+        std::fs::read_to_string(state_dir.join("auth.json")).unwrap(),
         "probe\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("models-store.json")).unwrap(),
+        "probe\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("settings.json")).unwrap(),
+        "{}"
     );
     assert!(!wrapped.home().join("outside.txt").exists());
     assert!(!other_tmp.exists());
+}
+
+#[test]
+fn lock_directories_can_be_created_but_other_new_entries_cannot() {
+    let wrapped = Wrapped::new();
+    let state_dir = wrapped.real_state_dir();
+    let output = wrapped.run(
+        "for d in \"$@\"; do if mkdir \"$d\" 2>/dev/null; then echo \"created: $d\"; rmdir \"$d\" && echo \"removed: $d\"; else echo \"blocked: $d\"; fi; done\n",
+        &[
+            state_dir.join("auth.json.lock").to_str().unwrap(),
+            state_dir.join("models-store.json.lock").to_str().unwrap(),
+            state_dir.join("settings.json.lock").to_str().unwrap(),
+            state_dir.join("extensions").to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        outcomes(&output),
+        [
+            "created", "removed", "created", "removed", "created", "removed", "blocked"
+        ]
+    );
+    assert!(!state_dir.join("auth.json.lock").exists());
+    assert!(!state_dir.join("extensions").exists());
 }
 
 #[test]

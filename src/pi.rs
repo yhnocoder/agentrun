@@ -1,7 +1,5 @@
-use std::ffi::OsString;
-use std::fs::{DirBuilder, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::fs::DirBuilder;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -14,7 +12,8 @@ use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{ProxyEndpoint, proxy_environment};
 use crate::run::Invocation;
 use crate::sandbox::{
-    ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure, write_seatbelt_profile,
+    PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
+    write_seatbelt_profile,
 };
 use crate::session::Session;
 use crate::usage::TokenCounts;
@@ -30,12 +29,15 @@ const SERVICE_HOSTS: [(&str, &str); 5] = [
 ];
 const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
-pub const PRIVATE_STATE_DIR: &str = "pi-agent";
 pub const LOGIN_FILE: &str = "auth.json";
-const MODELS_FILE: &str = "models.json";
 pub const SETTINGS_FILE: &str = "settings.json";
-const BIN_DIR: &str = "bin";
-const LINKED_TOOLS: [&str; 2] = ["fd", "rg"];
+pub const WRITABLE_STATE_ENTRIES: [&str; 5] = [
+    "auth.json",
+    "auth.json.lock",
+    "models-store.json",
+    "models-store.json.lock",
+    "settings.json.lock",
+];
 const SETTINGS_KEYS: [&str; 2] = ["defaultProvider", "defaultModel"];
 const FIXED_ARGS: [&str; 12] = [
     "-p",
@@ -161,16 +163,15 @@ impl Adapter for Pi {
             Some(model) => Some(parse_model(model)?),
             None => None,
         };
-        let private_dir = invocation.tempdir.join(PRIVATE_STATE_DIR);
         let user_dir = user_state_dir(&invocation.session, &invocation.cwd);
-        if !invocation.args.dry_run {
-            prepare_state_dir(&private_dir, user_dir.as_deref()).map_err(|error| {
-                format!(
-                    "cannot prepare pi state directory {}: {error}",
-                    private_dir.display()
-                )
-            })?;
-        }
+        let state = match user_dir.as_deref() {
+            Some(dir) if invocation.args.dry_run => dir
+                .is_dir()
+                .then(|| state(dir).map_err(|error| read_error(dir, &error)))
+                .transpose()?,
+            Some(dir) => Some(prepare_state(dir)?),
+            None => None,
+        };
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
         argv.push(TOOLS.to_string());
@@ -185,10 +186,7 @@ impl Adapter for Pi {
         argv.extend(invocation.args.runtime_args.iter().cloned());
         argv.push("--".to_string());
         argv.push(invocation.prompt.clone());
-        let mut env = vec![(
-            OsString::from(STATE_DIR_VARIABLE),
-            private_dir.into_os_string(),
-        )];
+        let mut env = Vec::new();
         let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
             let provider = match &self.expected {
@@ -210,7 +208,6 @@ impl Adapter for Pi {
             env.extend(proxy_environment(&proxy.port_text()));
         }
         let port = invocation.proxy.as_ref().map(ProxyEndpoint::port_text);
-        let login = || login_file(user_dir.as_deref());
         let bwrap = invocation
             .sandbox
             .bwrap
@@ -233,7 +230,7 @@ impl Adapter for Pi {
                 bwrap,
                 &invocation.cwd,
                 &invocation.tempdir,
-                login().as_deref(),
+                state.as_ref(),
                 forward.as_ref(),
                 &argv,
             );
@@ -242,7 +239,7 @@ impl Adapter for Pi {
                 write_seatbelt_profile(
                     &invocation.cwd,
                     &invocation.tempdir,
-                    login().as_deref(),
+                    state.as_ref(),
                     port.as_deref(),
                 )
                 .map_err(|error| {
@@ -329,52 +326,57 @@ pub fn parse_model(value: &str) -> Result<Model, String> {
     }
 }
 
-fn prepare_state_dir(private_dir: &Path, user_dir: Option<&Path>) -> std::io::Result<()> {
-    DirBuilder::new().mode(0o700).create(private_dir)?;
-    let mut settings = Map::new();
-    if let Some(user_dir) = user_dir {
-        for name in [LOGIN_FILE, MODELS_FILE] {
-            link_existing(&user_dir.join(name), &private_dir.join(name))?;
-        }
-        let tools: Vec<(PathBuf, PathBuf)> = LINKED_TOOLS
-            .iter()
-            .filter_map(|tool| {
-                let real = std::fs::canonicalize(user_dir.join(BIN_DIR).join(tool)).ok()?;
-                Some((real, private_dir.join(BIN_DIR).join(tool)))
-            })
-            .collect();
-        if !tools.is_empty() {
-            DirBuilder::new()
-                .mode(0o700)
-                .create(private_dir.join(BIN_DIR))?;
-            for (real, link) in tools {
-                std::os::unix::fs::symlink(real, link)?;
-            }
-        }
-        settings = default_model_settings(&user_dir.join(SETTINGS_FILE));
-    }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(private_dir.join(SETTINGS_FILE))?;
-    file.write_all(&serde_json::to_vec(&Value::Object(settings))?)?;
-    Ok(())
-}
-
-fn link_existing(source: &Path, link: &Path) -> std::io::Result<()> {
-    match std::fs::canonicalize(source) {
-        Ok(real) => std::os::unix::fs::symlink(real, link),
-        Err(_) => Ok(()),
-    }
-}
-
 pub fn user_state_dir(session: &Session, cwd: &Path) -> Option<PathBuf> {
     session.runtime_dir(cwd, STATE_DIR_VARIABLE, STATE_HOME_SUBDIR)
 }
 
-pub fn login_file(user_dir: Option<&Path>) -> Option<PathBuf> {
-    user_dir.and_then(|dir| std::fs::canonicalize(dir.join(LOGIN_FILE)).ok())
+pub fn prepare_state(user_dir: &Path) -> Result<PiState, String> {
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(user_dir)
+        .map_err(|error| {
+            format!(
+                "cannot create the pi state directory {}: {error}",
+                user_dir.display()
+            )
+        })?;
+    state(user_dir).map_err(|error| read_error(user_dir, &error))
+}
+
+fn read_error(user_dir: &Path, error: &std::io::Error) -> String {
+    format!(
+        "cannot read the pi state directory {}: {error}",
+        user_dir.display()
+    )
+}
+
+pub fn state(user_dir: &Path) -> std::io::Result<PiState> {
+    let dir = std::fs::canonicalize(user_dir)?;
+    let login = dir.join(LOGIN_FILE);
+    let login_target = std::fs::canonicalize(&login)
+        .ok()
+        .filter(|target| *target != login);
+    let mut readonly = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        if WRITABLE_STATE_ENTRIES
+            .iter()
+            .any(|name| entry.file_name() == *name)
+        {
+            continue;
+        }
+        let path = entry.path();
+        if std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir() || metadata.is_file()) {
+            readonly.push(path);
+        }
+    }
+    readonly.sort();
+    Ok(PiState {
+        dir,
+        login_target,
+        readonly,
+    })
 }
 
 pub fn default_model(settings: &Path) -> Option<Model> {
@@ -491,8 +493,8 @@ mod tests {
             self.home().join(".pi/agent")
         }
 
-        fn private(&self) -> PathBuf {
-            self.tempdir().join("pi-agent")
+        fn real_user_state(&self) -> PathBuf {
+            std::fs::canonicalize(self.user_state()).unwrap()
         }
 
         fn write_user_file(&self, name: &str, content: &str) -> PathBuf {
@@ -588,13 +590,7 @@ mod tests {
         assert_eq!(launch.argv, expected);
         assert!(launch.stdin.is_empty());
         assert!(!launch.signal_wrapped_child);
-        assert_eq!(
-            launch.env,
-            vec![(
-                OsString::from("PI_CODING_AGENT_DIR"),
-                setup.private().into_os_string()
-            )]
-        );
+        assert_eq!(launch.env, vec![]);
     }
 
     #[test]
@@ -643,30 +639,39 @@ mod tests {
         );
     }
 
+    fn mounts(argv: &[String]) -> Vec<(&str, &str)> {
+        let separator = argv.iter().position(|arg| arg == "--dev").unwrap();
+        argv[1..separator]
+            .chunks(3)
+            .map(|chunk| {
+                assert_eq!(chunk[1], chunk[2]);
+                (chunk[0].as_str(), chunk[1].as_str())
+            })
+            .collect()
+    }
+
     #[test]
-    fn sandboxed_argv_binds_the_real_login_file() {
+    fn sandboxed_argv_binds_the_state_dir_and_the_real_login_file() {
         let setup = Setup::new();
         let real = setup.write_user_file("real-auth.json", "{}");
         std::os::unix::fs::symlink(&real, setup.user_state().join("auth.json")).unwrap();
+        setup.write_user_file("settings.json", "{}");
         let home = setup.with_home();
         let launch = launch(&setup, &pairs(&home), true, &[]);
         assert!(launch.signal_wrapped_child);
-        let real_text = std::fs::canonicalize(&real)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let position = launch
-            .argv
-            .iter()
-            .position(|arg| *arg == real_text)
-            .expect("the real login path is bound");
-        assert_eq!(launch.argv[position - 1], "--bind");
-        assert_eq!(launch.argv[position + 1], real_text);
-        assert!(
-            !launch
-                .argv
-                .iter()
-                .any(|arg| arg.ends_with("/agent/auth.json"))
+        let state = setup.real_user_state();
+        let text = |path: &Path| path.to_string_lossy().into_owned();
+        assert_eq!(
+            mounts(&launch.argv),
+            [
+                ("--ro-bind", "/"),
+                ("--bind", text(&setup.work()).as_str()),
+                ("--bind", text(&setup.tempdir()).as_str()),
+                ("--bind", text(&state).as_str()),
+                ("--ro-bind", text(&state.join("real-auth.json")).as_str()),
+                ("--ro-bind", text(&state.join("settings.json")).as_str()),
+                ("--bind", text(&state.join("real-auth.json")).as_str()),
+            ]
         );
         assert_eq!(launch.argv[0], "/usr/bin/bwrap");
         let separator = launch.argv.iter().position(|arg| arg == "--").unwrap();
@@ -674,143 +679,122 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_argv_without_login_file_binds_only_cwd_and_tempdir() {
+    fn sandboxed_argv_without_a_state_dir_binds_only_cwd_and_tempdir() {
+        let setup = Setup::new();
+        let launch = launch(&setup, &[], true, &[]);
+        assert_eq!(launch.argv.iter().filter(|arg| *arg == "--bind").count(), 2);
+        assert!(!setup.user_state().exists());
+    }
+
+    #[test]
+    fn launch_creates_the_missing_state_dir_with_private_permissions() {
         let setup = Setup::new();
         let home = setup.with_home();
         let launch = launch(&setup, &pairs(&home), true, &[]);
-        assert_eq!(launch.argv.iter().filter(|arg| *arg == "--bind").count(), 2);
+        assert_eq!(mode(&setup.home().join(".pi")), 0o700);
+        assert_eq!(mode(&setup.user_state()), 0o700);
+        assert_eq!(std::fs::read_dir(setup.user_state()).unwrap().count(), 0);
+        let state = setup.real_user_state();
+        assert_eq!(
+            mounts(&launch.argv)[3..],
+            [("--bind", state.to_str().unwrap())]
+        );
+        assert_eq!(launch.env, vec![]);
     }
 
     #[test]
-    fn private_dir_links_existing_user_files() {
+    fn state_lists_readonly_entries_sorted_without_writable_or_dangling_ones() {
         let setup = Setup::new();
-        let auth = setup.write_user_file("auth.json", "{\"deepseek\":{}}");
-        let models = setup.write_user_file("models.json", "{}");
-        let fd = setup.write_user_file("bin/fd", "#!/bin/sh\n");
-        setup.write_user_file(
+        for name in [
+            "auth.json",
+            "auth.json.lock",
+            "models-store.json",
+            "models-store.json.lock",
+            "settings.json.lock",
             "settings.json",
-            "{\"defaultProvider\":\"deepseek\",\"defaultModel\":\"deepseek-flash\",\"packages\":[\"x\"]}",
-        );
-        let home = setup.with_home();
-        launch(&setup, &pairs(&home), false, &[]);
-        let private = setup.private();
-        assert_eq!(mode(&private), 0o700);
-        assert_eq!(
-            std::fs::read_link(private.join("auth.json")).unwrap(),
-            std::fs::canonicalize(&auth).unwrap()
-        );
-        assert_eq!(
-            std::fs::read_link(private.join("models.json")).unwrap(),
-            std::fs::canonicalize(&models).unwrap()
-        );
-        assert_eq!(mode(&private.join("bin")), 0o700);
-        assert_eq!(
-            std::fs::read_link(private.join("bin/fd")).unwrap(),
-            std::fs::canonicalize(&fd).unwrap()
-        );
-        assert!(!private.join("bin/rg").exists());
-        assert_eq!(mode(&private.join("settings.json")), 0o600);
-        let settings: Value =
-            serde_json::from_str(&std::fs::read_to_string(private.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            settings,
-            json!({"defaultProvider": "deepseek", "defaultModel": "deepseek-flash"})
-        );
-        let names: Vec<String> = std::fs::read_dir(&private)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names.len(), 4);
-    }
-
-    #[test]
-    fn private_dir_links_resolve_symlinked_user_files() {
-        let setup = Setup::new();
-        let real = setup.write_user_file("elsewhere/rg", "#!/bin/sh\n");
-        std::fs::create_dir_all(setup.user_state().join("bin")).unwrap();
-        std::os::unix::fs::symlink(&real, setup.user_state().join("bin/rg")).unwrap();
-        let home = setup.with_home();
-        launch(&setup, &pairs(&home), false, &[]);
-        let private = setup.private();
-        assert_eq!(
-            std::fs::read_link(private.join("bin/rg")).unwrap(),
-            std::fs::canonicalize(&real).unwrap()
-        );
-        assert!(!private.join("bin/fd").exists());
-        assert!(!private.join("auth.json").exists());
-        assert!(!private.join("models.json").exists());
-    }
-
-    #[test]
-    fn private_dir_without_user_files_has_only_empty_settings() {
-        let setup = Setup::new();
-        for env in [
-            Vec::new(),
-            setup.with_home(),
-            vec![(
-                "PI_CODING_AGENT_DIR".to_string(),
-                setup
-                    .root
-                    .path()
-                    .join("missing")
-                    .to_string_lossy()
-                    .into_owned(),
-            )],
+            "models.json",
+            "bin/fd",
+            "extensions/x.js",
         ] {
-            let _ = std::fs::remove_dir_all(setup.private());
-            launch(&setup, &pairs(&env), false, &[]);
-            let names: Vec<String> = std::fs::read_dir(setup.private())
-                .unwrap()
-                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-                .collect();
-            assert_eq!(names, ["settings.json"], "{env:?}");
-            assert_eq!(
-                std::fs::read_to_string(setup.private().join("settings.json")).unwrap(),
-                "{}"
-            );
+            setup.write_user_file(name, "x");
         }
-    }
-
-    #[test]
-    fn settings_that_are_missing_or_not_json_objects_become_empty() {
-        let setup = Setup::new();
-        let home = setup.with_home();
-        for content in ["not json", "[1,2]", "\"text\"", ""] {
-            let _ = std::fs::remove_dir_all(setup.private());
-            setup.write_user_file("settings.json", content);
-            launch(&setup, &pairs(&home), false, &[]);
-            assert_eq!(
-                std::fs::read_to_string(setup.private().join("settings.json")).unwrap(),
-                "{}",
-                "{content}"
-            );
-        }
-        let _ = std::fs::remove_dir_all(setup.private());
-        setup.write_user_file(
-            "settings.json",
-            "{\"defaultModel\": 3, \"theme\": \"dark\"}",
-        );
-        launch(&setup, &pairs(&home), false, &[]);
+        let dir = setup.user_state();
+        std::os::unix::fs::symlink(dir.join("absent"), dir.join("dangling")).unwrap();
+        std::os::unix::fs::symlink(dir.join("bin"), dir.join("bin-link")).unwrap();
+        std::os::unix::net::UnixListener::bind(dir.join("socket")).unwrap();
+        let state = state(&dir).unwrap();
+        let real = setup.real_user_state();
+        assert_eq!(state.dir, real);
+        assert_eq!(state.login_target, None);
         assert_eq!(
-            std::fs::read_to_string(setup.private().join("settings.json")).unwrap(),
-            "{\"defaultModel\":3}"
+            state.readonly,
+            [
+                real.join("bin"),
+                real.join("bin-link"),
+                real.join("extensions"),
+                real.join("models.json"),
+                real.join("settings.json"),
+            ]
         );
     }
 
     #[test]
-    fn state_dir_variable_from_env_option_selects_the_user_files() {
+    fn state_login_target_is_set_only_for_a_symlinked_login_file() {
+        let setup = Setup::new();
+        let elsewhere = setup.root.path().join("elsewhere/auth.json");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, "{}").unwrap();
+        std::fs::create_dir_all(setup.user_state()).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, setup.user_state().join("auth.json")).unwrap();
+        let linked = state(&setup.user_state()).unwrap();
+        assert_eq!(
+            linked.login_target,
+            Some(std::fs::canonicalize(&elsewhere).unwrap())
+        );
+        assert_eq!(linked.readonly, Vec::<PathBuf>::new());
+
+        std::fs::remove_file(setup.user_state().join("auth.json")).unwrap();
+        assert_eq!(state(&setup.user_state()).unwrap().login_target, None);
+        setup.write_user_file("auth.json", "{}");
+        assert_eq!(state(&setup.user_state()).unwrap().login_target, None);
+    }
+
+    #[test]
+    fn default_model_settings_keep_only_the_two_keys() {
+        let setup = Setup::new();
+        for content in ["not json", "[1,2]", "\"text\"", ""] {
+            let path = setup.write_user_file("settings.json", content);
+            assert_eq!(default_model_settings(&path), Map::new(), "{content}");
+        }
+        assert_eq!(
+            default_model_settings(&setup.user_state().join("missing.json")),
+            Map::new()
+        );
+        let path = setup.write_user_file(
+            "settings.json",
+            "{\"defaultModel\": 3, \"defaultProvider\": \"deepseek\", \"theme\": \"dark\"}",
+        );
+        assert_eq!(
+            Value::Object(default_model_settings(&path)),
+            json!({"defaultModel": 3, "defaultProvider": "deepseek"})
+        );
+    }
+
+    #[test]
+    fn state_dir_variable_from_env_option_selects_the_user_dir() {
         let setup = Setup::new();
         let custom = setup.root.path().join("custom-state");
         std::fs::create_dir(&custom).unwrap();
         std::fs::write(custom.join("auth.json"), "{}").unwrap();
         let home = setup.with_home();
         let variable = format!("PI_CODING_AGENT_DIR={}", custom.display());
-        launch(&setup, &pairs(&home), false, &["--env", &variable]);
+        let launch = launch(&setup, &pairs(&home), true, &["--env", &variable]);
+        let real = std::fs::canonicalize(&custom).unwrap();
         assert_eq!(
-            std::fs::read_link(setup.private().join("auth.json")).unwrap(),
-            std::fs::canonicalize(custom.join("auth.json")).unwrap()
+            mounts(&launch.argv)[3..],
+            [("--bind", real.to_str().unwrap())]
         );
+        assert!(!setup.user_state().exists());
     }
 
     fn proxy(port: Option<u16>, setup: &Setup) -> ProxyEndpoint {
@@ -821,7 +805,6 @@ mod tests {
     }
 
     fn proxied(setup: &Setup, port: Option<u16>, extra: &[&str]) -> Result<Launch, String> {
-        let _ = std::fs::remove_dir_all(setup.private());
         let mut invocation = setup.invocation(&pairs(&setup.with_home()), true, extra);
         invocation.proxy = Some(proxy(port, setup));
         Pi::new().launch(Path::new("/opt/bin/pi"), &invocation)
@@ -847,10 +830,7 @@ mod tests {
         assert_eq!(launch.argv[separator + 7], "/opt/bin/pi");
         assert!(launch.argv.contains(&"--unshare-net".to_string()));
         let address = OsString::from("http://127.0.0.1:41234");
-        let mut expected = vec![(
-            OsString::from("PI_CODING_AGENT_DIR"),
-            setup.private().into_os_string(),
-        )];
+        let mut expected = Vec::new();
         for name in [
             "HTTPS_PROXY",
             "HTTP_PROXY",
@@ -933,11 +913,10 @@ mod tests {
             OsString::from("HTTPS_PROXY"),
             OsString::from("http://127.0.0.1:<proxy port>")
         )));
-        assert!(!setup.private().exists());
+        assert!(!setup.user_state().exists());
     }
 
     fn seatbelt(setup: &Setup, port: Option<u16>, extra: &[&str]) -> (Pi, Launch) {
-        let _ = std::fs::remove_dir_all(setup.private());
         let _ = std::fs::remove_file(setup.tempdir().join("seatbelt.sb"));
         let mut invocation = setup.invocation(&pairs(&setup.with_home()), false, extra);
         invocation.sandbox.kind = SandboxKind::Seatbelt;
@@ -972,21 +951,34 @@ mod tests {
         )));
         assert_eq!(mode(&profile_path), 0o600);
         let real_path = |path: &Path| std::fs::canonicalize(path).unwrap();
+        let state = PiState {
+            dir: setup.real_user_state(),
+            login_target: Some(real_path(&real)),
+            readonly: vec![setup.real_user_state().join("real-auth.json")],
+        };
+        let profile = std::fs::read_to_string(&profile_path).unwrap();
         assert_eq!(
-            std::fs::read_to_string(&profile_path).unwrap(),
+            profile,
             crate::sandbox::seatbelt_profile(
                 &real_path(&setup.work()),
                 &real_path(&setup.tempdir()),
-                Some(&real_path(&real)),
+                Some(&state),
                 Some("41234"),
             )
         );
+        assert!(profile.contains("/agent/auth.json.lock\")\n"), "{profile}");
+        assert!(profile.contains("/agent/real-auth.json\")\n"), "{profile}");
     }
 
     #[test]
-    fn seatbelt_launch_without_login_file_leaves_it_out() {
+    fn seatbelt_launch_without_a_state_dir_leaves_it_out() {
         let setup = Setup::new();
-        seatbelt(&setup, Some(1), &["--model", "deepseek/deepseek-flash"]);
+        let mut invocation = setup.invocation(&[], false, &["--model", "deepseek/deepseek-flash"]);
+        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.proxy = Some(proxy(Some(1), &setup));
+        Pi::new()
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap();
         let profile = std::fs::read_to_string(setup.tempdir().join("seatbelt.sb")).unwrap();
         assert!(!profile.contains("auth.json"), "{profile}");
         assert!(
@@ -1012,7 +1004,7 @@ mod tests {
             ]
         );
         assert!(!setup.tempdir().join("seatbelt.sb").exists());
-        assert!(!setup.private().exists());
+        assert!(!setup.user_state().exists());
     }
 
     #[test]
@@ -1062,31 +1054,41 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_creates_nothing() {
+    fn dry_run_creates_no_state_dir_and_binds_an_existing_one() {
         let setup = Setup::new();
         let home = setup.with_home();
-        setup.write_user_file("auth.json", "{}");
-        let launch = launch(&setup, &pairs(&home), false, &["--dry-run"]);
-        assert!(!setup.private().exists());
+        let missing = launch(&setup, &pairs(&home), true, &["--dry-run"]);
+        assert!(!setup.user_state().exists());
         assert_eq!(
-            launch.env[0].1,
-            setup.private().into_os_string(),
-            "{launch:?}"
+            missing.argv.iter().filter(|arg| *arg == "--bind").count(),
+            2
+        );
+        assert_eq!(missing.env, vec![]);
+
+        setup.write_user_file("auth.json", "{}");
+        let existing = launch(&setup, &pairs(&home), true, &["--dry-run"]);
+        let state = setup.real_user_state();
+        assert_eq!(
+            mounts(&existing.argv)[3..],
+            [("--bind", state.to_str().unwrap())]
         );
     }
 
     #[test]
-    fn unwritable_tempdir_is_a_launch_error() {
+    fn state_dir_that_cannot_be_created_is_a_launch_error() {
         let setup = Setup::new();
-        let mut invocation = setup.invocation(&[], false, &[]);
-        invocation.tempdir = setup.root.path().join("missing-tempdir");
+        std::fs::write(setup.home(), "a file").unwrap();
+        let home = setup.with_home();
         let detail = Pi::new()
-            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .launch(
+                Path::new("/opt/bin/pi"),
+                &setup.invocation(&pairs(&home), false, &[]),
+            )
             .unwrap_err();
         assert!(
             detail.starts_with(&format!(
-                "cannot prepare pi state directory {}: ",
-                invocation.tempdir.join("pi-agent").display()
+                "cannot create the pi state directory {}: ",
+                setup.user_state().display()
             )),
             "{detail}"
         );
@@ -1130,7 +1132,6 @@ mod tests {
     }
 
     fn adapter_with_model(setup: &Setup, model: Option<&str>) -> Pi {
-        let _ = std::fs::remove_dir_all(setup.private());
         let mut adapter = Pi::new();
         let extra: Vec<&str> = match model {
             Some(model) => vec!["--model", model],
