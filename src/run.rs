@@ -28,6 +28,7 @@ use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Start};
 use crate::network::{self, FilterProxy, HostRule, Policy, ProxyEndpoint, Upstream};
 use crate::output::Output;
 use crate::pi;
+use crate::process_tree;
 use crate::rich::{OpenTool, REFRESH_PERIOD, Rich, terminal_size};
 use crate::sandbox::{self, Sandbox};
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
@@ -626,7 +627,8 @@ fn execute(
             }
         });
     }
-    thread::spawn(move || wait_child(child, &sender));
+    let exit_signals = caller.signals.clone();
+    thread::spawn(move || wait_child(child, &exit_signals, &sender));
 
     let exit_code = supervise(&caller, &receiver, |input| {
         let Input::Line(content) = input else {
@@ -742,7 +744,6 @@ fn supervise(
             Some(Message::Exited(status)) => {
                 exited = true;
                 exit_code = status.code();
-                caller.signals.exited();
                 drain_deadline = Some(Instant::now() + DRAIN_PERIOD);
             }
             None => return exit_code,
@@ -771,7 +772,9 @@ fn read_lines(stdout: impl Read, sender: &Sender<Message>) {
     let _ = sender.send(Message::StdoutEnd);
 }
 
-fn wait_child(mut child: Child, sender: &Sender<Message>) {
+fn wait_child(mut child: Child, signals: &Signals, sender: &Sender<Message>) {
+    process_tree::wait_for_exit(child.id() as i32, true);
+    signals.exited();
     if let Ok(status) = child.wait() {
         let _ = sender.send(Message::Exited(status));
     }

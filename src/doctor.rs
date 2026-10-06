@@ -22,6 +22,7 @@ use crate::network::{
     proxy_environment,
 };
 use crate::pi::{self, Model, Pi};
+use crate::process_tree;
 use crate::run::{Caller, Invocation, create_tempdir, shell_quote};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, ProxyForward, Sandbox, UNAVAILABLE_PREFIX, wrap_pi,
@@ -438,7 +439,6 @@ impl Doctor {
         let deadline = Instant::now() + self.timeout;
         let mut out = Vec::new();
         let mut stdout_open = true;
-        let mut status = None;
         let mut timed_out = false;
         loop {
             if stdout_open {
@@ -457,8 +457,7 @@ impl Doctor {
             } else {
                 thread::sleep(POLL);
             }
-            if let Ok(Some(exited)) = child.try_wait() {
-                status = Some(exited);
+            if process_tree::wait_for_exit(pid, false) {
                 break;
             }
             if Instant::now() >= deadline {
@@ -466,13 +465,9 @@ impl Doctor {
                 break;
             }
         }
-        unsafe {
-            libc::killpg(pid, libc::SIGKILL);
-        }
-        if status.is_none() {
-            status = child.wait().ok();
-        }
+        process_tree::kill_group_members(pid);
         self.caller.signals.checking(None);
+        let status = child.wait().ok();
         while let Ok(line) = lines.recv_timeout(DRAIN) {
             out.push(String::from_utf8_lossy(&line).trim_end().to_string());
         }

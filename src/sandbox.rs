@@ -3,12 +3,13 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
 use crate::event::SandboxKind;
+use crate::process_tree;
 use crate::session::Session;
 use crate::signal::Signals;
 
@@ -279,43 +280,46 @@ fn start_check(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| error.to_string())?;
-    signals.checking(Some(child.id() as i32));
-    let outcome = wait_for_check(&mut child, prefix);
-    signals.checking(None);
-    outcome
-}
-
-fn wait_for_check(child: &mut Child, prefix: &str) -> Result<(), String> {
+    let pid = child.id() as i32;
+    signals.checking(Some(pid));
     let mut stderr = child.stderr.take().expect("stderr is piped");
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stderr.read_to_end(&mut bytes);
         bytes
     });
-    let deadline = Instant::now() + CHECK_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                let bytes = reader.join().unwrap_or_default();
-                return Err(failure_reason(
-                    status.code(),
-                    &String::from_utf8_lossy(&bytes),
-                    prefix,
-                ));
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "timed out after {} seconds",
-                    CHECK_TIMEOUT.as_secs()
-                ));
-            }
-            Ok(None) => thread::sleep(CHECK_POLL),
-            Err(error) => return Err(error.to_string()),
-        }
+    let exited = exits_within_check_timeout(pid);
+    if !exited {
+        let _ = child.kill();
     }
+    signals.checking(None);
+    let status = child.wait().map_err(|error| error.to_string())?;
+    if !exited {
+        return Err(format!(
+            "timed out after {} seconds",
+            CHECK_TIMEOUT.as_secs()
+        ));
+    }
+    if status.success() {
+        return Ok(());
+    }
+    let bytes = reader.join().unwrap_or_default();
+    Err(failure_reason(
+        status.code(),
+        &String::from_utf8_lossy(&bytes),
+        prefix,
+    ))
+}
+
+fn exits_within_check_timeout(pid: i32) -> bool {
+    let deadline = Instant::now() + CHECK_TIMEOUT;
+    while !process_tree::wait_for_exit(pid, false) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(CHECK_POLL);
+    }
+    true
 }
 
 fn failure_reason(exit_code: Option<i32>, stderr: &str, prefix: &str) -> String {

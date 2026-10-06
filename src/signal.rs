@@ -50,6 +50,7 @@ impl Signal {
     }
 }
 
+#[derive(Clone)]
 pub struct Signals {
     shared: Arc<Shared>,
 }
@@ -262,7 +263,7 @@ impl Signals {
     pub fn exited(&self) {
         let mut state = self.shared.lock();
         if let Phase::Running(running) = &state.phase {
-            kill_group(running.pgid, libc::SIGKILL);
+            process_tree::kill_group_members(running.pgid);
             process_tree::kill_tree(&[running.pgid], &running.recorded);
         }
         state.phase = Phase::Finishing;
