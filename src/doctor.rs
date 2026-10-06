@@ -16,7 +16,7 @@ use crate::adapter::{Adapter, Invocation};
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::codex;
 use crate::credential::write_session_credential;
-use crate::event::{Network, NetworkReason, SandboxKind};
+use crate::event::{Network, NetworkReason, SandboxKind, Signal};
 use crate::network::{
     FilterProxy, HostRule, Policy, ProxyAddress, SOCKET_FILE, Upstream, check_usage,
     proxy_environment,
@@ -29,7 +29,6 @@ use crate::sandbox::{
     wrap_pi, wrap_seatbelt, write_seatbelt_profile,
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
-use crate::signal::Signal;
 
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub const USAGE_EXIT_CODE: u8 = 2;

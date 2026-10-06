@@ -30,7 +30,7 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>、<code>EndStatus</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
+    <tr><td><code>src/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>、<code>EndStatus</code> 与 <code>Signal</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
     <tr><td><code>src/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
     <tr><td><code>src/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tool</code>）、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
     <tr><td><code>src/output.rs</code></td><td><code>Output</code>、<code>TextFormatter</code>、<code>subagent_label</code></td><td>text 格式、<code>[note]</code> 行</td></tr>

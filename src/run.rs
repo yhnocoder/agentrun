@@ -24,7 +24,7 @@ use crate::cli::{
 use crate::codex;
 use crate::credential::write_session_credential;
 use crate::doctor;
-use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Start};
+use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Signal, Start};
 use crate::network::{self, FilterProxy, Policy, ProxyEndpoint, Upstream};
 use crate::output::Output;
 use crate::pi;
@@ -32,7 +32,7 @@ use crate::process_tree;
 use crate::rich::{OpenTool, REFRESH_PERIOD, Rich, terminal_size};
 use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
-use crate::signal::{SharedWriter, Signal, Signals};
+use crate::signal::{SharedWriter, Signals};
 use crate::usage::Usage;
 
 const STDERR_TAIL_CHARS: usize = 500;
