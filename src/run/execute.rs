@@ -13,7 +13,7 @@ use super::process_tree;
 use super::signal::Signals;
 use super::{Caller, Ready, create_raw, elapsed_ms, reject};
 use crate::cli::{Format, Runtime};
-use crate::network::{FilterProxy, Policy, Upstream};
+use crate::network::{FilterProxy, Policy};
 use crate::output::{
     Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD, Rich,
     Signal, Start, Usage, terminal_size,
@@ -48,21 +48,20 @@ pub(super) fn execute(
     let debug = invocation.args.debug;
     let (sender, receiver) = mpsc::channel();
     if let Some(proxy) = proxy.as_mut() {
-        let (upstream, notes) = Upstream::from_env(&invocation.session.env);
-        if debug {
-            for note in notes {
-                caller.print_error_line(&format!("[debug] {note}"));
-            }
-        }
         let policy = Policy {
             mode: invocation.args.network,
             rules: invocation.allow_hosts.clone(),
             service_hosts: launch.service_hosts.clone(),
         };
         let reporter = sender.clone();
-        proxy.serve(policy, upstream, move |network| {
+        let notes = proxy.serve_session(policy, &invocation.session.env, move |network| {
             let _ = reporter.send(Message::Network(network));
         });
+        if debug {
+            for note in notes {
+                caller.print_error_line(&format!("[debug] {note}"));
+            }
+        }
     }
     let raw = match raw {
         Some(raw) => Some(raw),

@@ -188,6 +188,10 @@ fn failure_reason(exit_code: Option<i32>, stderr: &str, prefix: &str) -> String 
     if let Some(line) = stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
         return line.strip_prefix(prefix).unwrap_or(line).to_string();
     }
+    exit_text(exit_code)
+}
+
+pub(crate) fn exit_text(exit_code: Option<i32>) -> String {
     match exit_code {
         Some(code) => format!("exited with code {code}"),
         None => "terminated by a signal".to_string(),
@@ -377,6 +381,12 @@ mod tests {
             failure_reason(None, "", SANDBOX_EXEC_PREFIX),
             "terminated by a signal"
         );
+    }
+
+    #[test]
+    fn exit_text_names_the_code_or_the_signal() {
+        assert_eq!(exit_text(Some(3)), "exited with code 3");
+        assert_eq!(exit_text(None), "terminated by a signal");
     }
 
     #[cfg(target_os = "macos")]

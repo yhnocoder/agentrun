@@ -18,7 +18,7 @@ pub(super) fn is_private(address: Ipv4Addr) -> bool {
         .any(|(network, bits)| in_cidr(address, *network, *bits))
 }
 
-pub(super) fn in_cidr(address: Ipv4Addr, network: Ipv4Addr, bits: u8) -> bool {
+pub(crate) fn in_cidr(address: Ipv4Addr, network: Ipv4Addr, bits: u8) -> bool {
     let mask = if bits == 0 {
         0
     } else {

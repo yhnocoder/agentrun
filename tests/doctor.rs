@@ -664,6 +664,44 @@ fn real_bwrap_pi_checks_bind_the_state_dir_and_reach_the_allowed_host() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn real_bwrap_pi_network_check_uses_the_default_provider_without_a_default_model() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    write_home(
+        &env,
+        ".pi/agent/settings.json",
+        r#"{"defaultProvider":"deepseek"}"#,
+    );
+    let output = doctor_with_bwrap(&env, &system, &["pi", "--network", "full", "--debug"]);
+    let lines = stdout_lines(&output);
+    let debug = stderr(&output);
+    let network = line_for(&lines, "pi", "network");
+    if network.starts_with("[skip]") {
+        eprintln!("skipped: {network}");
+        return;
+    }
+    let commands: Vec<&str> = debug
+        .lines()
+        .filter(|line| line.starts_with("[debug] pi network command: "))
+        .collect();
+    assert!(!commands.is_empty(), "{debug}");
+    assert!(
+        commands[0].contains(" doctor-connect api.deepseek.com 443"),
+        "{debug}"
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|command| !command.contains("api.anthropic.com")),
+        "{debug}"
+    );
+    std::fs::remove_dir_all(kept_dir(&debug)).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn real_bwrap_codex_sandbox_check_reports_the_outside_write() {
     let Some((env, system)) = real_bwrap_doctor() else {
         return;

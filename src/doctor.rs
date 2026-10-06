@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::credential::write_session_credential;
 use crate::network::{
-    FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, Upstream, check_usage,
+    self, FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, check_usage, in_cidr,
     proxy_environment,
 };
 use crate::output::{Network, NetworkReason, Signal};
@@ -59,7 +59,7 @@ const FAKE_IP_HINT: &str = "codex's network proxy treats this range as private; 
 const TOKEN_VARIABLE: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const NOT_LOGGED_IN: &str =
     "not logged in. Run claude login, or set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token)";
-const PROXY_VARIABLES: [&str; 2] = ["https_proxy", "HTTPS_PROXY"];
+const CONNECT_PROXY_VARIABLES: [&str; 2] = ["https_proxy", "HTTPS_PROXY"];
 const PROXY_ERROR_HEADER: &str = "x-proxy-error";
 const CODEX_PROXY_NOT_ALLOWED: &str = "x-proxy-error: blocked-by-allowlist";
 
@@ -331,13 +331,6 @@ fn first_non_empty<'a>(lines: impl Iterator<Item = &'a str>) -> Option<&'a str> 
     lines.map(str::trim).find(|line| !line.is_empty())
 }
 
-fn exit_text(status: Option<ExitStatus>) -> String {
-    match status.and_then(|status| status.code()) {
-        Some(code) => format!("exited with code {code}"),
-        None => "terminated by a signal".to_string(),
-    }
-}
-
 struct Run<'a> {
     argv: &'a [String],
     env: &'a [(OsString, OsString)],
@@ -478,7 +471,7 @@ impl Doctor {
         }
         Ok(Finished {
             exit_code: status.and_then(|status| status.code()),
-            exit_text: exit_text(status),
+            exit_text: sandbox::exit_text(status.and_then(|status| status.code())),
             stdout: out,
             stderr: String::from_utf8_lossy(&stderr).into_owned(),
         })
@@ -910,9 +903,14 @@ impl Doctor {
     }
 
     fn pi_provider(&self, target: &Target) -> Option<String> {
-        self.pi_expected_model(target)
-            .ok()
-            .map(|(model, _)| model.provider)
+        let expected = match &self.args.model {
+            Some(model) => Some(pi::parse_model(model).ok()?),
+            None => None,
+        };
+        pi::service_provider(
+            expected.as_ref(),
+            pi::user_state_dir(&target.session, &self.cwd).as_deref(),
+        )
     }
 
     fn network_test(
@@ -936,9 +934,8 @@ impl Doctor {
         let mut proxy = None;
         let mut env = Vec::new();
         let mut endpoint = None;
-        if runtime != Runtime::Codex || mode == NetworkMode::Custom {
-            let mut bound = FilterProxy::bind(&self.tempdir)
-                .map_err(|error| format!("cannot start the filter proxy: {error}"))?;
+        if network::proxy_needed(runtime, mode, sandbox.runs()) {
+            let mut bound = FilterProxy::bind(&self.tempdir)?;
             let service_hosts = match runtime {
                 Runtime::Pi => self
                     .pi_provider(target)
@@ -952,15 +949,14 @@ impl Doctor {
                     .collect(),
                 Runtime::ClaudeCode => Vec::new(),
             };
-            let (upstream, _) = Upstream::from_env(&target.session.env);
             let seen = Arc::clone(&records);
-            bound.serve(
+            bound.serve_session(
                 Policy {
                     mode,
                     rules: self.allow_hosts.clone(),
                     service_hosts,
                 },
-                upstream,
+                &target.session.env,
                 move |network| {
                     if let Ok(mut seen) = seen.lock() {
                         seen.push(network);
@@ -1091,25 +1087,19 @@ fn bwrap_hint(detail: String, finished: &Finished) -> String {
 
 fn assistant_start(line: &str) -> Option<Model> {
     let value: Value = serde_json::from_str(line).ok()?;
-    if value["type"] != "message_start" || value["message"]["role"] != "assistant" {
+    if value["type"] != "message_start" {
         return None;
     }
-    Some(Model {
-        provider: value["message"]["provider"].as_str()?.to_string(),
-        model: value["message"]["model"].as_str()?.to_string(),
-    })
+    pi::assistant_model(&value["message"])
 }
 
 fn fake_ip(host: &str) -> Option<Ipv4Addr> {
     let (network, bits) = FAKE_IP_RANGE;
-    let mask = u32::MAX << (32 - bits);
     (host, SERVICE_PORT)
         .to_socket_addrs()
         .ok()?
         .find_map(|address| match address {
-            SocketAddr::V4(v4) if (u32::from(*v4.ip()) & mask) == (u32::from(network) & mask) => {
-                Some(*v4.ip())
-            }
+            SocketAddr::V4(v4) if in_cidr(*v4.ip(), network, bits) => Some(*v4.ip()),
             _ => None,
         })
 }
@@ -1160,7 +1150,7 @@ impl Wrap {
 }
 
 pub(crate) fn connect(caller: &Caller, args: &ConnectArgs) -> u8 {
-    let proxy = PROXY_VARIABLES
+    let proxy = CONNECT_PROXY_VARIABLES
         .iter()
         .find_map(|name| caller.var(name).filter(|value| !value.is_empty()));
     let (line, code) = match proxy {

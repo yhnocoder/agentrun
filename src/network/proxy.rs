@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::net::{
     Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
@@ -45,7 +46,11 @@ pub struct FilterProxy {
 }
 
 impl FilterProxy {
-    pub fn bind(tempdir: &Path) -> io::Result<FilterProxy> {
+    pub fn bind(tempdir: &Path) -> Result<FilterProxy, String> {
+        Self::listen(tempdir).map_err(|error| format!("cannot start the filter proxy: {error}"))
+    }
+
+    fn listen(tempdir: &Path) -> io::Result<FilterProxy> {
         let tcp = TcpListener::bind(SocketAddrV4::new(LISTEN_ADDRESS, 0))?;
         let port = tcp.local_addr()?.port();
         let socket = tempdir.join(SOCKET_FILE);
@@ -66,6 +71,16 @@ impl FilterProxy {
             port: Some(self.port),
             socket: self.socket.clone(),
         }
+    }
+    pub fn serve_session(
+        &mut self,
+        policy: Policy,
+        env: &BTreeMap<OsString, OsString>,
+        report: impl Fn(Network) + Send + Sync + 'static,
+    ) -> Vec<String> {
+        let (upstream, notes) = Upstream::from_env(env);
+        self.serve(policy, upstream, report);
+        notes
     }
     pub fn serve(
         &mut self,
