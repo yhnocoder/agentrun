@@ -8,11 +8,9 @@ use std::time::Instant;
 
 use super::PiState;
 #[cfg(target_os = "linux")]
-use super::{Available, Unavailable, start_check};
+use super::{Available, Unavailable, Wrapper, start_check};
 #[cfg(target_os = "linux")]
 use crate::cli::Runtime;
-#[cfg(target_os = "linux")]
-use crate::output::SandboxKind;
 #[cfg(target_os = "linux")]
 use crate::run::Signals;
 #[cfg(target_os = "linux")]
@@ -106,14 +104,12 @@ pub(super) fn probe(
         let started = Instant::now();
         check_bwrap(&bwrap, session, cwd, signals)?;
         return Ok(Available {
-            kind: SandboxKind::Codex,
+            wrapper: Wrapper::Codex,
             description: format!(
                 "codex (bubblewrap {}, check {}ms)",
                 bwrap.display(),
                 started.elapsed().as_millis()
             ),
-            bwrap: Some(bwrap),
-            socat: None,
         });
     }
     let bwrap = find_executable("bwrap", &session.path, cwd)
@@ -123,15 +119,13 @@ pub(super) fn probe(
     let started = Instant::now();
     check_bwrap(&bwrap, session, cwd, signals)?;
     Ok(Available {
-        kind: SandboxKind::Bubblewrap,
         description: format!(
             "bubblewrap ({}, socat {}, check {}ms)",
             bwrap.display(),
             socat.display(),
             started.elapsed().as_millis()
         ),
-        bwrap: Some(bwrap),
-        socat: Some(socat),
+        wrapper: Wrapper::Bubblewrap { bwrap, socat },
     })
 }
 

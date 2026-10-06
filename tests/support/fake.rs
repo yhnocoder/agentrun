@@ -3,9 +3,9 @@ use std::path::Path;
 
 use agentrun::cli::Runtime;
 use agentrun::network::proxy_environment;
-use agentrun::output::{SandboxKind, SubagentStatus, TokenCounts, Usage};
+use agentrun::output::{SubagentStatus, TokenCounts, Usage};
 use agentrun::runtime::{Adapter, Invocation, Launch, Record};
-use agentrun::sandbox::{ProxyForward, wrap_pi, wrap_seatbelt, write_seatbelt_profile};
+use agentrun::sandbox::{ProxyForward, Wrapper, wrap_pi, wrap_seatbelt, write_seatbelt_profile};
 use serde_json::Value;
 
 pub struct FakeAdapter {
@@ -31,15 +31,14 @@ impl Adapter for FakeAdapter {
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
         argv.push(invocation.prompt.clone());
-        let bwrap = invocation
-            .sandbox
-            .bwrap
-            .as_deref()
-            .filter(|_| invocation.sandbox.runs());
+        let bubblewrap = match &invocation.sandbox.wrapper {
+            Wrapper::Bubblewrap { bwrap, socat } => Some((bwrap, socat)),
+            _ => None,
+        };
         let port = invocation.proxy.as_ref().map(|proxy| proxy.port_text());
-        if let Some(bwrap) = bwrap {
-            let forward = match (&invocation.proxy, &port, &invocation.sandbox.socat) {
-                (Some(proxy), Some(port), Some(socat)) => Some(ProxyForward {
+        if let Some((bwrap, socat)) = bubblewrap {
+            let forward = match (&invocation.proxy, &port) {
+                (Some(proxy), Some(port)) => Some(ProxyForward {
                     socat,
                     port,
                     socket: &proxy.socket,
@@ -54,7 +53,7 @@ impl Adapter for FakeAdapter {
                 forward.as_ref(),
                 &argv,
             );
-        } else if invocation.sandbox.kind == SandboxKind::Seatbelt {
+        } else if invocation.sandbox.wrapper == Wrapper::Seatbelt {
             if !invocation.args.dry_run {
                 write_seatbelt_profile(&invocation.cwd, &invocation.tempdir, None, port.as_deref())
                     .map_err(|error| error.to_string())?;
@@ -65,7 +64,7 @@ impl Adapter for FakeAdapter {
             argv,
             stdin: format!("{}\n", invocation.prompt).into_bytes(),
             env: port.as_deref().map(proxy_environment).unwrap_or_default(),
-            signal_wrapped_child: bwrap.is_some(),
+            signal_wrapped_child: bubblewrap.is_some(),
             service_hosts: Vec::new(),
         })
     }

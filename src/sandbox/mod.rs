@@ -29,25 +29,38 @@ const CHECK_POLL: Duration = Duration::from_millis(10);
 pub(crate) const UNAVAILABLE_PREFIX: &str = "sandbox is not available: ";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Wrapper {
+    Bubblewrap { bwrap: PathBuf, socat: PathBuf },
+    Seatbelt,
+    Codex,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sandbox {
     pub mode: SandboxMode,
-    pub kind: SandboxKind,
+    pub wrapper: Wrapper,
     pub reason: String,
-    pub bwrap: Option<PathBuf>,
-    pub socat: Option<PathBuf>,
     pub description: String,
 }
 
 impl Sandbox {
+    pub fn kind(&self) -> SandboxKind {
+        match self.wrapper {
+            Wrapper::Bubblewrap { .. } => SandboxKind::Bubblewrap,
+            Wrapper::Seatbelt => SandboxKind::Seatbelt,
+            Wrapper::Codex => SandboxKind::Codex,
+            Wrapper::None => SandboxKind::None,
+        }
+    }
+
     pub fn runs(&self) -> bool {
-        self.kind != SandboxKind::None
+        self.wrapper != Wrapper::None
     }
 }
 
 struct Available {
-    kind: SandboxKind,
-    bwrap: Option<PathBuf>,
-    socat: Option<PathBuf>,
+    wrapper: Wrapper,
     description: String,
 }
 
@@ -85,20 +98,16 @@ pub(crate) fn check(
     if mode == SandboxMode::Off {
         return Ok(Sandbox {
             mode,
-            kind: SandboxKind::None,
+            wrapper: Wrapper::None,
             reason: String::new(),
-            bwrap: None,
-            socat: None,
             description: "none (--sandbox off)".to_string(),
         });
     }
     match probe(runtime, session, cwd, signals) {
         Ok(available) => Ok(Sandbox {
             mode,
-            kind: available.kind,
+            wrapper: available.wrapper,
             reason: String::new(),
-            bwrap: available.bwrap,
-            socat: available.socat,
             description: available.description,
         }),
         Err(unavailable) if mode == SandboxMode::On => Err(format!(
@@ -107,11 +116,9 @@ pub(crate) fn check(
         )),
         Err(unavailable) => Ok(Sandbox {
             mode,
-            kind: SandboxKind::None,
+            wrapper: Wrapper::None,
             description: format!("none (--sandbox relax: {})", unavailable.reason),
             reason: unavailable.reason,
-            bwrap: None,
-            socat: None,
         }),
     }
 }
@@ -317,9 +324,7 @@ mod tests {
         for runtime in [Runtime::Pi, Runtime::ClaudeCode] {
             let sandbox =
                 check(SandboxMode::On, runtime, &session, Path::new("/"), &signals).unwrap();
-            assert_eq!(sandbox.kind, SandboxKind::Seatbelt);
-            assert_eq!(sandbox.bwrap, None);
-            assert_eq!(sandbox.socat, None);
+            assert_eq!(sandbox.wrapper, Wrapper::Seatbelt);
             let description = &sandbox.description;
             let millis = description
                 .strip_prefix("seatbelt (/usr/bin/sandbox-exec, check ")
@@ -335,8 +340,35 @@ mod tests {
             &signals,
         )
         .unwrap();
-        assert_eq!(codex.kind, SandboxKind::Codex);
+        assert_eq!(codex.wrapper, Wrapper::Codex);
         assert_eq!(codex.description, "codex");
+    }
+
+    #[test]
+    fn kind_follows_the_wrapper_and_only_none_does_not_run() {
+        let cases = [
+            (
+                Wrapper::Bubblewrap {
+                    bwrap: PathBuf::from("/usr/bin/bwrap"),
+                    socat: PathBuf::from("/usr/bin/socat"),
+                },
+                SandboxKind::Bubblewrap,
+                true,
+            ),
+            (Wrapper::Seatbelt, SandboxKind::Seatbelt, true),
+            (Wrapper::Codex, SandboxKind::Codex, true),
+            (Wrapper::None, SandboxKind::None, false),
+        ];
+        for (wrapper, kind, runs) in cases {
+            let sandbox = Sandbox {
+                mode: SandboxMode::On,
+                wrapper,
+                reason: String::new(),
+                description: String::new(),
+            };
+            assert_eq!(sandbox.kind(), kind);
+            assert_eq!(sandbox.runs(), runs);
+        }
     }
 
     #[test]
@@ -355,10 +387,8 @@ mod tests {
             sandbox,
             Sandbox {
                 mode: SandboxMode::Off,
-                kind: SandboxKind::None,
+                wrapper: Wrapper::None,
                 reason: String::new(),
-                bwrap: None,
-                socat: None,
                 description: "none (--sandbox off)".to_string(),
             }
         );
@@ -397,7 +427,7 @@ mod tests {
             &signals,
         )
         .unwrap();
-        assert_eq!(relaxed.kind, SandboxKind::None);
+        assert_eq!(relaxed.wrapper, Wrapper::None);
         assert_eq!(relaxed.reason, "bwrap not found in PATH");
         assert_eq!(
             relaxed.description,

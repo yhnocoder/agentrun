@@ -11,7 +11,7 @@ use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{ProxyEndpoint, proxy_environment};
 use crate::output::{SandboxKind, TokenCounts};
 use crate::sandbox::{
-    PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
+    PiState, ProxyForward, SEATBELT_FILE, Wrapper, wrap_pi, wrap_seatbelt, wrapper_failure,
     write_seatbelt_profile,
 };
 use crate::session::Session;
@@ -154,7 +154,7 @@ impl Adapter for Pi {
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
-        self.sandbox = invocation.sandbox.kind;
+        self.sandbox = invocation.sandbox.kind();
         self.model_option = invocation.args.model.clone();
         self.expected = match &invocation.args.model {
             Some(model) => Some(parse_model(model)?),
@@ -205,19 +205,14 @@ impl Adapter for Pi {
             env.extend(proxy_environment(&proxy.port_text()));
         }
         let port = invocation.proxy.as_ref().map(ProxyEndpoint::port_text);
-        let bwrap = invocation
-            .sandbox
-            .bwrap
-            .as_deref()
-            .filter(|_| self.sandbox == SandboxKind::Bubblewrap);
-        if let Some(bwrap) = bwrap {
+        let bubblewrap = match &invocation.sandbox.wrapper {
+            Wrapper::Bubblewrap { bwrap, socat } => Some((bwrap, socat)),
+            _ => None,
+        };
+        if let Some((bwrap, socat)) = bubblewrap {
             let forward = match (&invocation.proxy, &port) {
                 (Some(proxy), Some(port)) => Some(ProxyForward {
-                    socat: invocation
-                        .sandbox
-                        .socat
-                        .as_deref()
-                        .ok_or_else(|| "socat not found in PATH".to_string())?,
+                    socat,
                     port,
                     socket: &proxy.socket,
                 }),
@@ -252,7 +247,7 @@ impl Adapter for Pi {
             argv,
             stdin: Vec::new(),
             env,
-            signal_wrapped_child: bwrap.is_some(),
+            signal_wrapped_child: bubblewrap.is_some(),
             service_hosts,
         })
     }
@@ -442,7 +437,6 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::network::ProxyEndpoint;
-    use crate::output::SandboxKind;
     use crate::sandbox::Sandbox;
     use crate::session::{Session, parse_env_args};
 
@@ -508,14 +502,15 @@ mod tests {
                 format: Format::Jsonl,
                 sandbox: Sandbox {
                     mode: SandboxMode::On,
-                    kind: if sandboxed {
-                        SandboxKind::Bubblewrap
+                    wrapper: if sandboxed {
+                        Wrapper::Bubblewrap {
+                            bwrap: PathBuf::from("/usr/bin/bwrap"),
+                            socat: PathBuf::from("/usr/bin/socat"),
+                        }
                     } else {
-                        SandboxKind::None
+                        Wrapper::None
                     },
                     reason: String::new(),
-                    bwrap: sandboxed.then(|| PathBuf::from("/usr/bin/bwrap")),
-                    socat: sandboxed.then(|| PathBuf::from("/usr/bin/socat")),
                     description: String::new(),
                 },
                 tempdir: self.tempdir(),
@@ -913,7 +908,7 @@ mod tests {
     fn seatbelt(setup: &Setup, port: Option<u16>, extra: &[&str]) -> (Pi, Launch) {
         let _ = std::fs::remove_file(setup.tempdir().join("seatbelt.sb"));
         let mut invocation = setup.invocation(&pairs(&setup.with_home()), false, extra);
-        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.sandbox.wrapper = Wrapper::Seatbelt;
         invocation.proxy = Some(proxy(port, setup));
         let mut adapter = Pi::new();
         let launch = adapter
@@ -972,7 +967,7 @@ mod tests {
     fn seatbelt_launch_without_a_state_dir_leaves_it_out() {
         let setup = Setup::new();
         let mut invocation = setup.invocation(&[], false, &["--model", "deepseek/deepseek-flash"]);
-        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.sandbox.wrapper = Wrapper::Seatbelt;
         invocation.proxy = Some(proxy(Some(1), &setup));
         Pi::new()
             .launch(Path::new("/opt/bin/pi"), &invocation)
@@ -1010,7 +1005,7 @@ mod tests {
         let setup = Setup::new();
         std::fs::write(setup.tempdir().join("seatbelt.sb"), "taken").unwrap();
         let mut invocation = setup.invocation(&[], false, &["--model", "deepseek/deepseek-flash"]);
-        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.sandbox.wrapper = Wrapper::Seatbelt;
         let detail = Pi::new()
             .launch(Path::new("/opt/bin/pi"), &invocation)
             .unwrap_err();
@@ -1034,20 +1029,6 @@ mod tests {
         assert_eq!(
             adapter.failure(Some(1), "bwrap: not on macOS\n"),
             Some(String::new())
-        );
-    }
-
-    #[test]
-    fn proxied_launch_without_socat_is_an_error() {
-        let setup = Setup::new();
-        let mut invocation = setup.invocation(&[], true, &["--model", "deepseek/deepseek-flash"]);
-        invocation.proxy = Some(proxy(Some(1), &setup));
-        invocation.sandbox.socat = None;
-        assert_eq!(
-            Pi::new()
-                .launch(Path::new("/opt/bin/pi"), &invocation)
-                .unwrap_err(),
-            "socat not found in PATH"
         );
     }
 

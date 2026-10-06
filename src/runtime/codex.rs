@@ -402,8 +402,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::network::{self, ProxyEndpoint};
-    use crate::output::SandboxKind;
-    use crate::sandbox::Sandbox;
+    use crate::sandbox::{Sandbox, Wrapper};
 
     struct Setup {
         root: TempDir,
@@ -448,14 +447,12 @@ mod tests {
                 format: Format::Jsonl,
                 sandbox: Sandbox {
                     mode: SandboxMode::On,
-                    kind: if sandboxed {
-                        SandboxKind::Codex
+                    wrapper: if sandboxed {
+                        Wrapper::Codex
                     } else {
-                        SandboxKind::None
+                        Wrapper::None
                     },
                     reason: String::new(),
-                    bwrap: None,
-                    socat: None,
                     description: String::new(),
                 },
                 tempdir: if dry_run {

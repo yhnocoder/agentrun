@@ -18,14 +18,14 @@ use crate::network::{
     FilterProxy, HostRule, Policy, ProxyAddress, SOCKET_FILE, Upstream, check_usage,
     proxy_environment,
 };
-use crate::output::{Network, NetworkReason, SandboxKind, Signal};
+use crate::output::{Network, NetworkReason, Signal};
 use crate::run::{Caller, create_tempdir, kill_group_members, shell_quote, wait_for_exit};
 use crate::runtime::codex;
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{Adapter, Invocation};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, PiState, ProxyForward, Sandbox, UNAVAILABLE_PREFIX,
-    wrap_pi, wrap_seatbelt, write_seatbelt_profile,
+    Wrapper, wrap_pi, wrap_seatbelt, write_seatbelt_profile,
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 
@@ -617,10 +617,8 @@ impl Doctor {
             format: Format::Jsonl,
             sandbox: Sandbox {
                 mode: SandboxMode::Off,
-                kind: SandboxKind::None,
+                wrapper: Wrapper::None,
                 reason: String::new(),
-                bwrap: None,
-                socat: None,
                 description: String::new(),
             },
             tempdir: self.tempdir.clone(),
@@ -757,32 +755,17 @@ impl Doctor {
                 .transpose()?,
             _ => None,
         };
-        match sandbox.kind {
-            SandboxKind::Bubblewrap => {
-                let bwrap = sandbox
-                    .bwrap
-                    .clone()
-                    .ok_or_else(|| "bwrap not found in PATH".to_string())?;
-                let forward = match port {
-                    Some(port) => Some(Forward {
-                        socat: sandbox
-                            .socat
-                            .clone()
-                            .ok_or_else(|| "socat not found in PATH".to_string())?,
-                        port: port.to_string(),
-                        socket: self.tempdir.join(SOCKET_FILE),
-                    }),
-                    None => None,
-                };
-                Ok(Wrap::Bubblewrap {
-                    bwrap,
-                    work: dirs.work.clone(),
-                    tmp: dirs.tmp.clone(),
-                    state: state.map(Box::new),
-                    forward,
-                })
-            }
-            SandboxKind::Seatbelt => {
+        match &sandbox.wrapper {
+            Wrapper::Bubblewrap { bwrap, socat } => Ok(Wrap::Bubblewrap {
+                bwrap: bwrap.clone(),
+                socat: socat.clone(),
+                socket: self.tempdir.join(SOCKET_FILE),
+                work: dirs.work.clone(),
+                tmp: dirs.tmp.clone(),
+                state: state.map(Box::new),
+                port: port.map(str::to_string),
+            }),
+            Wrapper::Seatbelt => {
                 write_seatbelt_profile(&dirs.work, &dirs.tmp, state.as_ref(), port).map_err(
                     |error| {
                         format!(
@@ -795,7 +778,7 @@ impl Doctor {
                     tmp: dirs.tmp.clone(),
                 })
             }
-            SandboxKind::Codex => {
+            Wrapper::Codex => {
                 let tmp = std::fs::canonicalize(&dirs.tmp)
                     .map_err(|error| format!("cannot resolve {}: {error}", dirs.tmp.display()))?;
                 let mut prefix = vec![
@@ -810,7 +793,7 @@ impl Doctor {
                 prefix.push("--".to_string());
                 Ok(Wrap::Codex { prefix })
             }
-            SandboxKind::None => Err("sandbox not running".to_string()),
+            Wrapper::None => Err("sandbox not running".to_string()),
         }
     }
 
@@ -1143,19 +1126,15 @@ struct Dirs {
     tmp: PathBuf,
 }
 
-struct Forward {
-    socat: PathBuf,
-    port: String,
-    socket: PathBuf,
-}
-
 enum Wrap {
     Bubblewrap {
         bwrap: PathBuf,
+        socat: PathBuf,
+        socket: PathBuf,
         work: PathBuf,
         tmp: PathBuf,
         state: Option<Box<PiState>>,
-        forward: Option<Forward>,
+        port: Option<String>,
     },
     Seatbelt {
         tmp: PathBuf,
@@ -1178,15 +1157,17 @@ impl Wrap {
         match self {
             Wrap::Bubblewrap {
                 bwrap,
+                socat,
+                socket,
                 work,
                 tmp,
                 state,
-                forward,
+                port,
             } => {
-                let forward = forward.as_ref().map(|forward| ProxyForward {
-                    socat: &forward.socat,
-                    port: &forward.port,
-                    socket: &forward.socket,
+                let forward = port.as_deref().map(|port| ProxyForward {
+                    socat,
+                    port,
+                    socket,
                 });
                 wrap_pi(bwrap, work, tmp, state.as_deref(), forward.as_ref(), inner)
             }

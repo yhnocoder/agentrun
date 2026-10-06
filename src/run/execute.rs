@@ -151,7 +151,7 @@ pub(super) fn execute(
 
     let start = Event::now(Body::Start(Start {
         runtime: invocation.runtime,
-        sandbox: invocation.sandbox.kind,
+        sandbox: invocation.sandbox.kind(),
         network: NetworkInfo {
             mode: invocation.args.network,
             allow: invocation.args.allow_host.clone(),

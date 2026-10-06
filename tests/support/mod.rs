@@ -9,10 +9,10 @@ use std::process::Output;
 use std::time::Instant;
 
 use agentrun::cli::{Cli, Format, Parsed, Runtime, SandboxMode};
-use agentrun::output::{Aggregator, SandboxKind};
+use agentrun::output::Aggregator;
 use agentrun::run::{Exit, conclude, stderr_tail, translate_line};
 use agentrun::runtime::{Adapter, Invocation};
-use agentrun::sandbox::Sandbox;
+use agentrun::sandbox::{Sandbox, Wrapper};
 use agentrun::session::Session;
 use clap::Parser;
 use serde_json::Value;
@@ -46,14 +46,15 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
         format: Format::Jsonl,
         sandbox: Sandbox {
             mode: SandboxMode::On,
-            kind: if sandboxed {
-                SandboxKind::Bubblewrap
+            wrapper: if sandboxed {
+                Wrapper::Bubblewrap {
+                    bwrap: PathBuf::from("/usr/bin/bwrap"),
+                    socat: PathBuf::from("/usr/bin/socat"),
+                }
             } else {
-                SandboxKind::None
+                Wrapper::None
             },
             reason: String::new(),
-            bwrap: sandboxed.then(|| PathBuf::from("/usr/bin/bwrap")),
-            socat: sandboxed.then(|| PathBuf::from("/usr/bin/socat")),
             description: String::new(),
         },
         tempdir: PathBuf::new(),

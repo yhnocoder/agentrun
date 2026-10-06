@@ -545,8 +545,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::network;
-    use crate::output::SandboxKind;
-    use crate::sandbox::Sandbox;
+    use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::Session;
 
     fn invocation(sandboxed: bool, extra: &[&str]) -> Invocation {
@@ -564,14 +563,15 @@ mod tests {
             format: Format::Jsonl,
             sandbox: Sandbox {
                 mode: SandboxMode::On,
-                kind: if sandboxed {
-                    SandboxKind::Bubblewrap
+                wrapper: if sandboxed {
+                    Wrapper::Bubblewrap {
+                        bwrap: PathBuf::from("/usr/bin/bwrap"),
+                        socat: PathBuf::from("/usr/bin/socat"),
+                    }
                 } else {
-                    SandboxKind::None
+                    Wrapper::None
                 },
                 reason: String::new(),
-                bwrap: None,
-                socat: None,
                 description: String::new(),
             },
             tempdir: PathBuf::from("/tmp/agentrun-abc"),
