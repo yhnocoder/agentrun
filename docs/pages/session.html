@@ -151,7 +151,7 @@ GREETING='hello world'</code></pre>
 <figcaption>任何结束方式最后都向整个进程组发 SIGKILL，再按进程树清理离开了进程组的进程，运行时启动的后台命令不会留下。</figcaption>
 </figure>
 <p>是否被中断只看 agentrun 自己收到的信号与自己的计时，不看运行时的退出码与事件。理由：实测 claude-code 收到 SIGINT 后以退出码 0 结束，SIGTERM 后以 143 结束且没有 result；pi 收到 SIGINT 后以 130 结束，最后没有 <code>message_end</code>；codex 收到 SIGTERM 后在 macOS 上以 143 结束，在 Linux 上以 0 结束。</p>
-<p>已知限制：macOS 上一个进程在 fork 之后、agentrun 读到进程表之前（约 1 毫秒）就退出时，它刚启动的子进程记录不到；子进程还在同一个进程组里时仍会被清理。</p>
+<p>已知限制：macOS 上一个进程在 fork 之后、agentrun 读到进程表之前（约 1 毫秒）就退出时，它刚启动的子进程记录不到；子进程还在同一个进程组里时仍会被清理。macOS 上进程组的 SIGKILL 与组里进程的 fork 同时发生、并且 agentrun 读进程表时新的子进程还没有出现在表里，这个子进程会留下；doctor 的检查进程不做进程树监视，这种情况下没有其他兜底。</p>
 
 <h2 id="concurrent">多个运行同时进行</h2>
 <p>同一个用户可以同时启动多个 agentrun，运行时可以相同也可以不同，<code>--cwd</code> 也可以相同。agentrun 不在运行之间加锁，也不限制同时运行的数量。</p>
