@@ -3,10 +3,12 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use agentrun::adapter;
+use agentrun::process_tree;
 use agentrun::run::{Caller, run};
 use agentrun::signal::Signals;
 
 fn main() -> ExitCode {
+    process_tree::claim_orphans();
     let signals = Signals::install();
     let caller = Caller {
         args: std::env::args_os().collect(),
