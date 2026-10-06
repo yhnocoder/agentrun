@@ -32,6 +32,7 @@ fn tests() -> Vec<(&'static str, fn())> {
         scroll_lines_match_text_and_panel_stays_at_bottom,
         stderr_lines_enter_the_scroll_area,
         pseudo_terminal_run_ends_with_end_line_and_visible_cursor,
+        no_color_turns_off_dim_labels_in_the_terminal,
     ]
 }
 
@@ -305,7 +306,7 @@ fn stderr_lines_enter_the_scroll_area() {
     assert_eq!(rows[rows.len() - 2], "tail without newline");
 }
 
-fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
+fn run_in_pty(variables: &[(&str, &str)]) -> Vec<u8> {
     let env = Env::new();
     env.install(
         "claude",
@@ -325,6 +326,7 @@ fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
         work.to_str().unwrap(),
     ]);
     command
+        .envs(variables.iter().copied())
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
     let mut child = {
@@ -343,20 +345,31 @@ fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
     }
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(0));
+    bytes
+}
 
+fn rows_without_stderr(bytes: &[u8]) -> Vec<String> {
+    let mut screen = Screen::new();
+    screen.feed(bytes);
+    assert!(screen.cursor_visible);
+    let rows = screen.rows();
+    assert!(rows.iter().all(|row| !is_rule(row)), "{rows:?}");
+    assert!(rows.contains(&"oops"), "{rows:?}");
+    rows.iter()
+        .filter(|row| **row != "oops")
+        .map(|row| row.to_string())
+        .collect()
+}
+
+fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
+    let bytes = run_in_pty(&[]);
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("\x1b[?25l"), "cursor was hidden: {text:?}");
     assert!(text.contains("subagent  1 running"), "{text:?}");
     assert!(text.contains("\x1b[2m[main]\x1b[0m prompt hi"), "{text:?}");
     assert!(text.ends_with("\x1b[?25h"), "{text:?}");
 
-    let mut screen = Screen::new();
-    screen.feed(&bytes);
-    let rows = screen.rows();
-    assert!(screen.cursor_visible);
-    assert!(rows.iter().all(|row| !is_rule(row)), "{rows:?}");
-    assert!(rows.contains(&"oops"), "{rows:?}");
-    let without_stderr: Vec<&str> = rows.iter().copied().filter(|row| *row != "oops").collect();
+    let without_stderr = rows_without_stderr(&bytes);
     assert!(without_stderr[0].starts_with("[note] sandbox not running (--sandbox off)."));
     assert_eq!(without_stderr[1], "[main] prompt hi");
     assert_eq!(
@@ -368,4 +381,21 @@ fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
     assert_eq!(without_stderr[5], "[main] text done");
     assert!(without_stderr[6].starts_with("[end] finished "));
     assert_eq!(without_stderr.len(), 7);
+}
+
+fn no_color_turns_off_dim_labels_in_the_terminal() {
+    let bytes = run_in_pty(&[("NO_COLOR", "1")]);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("\x1b[?25l"), "cursor was hidden: {text:?}");
+    assert!(text.ends_with("\x1b[?25h"), "{text:?}");
+    assert!(!text.contains("\x1b[2m"), "{text:?}");
+    assert!(!text.contains("\x1b[0m"), "{text:?}");
+    let without_stderr = rows_without_stderr(&bytes);
+    assert_eq!(without_stderr.len(), 7, "{without_stderr:?}");
+    assert_eq!(without_stderr[1], "[main] prompt hi");
+    assert!(without_stderr[6].starts_with("[end] finished "));
+
+    let bytes = run_in_pty(&[("NO_COLOR", "")]);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("\x1b[2m[main]\x1b[0m prompt hi"), "{text:?}");
 }
