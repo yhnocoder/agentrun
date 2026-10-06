@@ -16,7 +16,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use crate::adapter::{Adapter, Invocation, Launch, Record};
-use crate::aggregate::Aggregator;
 use crate::cli::{
     Cli, Format, Parsed, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
     usage_error_detail,
@@ -24,16 +23,16 @@ use crate::cli::{
 use crate::codex;
 use crate::credential::write_session_credential;
 use crate::doctor;
-use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Signal, Start};
 use crate::network::{self, FilterProxy, Policy, ProxyEndpoint, Upstream};
-use crate::output::Output;
+use crate::output::{
+    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, OpenTool, Output,
+    REFRESH_PERIOD, Rich, Signal, Start, Usage, terminal_size,
+};
 use crate::pi;
 use crate::process_tree;
-use crate::rich::{OpenTool, REFRESH_PERIOD, Rich, terminal_size};
 use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::signal::{SharedWriter, Signals};
-use crate::usage::Usage;
 
 const STDERR_TAIL_CHARS: usize = 500;
 const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;

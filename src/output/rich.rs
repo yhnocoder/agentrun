@@ -3,10 +3,10 @@ use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use super::event::{Body, Event};
+use super::text::{TextFormatter, first_line, subagent_label};
+use super::usage::{TokenCounts, tokens};
 use crate::cli::SandboxMode;
-use crate::event::{Body, Event};
-use crate::text::{TextFormatter, first_line, subagent_label};
-use crate::usage::{TokenCounts, tokens};
 
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -369,7 +369,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
-    use crate::event::{
+    use crate::output::event::{
         NetworkInfo, SandboxKind, Start, SubagentEnd, SubagentStart, SubagentStatus, UsageReport,
     };
 

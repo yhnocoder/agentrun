@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::cli::{NetworkMode, Runtime};
-use crate::event::{Network, NetworkReason};
+use crate::output::{Network, NetworkReason};
 
 pub const SOCKET_FILE: &str = "proxy.sock";
 pub const PORT_PLACEHOLDER: &str = "<proxy port>";

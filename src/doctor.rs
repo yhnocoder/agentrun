@@ -16,11 +16,11 @@ use crate::adapter::{Adapter, Invocation};
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::codex;
 use crate::credential::write_session_credential;
-use crate::event::{Network, NetworkReason, SandboxKind, Signal};
 use crate::network::{
     FilterProxy, HostRule, Policy, ProxyAddress, SOCKET_FILE, Upstream, check_usage,
     proxy_environment,
 };
+use crate::output::{Network, NetworkReason, SandboxKind, Signal};
 use crate::pi::{self, Model, Pi};
 use crate::process_tree;
 use crate::run::{Caller, create_tempdir, shell_quote};

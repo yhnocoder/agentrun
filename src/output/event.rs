@@ -4,8 +4,8 @@ use serde::{Serialize, Serializer};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+use super::usage::{TokenCounts, Usage};
 use crate::cli::{NetworkMode, Runtime};
-use crate::usage::{TokenCounts, Usage};
 
 pub const SCHEMA: u8 = 1;
 

@@ -9,9 +9,8 @@ use std::process::Output;
 use std::time::Instant;
 
 use agentrun::adapter::{Adapter, Invocation};
-use agentrun::aggregate::Aggregator;
 use agentrun::cli::{Cli, Format, Parsed, Runtime, SandboxMode};
-use agentrun::event::SandboxKind;
+use agentrun::output::{Aggregator, SandboxKind};
 use agentrun::run::{Exit, conclude, stderr_tail, translate_line};
 use agentrun::sandbox::Sandbox;
 use agentrun::session::Session;

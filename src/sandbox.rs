@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
-use crate::event::SandboxKind;
+use crate::output::SandboxKind;
 use crate::process_tree;
 use crate::session::Session;
 use crate::signal::Signals;
@@ -167,7 +167,7 @@ mod bubblewrap {
 
     use super::{Available, BWRAP_PREFIX, CANNOT_START_HINT, Unavailable, start_check};
     use crate::cli::Runtime;
-    use crate::event::SandboxKind;
+    use crate::output::SandboxKind;
     use crate::session::{Session, find_executable, is_executable};
     use crate::signal::Signals;
 

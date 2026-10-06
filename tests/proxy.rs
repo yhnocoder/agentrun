@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use agentrun::cli::NetworkMode;
-use agentrun::event::{Network, NetworkReason};
 use agentrun::network::{FilterProxy, HostRule, Policy, ProxyAddress, Upstream, parse_no_proxy};
+use agentrun::output::{Network, NetworkReason};
 use tempfile::TempDir;
 
 const BASIC_USER_PASS: &str = "Basic dXNlcjpwYXNz";

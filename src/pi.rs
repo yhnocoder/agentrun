@@ -7,15 +7,14 @@ use serde_json::Value;
 use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
-use crate::event::SandboxKind;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{ProxyEndpoint, proxy_environment};
+use crate::output::{SandboxKind, TokenCounts};
 use crate::sandbox::{
     PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
     write_seatbelt_profile,
 };
 use crate::session::Session;
-use crate::usage::TokenCounts;
 
 pub const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
 pub const STATE_HOME_SUBDIR: &str = ".pi/agent";
@@ -442,8 +441,8 @@ mod tests {
 
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
-    use crate::event::SandboxKind;
     use crate::network::ProxyEndpoint;
+    use crate::output::SandboxKind;
     use crate::sandbox::Sandbox;
     use crate::session::{Session, parse_env_args};
 

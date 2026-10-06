@@ -9,8 +9,8 @@ use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
+use crate::output::TokenCounts;
 use crate::session::Session;
-use crate::usage::TokenCounts;
 
 pub const HOME_VARIABLE: &str = "CODEX_HOME";
 pub const HOME_SUBDIR: &str = ".codex";
@@ -401,8 +401,8 @@ mod tests {
 
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
-    use crate::event::SandboxKind;
     use crate::network::{self, ProxyEndpoint};
+    use crate::output::SandboxKind;
     use crate::sandbox::Sandbox;
 
     struct Setup {
