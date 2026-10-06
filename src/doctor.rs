@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, Invocation};
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::codex;
 use crate::credential::write_session_credential;
@@ -23,7 +23,7 @@ use crate::network::{
 };
 use crate::pi::{self, Model, Pi};
 use crate::process_tree;
-use crate::run::{Caller, Invocation, create_tempdir, shell_quote};
+use crate::run::{Caller, create_tempdir, shell_quote};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, PiState, ProxyForward, Sandbox, UNAVAILABLE_PREFIX,
     wrap_pi, wrap_seatbelt, write_seatbelt_profile,

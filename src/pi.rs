@@ -4,13 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Launch, Record};
+use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::event::SandboxKind;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{ProxyEndpoint, proxy_environment};
-use crate::run::Invocation;
 use crate::sandbox::{
     PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
     write_seatbelt_profile,

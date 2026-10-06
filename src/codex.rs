@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Launch, Record};
+use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
-use crate::run::Invocation;
 use crate::session::Session;
 use crate::usage::TokenCounts;
 
