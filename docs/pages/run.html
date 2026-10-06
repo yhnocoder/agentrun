@@ -32,16 +32,17 @@
   <tbody>
     <tr><td><code>src/main.rs</code></td><td>入口：安装信号处理，把进程的参数、环境与标准流装进 <code>Caller</code>，调用 <code>run::run</code>，把返回的退出码交给进程</td><td>命令行界面、退出码</td></tr>
     <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Command</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
-    <tr><td><code>src/run.rs</code></td><td><code>Caller</code>、<code>Exit</code>、<code>run</code>（解析命令行后分派给运行时子命令、<code>doctor::run</code> 或 <code>doctor::connect</code>）、<code>prepare</code>、<code>create_tempdir</code>、<code>translate_line</code>、<code>conclude</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
-    <tr><td><code>src/adapter.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>、<code>Launch</code>、<code>Record</code>、<code>builtin</code></td><td>三个运行时各节的共同接口</td></tr>
-    <tr><td><code>src/claudecode.rs</code></td><td><code>ClaudeCode</code></td><td>claude-code</td></tr>
-    <tr><td><code>src/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>、<code>service_host</code>、<code>default_model</code></td><td>pi</td></tr>
-    <tr><td><code>src/codex.rs</code></td><td><code>Codex</code>、<code>network_settings</code>、<code>filesystem_setting</code>、<code>toml_string</code></td><td>codex</td></tr>
+    <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>（解析命令行后分派给运行时子命令、<code>doctor::run</code> 或 <code>doctor::connect</code>）、<code>prepare</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
+    <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code>、<code>Exit</code>、<code>translate_line</code>、<code>conclude</code></td><td>一次运行的顺序、退出码</td></tr>
+    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>、<code>Launch</code>、<code>Record</code>、<code>builtin</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code></td><td>claude-code</td></tr>
+    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>、<code>service_host</code>、<code>default_model</code></td><td>pi</td></tr>
+    <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>network_settings</code>、<code>filesystem_setting</code>、<code>toml_string</code></td><td>codex</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>Check</code>、<code>Status</code>、<code>Item</code>、<code>run</code>、<code>connect</code></td><td>doctor 检查</td></tr>
     <tr><td><code>src/json.rs</code></td><td>读取原始 JSON 字段的辅助函数 <code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
   </tbody>
 </table>
-<p>每个运行时一个 <code>Adapter</code> 实现。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」给出 <code>detail</code>。运行框架 <code>run.rs</code> 不认识任何运行时的字段，理由：新增运行时时只增加一个文件。</p>
+<p>每个运行时一个 <code>Adapter</code> 实现。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」给出 <code>detail</code>。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：新增运行时时只增加一个文件。</p>
 
 <h2>命令行界面</h2>
 <p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>

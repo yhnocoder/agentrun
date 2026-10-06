@@ -34,7 +34,7 @@
     <tr><th>位置</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/claudecode.rs</code></td><td><code>ClaudeCode</code>：<code>launch</code> 生成本页「怎样产生这条流」的命令，<code>translate</code> 按 <code>type</code> 分发给 <code>translate_assistant</code>、<code>translate_user</code>、<code>translate_system</code>，<code>failure</code> 读最后一个 <code>result</code></td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>：<code>launch</code> 生成本页「怎样产生这条流」的命令，<code>translate</code> 按 <code>type</code> 分发给 <code>translate_assistant</code>、<code>translate_user</code>、<code>translate_system</code>，<code>failure</code> 读最后一个 <code>result</code></td></tr>
     <tr><td><code>tests/fixtures/claude-code/</code></td><td>本页样本的原始输出 <code>*.raw.jsonl</code> 与对应的统一事件 <code>*.events.jsonl</code>，格式见<a href="testing.html#fixtures">测试与发布</a></td></tr>
     <tr><td><code>tests/claudecode.rs</code></td><td>回放这些样本的 <code>replay_*</code> 测试与用假 <code>claude</code> 脚本做的适配器测试</td></tr>
   </tbody>
