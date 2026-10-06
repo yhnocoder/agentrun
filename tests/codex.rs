@@ -2,12 +2,14 @@
 mod support;
 
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use agentrun::codex::Codex;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use support::env::Env;
 
 fn replay(name: &str, prompt: &str) {
@@ -239,6 +241,7 @@ cat > "$PWD/prompt.txt"
   echo "entries=$(ls -A "$CODEX_HOME" | sort | tr '\n' ' ')"
   echo "mode=$(stat -c %a "$CODEX_HOME" 2>/dev/null || stat -f %Lp "$CODEX_HOME")"
   echo "proxy=${http_proxy-unset}"
+  echo "auth_var=${AGENTRUN_CODEX_AUTH-unset}"
 } > "$PWD/state.txt"
 echo '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}'
 echo '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1}}'
@@ -283,6 +286,70 @@ fn private_home_links_the_login_file_and_is_removed_afterwards() {
     let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "finished");
     assert_eq!(end["result"], "ok");
+}
+
+#[test]
+fn codex_auth_variable_is_written_and_linked_into_the_private_home() {
+    const VALUE: &str = r#"{"tokens":{"id_token":"codex-credential-5d1e8b"}}"#;
+    let env = with_codex(REPORTING_CODEX);
+    let args = ["--sandbox", "off", "--debug", "--prompt", "hi"];
+    let output = command(&env, &args)
+        .env("AGENTRUN_CODEX_AUTH", VALUE)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "finished");
+    assert_eq!(end["result"], "ok");
+    let login = login(&env);
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(std::fs::read_to_string(&login).unwrap(), VALUE);
+    assert_eq!(mode(&login), 0o600);
+    assert_eq!(mode(login.parent().unwrap()), 0o700);
+    let digest: String = Sha256::digest(VALUE.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        std::fs::read_to_string(login.with_file_name("auth.json.agentrun-sha256")).unwrap(),
+        format!("{digest}\n")
+    );
+    let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
+    assert_eq!(PathBuf::from(field(&report, "auth")), login);
+    assert_eq!(field(&report, "entries"), "auth.json ");
+    assert_eq!(field(&report, "mode"), "700");
+    assert_eq!(field(&report, "auth_var"), "unset");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "[debug] credentials: AGENTRUN_CODEX_AUTH -> {} (written)\n",
+            login.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[debug] agentrun variables: AGENTRUN_CODEX_AUTH\n"),
+        "{stderr}"
+    );
+    for text in [&stdout, &stderr] {
+        assert!(!text.contains("codex-credential-5d1e8b"), "{text}");
+    }
+
+    let output = command(&env, &args)
+        .env("AGENTRUN_CODEX_AUTH", VALUE)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "[debug] credentials: AGENTRUN_CODEX_AUTH -> {} (unchanged)\n",
+            login.display()
+        )),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&login).unwrap(), VALUE);
 }
 
 #[test]
