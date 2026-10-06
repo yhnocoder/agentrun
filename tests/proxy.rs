@@ -176,7 +176,6 @@ impl Running {
     }
 
     fn events(&self) -> Vec<Network> {
-        thread::sleep(Duration::from_millis(50));
         self.events.try_iter().collect()
     }
 }
@@ -808,7 +807,6 @@ fn plain_http_forwards_one_request_per_connection_with_its_body() {
         let response = read_all(&mut stream);
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(response.ends_with("ok"), "{response}");
-        thread::sleep(Duration::from_millis(100));
         let seen = if prefix.is_empty() {
             server.requests()
         } else {

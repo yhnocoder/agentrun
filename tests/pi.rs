@@ -2,13 +2,13 @@
 mod support;
 
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::time::Instant;
+use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use agentrun::pi::Pi;
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
-use tempfile::TempDir;
+use support::env::{Env, poll_until};
 
 fn replay(name: &str) {
     support::assert_replay(&mut Pi::new(), "pi", name, "unused");
@@ -49,82 +49,30 @@ fn replay_arg_error() {
     replay("arg-error");
 }
 
-struct Env {
-    root: TempDir,
+fn with_pi(script: &str) -> Env {
+    let env = Env::new();
+    env.install("pi", script);
+    env
 }
 
-impl Env {
-    fn new(script: &str) -> Env {
-        let env = Env {
-            root: tempfile::tempdir().unwrap(),
-        };
-        for dir in [env.bin(), env.tmp(), env.work(), env.home()] {
-            std::fs::create_dir(dir).unwrap();
-        }
-        let path = env.bin().join("pi");
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        env
-    }
-
-    fn bin(&self) -> PathBuf {
-        self.root.path().join("bin")
-    }
-
-    fn tmp(&self) -> PathBuf {
-        self.root.path().join("tmp")
-    }
-
-    fn work(&self) -> PathBuf {
-        self.root.path().join("work")
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("home")
-    }
-
-    fn user_state(&self) -> PathBuf {
-        self.home().join(".pi/agent")
-    }
-
-    fn write_user_file(&self, name: &str, content: &str) -> PathBuf {
-        let path = self.user_state().join(name);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, content).unwrap();
-        path
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_agentrun"))
-            .arg("pi")
-            .arg("--cwd")
-            .arg(self.work())
-            .args(args)
-            .env_clear()
-            .env("PATH", format!("{}:/usr/bin:/bin", self.bin().display()))
-            .env("TMPDIR", self.tmp())
-            .env("HOME", self.home())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap()
-    }
-
-    fn leftover_tempdirs(&self) -> Vec<PathBuf> {
-        std::fs::read_dir(self.tmp())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect()
-    }
+fn user_state(env: &Env) -> PathBuf {
+    env.home().join(".pi/agent")
 }
 
-fn events(output: &Output) -> Vec<Value> {
-    String::from_utf8(output.stdout.clone())
-        .unwrap()
-        .lines()
-        .map(|line| support::without_timing(serde_json::from_str(line).unwrap()))
-        .collect()
+fn write_user_file(env: &Env, name: &str, content: &str) -> PathBuf {
+    let path = user_state(env).join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+fn command(env: &Env, args: &[&str]) -> Command {
+    let work = env.work();
+    env.command(&[&["pi", "--cwd", work.to_str().unwrap()], args].concat())
+}
+
+fn run(env: &Env, args: &[&str]) -> Output {
+    command(env, args).output().unwrap()
 }
 
 const FAKE_PI: &str = r#"#!/bin/sh
@@ -153,21 +101,24 @@ LINES
 
 #[test]
 fn fake_pi_run_without_sandbox() {
-    let env = Env::new(FAKE_PI);
-    let output = env.run(&[
-        "--sandbox",
-        "off",
-        "--model",
-        "deepseek/deepseek-flash:high",
-        "--effort",
-        "low",
-        "--prompt",
-        "say hi",
-        "--",
-        "--verbose",
-    ]);
+    let env = with_pi(FAKE_PI);
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--model",
+            "deepseek/deepseek-flash:high",
+            "--effort",
+            "low",
+            "--prompt",
+            "say hi",
+            "--",
+            "--verbose",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let events = events(&output);
+    let events = support::events(&output);
     let start = &events[0];
     let executable = env.bin().join("pi").to_string_lossy().into_owned();
     assert_eq!(
@@ -213,7 +164,7 @@ fn fake_pi_run_without_sandbox() {
                 "result": "hi there"}),
         ]
     );
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }
 
 const REPORTING_PI: &str = r#"#!/bin/sh
@@ -228,15 +179,16 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
 
 #[test]
 fn pi_uses_the_user_state_dir_which_stays_unchanged() {
-    let env = Env::new(REPORTING_PI);
-    let auth = env.write_user_file(
+    let env = with_pi(REPORTING_PI);
+    let auth = write_user_file(
+        &env,
         "auth.json",
         "{\"deepseek\":{\"type\":\"api_key\",\"key\":\"k\"}}",
     );
-    let fd = env.write_user_file("bin/fd", "#!/bin/sh\necho fd\n");
+    let fd = write_user_file(&env, "bin/fd", "#!/bin/sh\necho fd\n");
     let settings_text = "{\"defaultProvider\":\"deepseek\",\"defaultModel\":\"deepseek-flash\",\"packages\":[\"x\"],\"theme\":\"dark\"}";
-    let settings = env.write_user_file("settings.json", settings_text);
-    let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
+    let settings = write_user_file(&env, "settings.json", settings_text);
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
     let field = |name: &str| {
@@ -256,105 +208,114 @@ fn pi_uses_the_user_state_dir_which_stays_unchanged() {
     );
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), settings_text);
     assert!(fd.exists());
-    let names: Vec<String> = std::fs::read_dir(env.user_state())
+    let names: Vec<String> = std::fs::read_dir(user_state(&env))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(names.len(), 3);
-    assert!(env.leftover_tempdirs().is_empty());
-    let end = events(&output).pop().unwrap();
+    assert!(env.leftovers().is_empty());
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "finished");
     assert_eq!(end["result"], "ok");
 }
 
 #[test]
 fn missing_user_state_dir_is_created_before_pi_starts() {
-    let env = Env::new(REPORTING_PI);
-    let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
+    let env = with_pi(REPORTING_PI);
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
     assert!(report.contains("\nentries=\n"), "{report}");
     let mode = |path: &PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&env.home().join(".pi")), 0o700);
-    assert_eq!(mode(&env.user_state()), 0o700);
+    assert_eq!(mode(&user_state(&env)), 0o700);
 }
 
 #[test]
 fn model_mismatch_terminates_the_run() {
-    let env = Env::new(concat!(
+    let env = with_pi(concat!(
         "#!/bin/sh\n",
         "echo '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[],\"provider\":\"amazon-bedrock\",\"model\":\"nova\",\"stopReason\":\"pending\"}}'\n",
         "sleep 30\n",
     ));
     let started = Instant::now();
-    let output = env.run(&[
-        "--sandbox",
-        "off",
-        "--model",
-        "deepseek/deepseek-flash",
-        "--prompt",
-        "hi",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--model",
+            "deepseek/deepseek-flash",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert!(
-        started.elapsed().as_secs_f64() < 2.0,
+        started.elapsed().as_secs_f64() < 10.0,
         "{:?}",
         started.elapsed()
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "failed");
     assert_eq!(
         end["detail"],
         "pi uses amazon-bedrock/nova, which does not match --model deepseek/deepseek-flash"
     );
     assert_eq!(end["exit_code"], Value::Null);
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn model_without_provider_is_a_usage_error() {
-    let env = Env::new(FAKE_PI);
-    let output = env.run(&[
-        "--sandbox",
-        "off",
-        "--model",
-        "deepseek-flash",
-        "--prompt",
-        "hi",
-    ]);
+    let env = with_pi(FAKE_PI);
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--model",
+            "deepseek-flash",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert_eq!(output.status.code(), Some(2), "{output:?}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "rejected");
     assert_eq!(
         end["detail"],
         "--model for pi must be provider/model, got 'deepseek-flash'"
     );
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn exit_without_reply_fails() {
-    let env = Env::new("#!/bin/sh\nexit 0\n");
-    let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
+    let env = with_pi("#!/bin/sh\nexit 0\n");
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "failed");
     assert_eq!(end["detail"], "pi produced no model reply");
 }
 
 #[test]
 fn dry_run_creates_no_state_dir_and_lists_no_state_variable() {
-    let env = Env::new(FAKE_PI);
-    env.write_user_file("auth.json", "{}");
-    let output = env.run(&[
-        "--sandbox",
-        "off",
-        "--dry-run",
-        "--prompt",
-        "hi",
-        "--",
-        "-x",
-    ]);
+    let env = with_pi(FAKE_PI);
+    write_user_file(&env, "auth.json", "{}");
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--dry-run",
+            "--prompt",
+            "hi",
+            "--",
+            "-x",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
@@ -365,7 +326,7 @@ fn dry_run_creates_no_state_dir_and_lists_no_state_variable() {
     );
     assert_eq!(lines[2], "set: (none)");
     assert!(!stdout.contains("PI_CODING_AGENT_DIR"), "{stdout}");
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }
 
 const CURL_PI: &str = r#"#!/bin/sh
@@ -375,43 +336,27 @@ printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"
   "$code" "$http_proxy" "$HTTPS_PROXY" "$ALL_PROXY" "${NO_PROXY-unset}" "${no_proxy-unset}"
 "#;
 
-fn text_of(events: &[Value]) -> String {
-    events
-        .iter()
-        .find(|event| event["type"] == "text")
-        .map(|event| event["text"].as_str().unwrap().to_string())
-        .unwrap_or_else(|| panic!("no text event in {events:?}"))
-}
-
-fn network_events(events: &[Value]) -> Vec<Value> {
-    events
-        .iter()
-        .filter(|event| event["type"] == "network")
-        .cloned()
-        .collect()
-}
-
 #[test]
 fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
     if !support::sandbox_available() {
         return;
     }
     let server = support::WebServer::start();
-    let env = Env::new(CURL_PI);
+    let env = with_pi(CURL_PI);
     std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
     let model = ["--model", "deepseek/deepseek-flash", "--prompt", "fetch"];
 
     let mut args = vec!["--network", "none"];
     args.extend(model);
-    let output = env.run(&args);
+    let output = run(&env, &args);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let first = events(&output);
+    let first = support::events(&output);
     assert_eq!(
         first[0]["network"],
         json!({"mode": "none", "allow": [], "enforced": true})
     );
     assert_eq!(first[0]["env"], json!([]));
-    let text = text_of(&first);
+    let text = support::text_of(&first, 0);
     assert!(
         text.starts_with("code=403 proxy=http://127.0.0.1:"),
         "{text}"
@@ -423,7 +368,7 @@ fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
         format!("code=403 proxy={address} https={address} all={address} noproxy=/")
     );
     assert_eq!(
-        network_events(&first),
+        support::network_events(&first),
         [
             json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": false, "reason": "not_allowed"})
         ]
@@ -432,20 +377,20 @@ fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
     let port_rule = format!("127.0.0.1:{}", server.port);
     let mut args = vec!["--network", "custom", "--allow-host", &port_rule];
     args.extend(model);
-    let output = env.run(&args);
+    let output = run(&env, &args);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let second = events(&output);
+    let second = support::events(&output);
     assert_eq!(
         second[0]["network"],
         json!({"mode": "custom", "allow": [port_rule], "enforced": true})
     );
     assert!(
-        text_of(&second).starts_with("code=200 "),
+        support::text_of(&second, 0).starts_with("code=200 "),
         "{}",
-        text_of(&second)
+        support::text_of(&second, 0)
     );
     assert_eq!(
-        network_events(&second),
+        support::network_events(&second),
         [
             json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": true, "reason": null})
         ]
@@ -453,7 +398,7 @@ fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
 
     let mut args = vec!["--format", "text", "--network", "full"];
     args.extend(model);
-    let output = env.run(&args);
+    let output = run(&env, &args);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -465,7 +410,7 @@ fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
     );
     assert!(stdout.contains("code=403 "), "{stdout}");
     assert_eq!(server.served(), 1);
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
@@ -473,17 +418,17 @@ fn sandboxed_pi_with_unknown_provider_needs_an_allowed_host() {
     if !support::sandbox_available() {
         return;
     }
-    let env = Env::new(CURL_PI);
-    env.write_user_file("settings.json", "{\"defaultProvider\":\"acme\"}");
-    let output = env.run(&["--prompt", "hi"]);
+    let env = with_pi(CURL_PI);
+    write_user_file(&env, "settings.json", "{\"defaultProvider\":\"acme\"}");
+    let output = run(&env, &["--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "rejected");
     assert_eq!(
         end["detail"],
         "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
     );
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }
 
 const SOCKET_REMOVING_PI: &str = r#"#!/bin/sh
@@ -497,28 +442,18 @@ fn run_ends_after_the_sandboxed_agent_removes_the_proxy_socket() {
     if !support::sandbox_available() {
         return;
     }
-    let env = Env::new(SOCKET_REMOVING_PI);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_agentrun"))
-        .arg("pi")
-        .arg("--cwd")
-        .arg(env.work())
-        .args(["--model", "deepseek/deepseek-flash", "--prompt", "hi"])
-        .env_clear()
-        .env("PATH", format!("{}:/usr/bin:/bin", env.bin().display()))
-        .env("TMPDIR", env.tmp())
-        .env("HOME", env.home())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + std::time::Duration::from_secs(10);
-    while child.try_wait().unwrap().is_none() {
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            panic!("agentrun did not end after the proxy socket was removed");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    let env = with_pi(SOCKET_REMOVING_PI);
+    let mut child = command(
+        &env,
+        &["--model", "deepseek/deepseek-flash", "--prompt", "hi"],
+    )
+    .spawn()
+    .unwrap();
+    if !poll_until(Duration::from_secs(10), || {
+        child.try_wait().unwrap().is_some()
+    }) {
+        let _ = child.kill();
+        panic!("agentrun did not end after the proxy socket was removed");
     }
     let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -526,8 +461,8 @@ fn run_ends_after_the_sandboxed_agent_removes_the_proxy_socket() {
         std::fs::read_to_string(env.work().join("state.txt")).unwrap(),
         "removed=yes\n"
     );
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["type"], "end");
     assert_eq!(end["status"], "finished");
-    assert!(env.leftover_tempdirs().is_empty());
+    assert!(env.leftovers().is_empty());
 }

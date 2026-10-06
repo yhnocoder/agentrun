@@ -1,7 +1,11 @@
+pub mod env;
 pub mod fake;
 pub mod process;
 
+use std::fs::File;
+use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::time::Instant;
 
 use agentrun::adapter::Adapter;
@@ -119,6 +123,77 @@ pub fn without_timing(mut event: Value) -> Value {
     event
 }
 
+pub fn events(output: &Output) -> Vec<Value> {
+    String::from_utf8(output.stdout.clone())
+        .unwrap()
+        .lines()
+        .map(|line| without_timing(serde_json::from_str(line).unwrap()))
+        .collect()
+}
+
+pub fn texts(events: &[Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| event["type"] == "text")
+        .map(|event| event["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+pub fn text_of(events: &[Value], index: usize) -> String {
+    events
+        .iter()
+        .filter(|event| event["type"] == "text")
+        .nth(index)
+        .map(|event| event["text"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no text event {index} in {events:?}"))
+}
+
+pub fn network_events(events: &[Value]) -> Vec<Value> {
+    events
+        .iter()
+        .filter(|event| event["type"] == "network")
+        .cloned()
+        .collect()
+}
+
+pub fn open_pty(rows: u16, columns: u16) -> (File, File) {
+    let mut master = 0;
+    let mut slave = 0;
+    let mut size = libc::winsize {
+        ws_row: rows,
+        ws_col: columns,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let _guard = process::spawn_lock();
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut size,
+        )
+    };
+    assert_eq!(opened, 0, "openpty");
+    for fd in [master, slave] {
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+            0,
+            "FD_CLOEXEC"
+        );
+    }
+    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+}
+
+#[cfg(target_os = "linux")]
+pub fn system_bwrap() -> Option<PathBuf> {
+    ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.exists())
+}
+
 pub fn fixture(runtime: &str, name: &str, suffix: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -202,6 +277,7 @@ impl Drop for WebServer {
 
 #[cfg(target_os = "linux")]
 pub fn sandbox_available() -> bool {
+    let _guard = process::spawn_lock();
     let available = std::process::Command::new("bwrap")
         .args([
             "--ro-bind",

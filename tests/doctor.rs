@@ -4,6 +4,8 @@ mod support;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
@@ -17,81 +19,37 @@ use agentrun::signal::Signals;
 use clap::Parser;
 use serde_json::Value;
 use support::WebServer;
-use tempfile::TempDir;
+use support::env::{Env, WAIT_LIMIT, poll_until, wait_until};
+use support::process::{describe, process_is_gone};
 
 const CLAUDE_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s\\n' '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'; exit 0; fi\nexit 0\n";
 const PI_DEEPSEEK: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"system\"}}'\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"deepseek-flash\"}}'\n/bin/sleep 30\n";
 const PI_UNKNOWN_MODEL: &str = "#!/bin/sh\necho 'Warning: Model \"no-such-model\" not found for provider \"deepseek\". Using custom model id.' >&2\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"no-such-model\"}}'\n/bin/sleep 30\n";
 const CODEX_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = sandbox ]; then while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"; fi\nexit 0\n";
 
-struct Env {
-    root: TempDir,
+fn doctor(env: &Env, args: &[&str]) -> Command {
+    let mut command = env.command(&[&["doctor"], args].concat());
+    command.env("PATH", env.bin());
+    command
 }
 
-impl Env {
-    fn new() -> Env {
-        let env = Env {
-            root: tempfile::tempdir().unwrap(),
-        };
-        for dir in [env.bin(), env.tmp(), env.home()] {
-            std::fs::create_dir(dir).unwrap();
-        }
-        env
-    }
+fn run(env: &Env, args: &[&str]) -> Output {
+    doctor(env, args).output().unwrap()
+}
 
-    fn install(&self, name: &str, script: &str) {
-        let path = self.bin().join(name);
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+fn write_home(env: &Env, relative: &str, content: &str) -> PathBuf {
+    let path = env.home().join(relative);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, content).unwrap();
+    path
+}
 
-    fn write_home(&self, relative: &str, content: &str) -> PathBuf {
-        let path = self.home().join(relative);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, content).unwrap();
-        path
-    }
-
-    fn pi_settings(&self) {
-        self.write_home(
-            ".pi/agent/settings.json",
-            r#"{"defaultProvider":"deepseek","defaultModel":"deepseek-flash"}"#,
-        );
-    }
-
-    fn bin(&self) -> PathBuf {
-        self.root.path().join("bin")
-    }
-
-    fn tmp(&self) -> PathBuf {
-        self.root.path().join("tmp")
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("home")
-    }
-
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_agentrun"));
-        command
-            .arg("doctor")
-            .args(args)
-            .current_dir(self.root.path())
-            .env_clear()
-            .env("PATH", self.bin())
-            .env("TMPDIR", self.tmp())
-            .env("HOME", self.home())
-            .stdin(Stdio::null());
-        command
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.command(args).output().unwrap()
-    }
-
-    fn no_leftover_tempdirs(&self) -> bool {
-        std::fs::read_dir(self.tmp()).unwrap().next().is_none()
-    }
+fn pi_settings(env: &Env) {
+    write_home(
+        env,
+        ".pi/agent/settings.json",
+        r#"{"defaultProvider":"deepseek","defaultModel":"deepseek-flash"}"#,
+    );
 }
 
 fn stdout_lines(output: &Output) -> Vec<String> {
@@ -128,8 +86,8 @@ fn runtimes_are_deduplicated_and_ordered() {
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
     env.install("pi", PI_DEEPSEEK);
-    env.pi_settings();
-    let output = env.run(&["pi", "pi", "claude-code", "--sandbox", "off"]);
+    pi_settings(&env);
+    let output = run(&env, &["pi", "pi", "claude-code", "--sandbox", "off"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let lines = stdout_lines(&output);
     let runtimes: Vec<&str> = lines
@@ -155,42 +113,41 @@ fn runtimes_are_deduplicated_and_ordered() {
         .collect();
     assert_eq!(checks, ["executable", "login", "sandbox", "network"]);
     assert!(stderr(&output).is_empty());
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn usage_errors_exit_with_2_and_write_only_to_stderr() {
     let env = Env::new();
-    let output = env.run(&["--bogus"]);
+    let output = run(&env, &["--bogus"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(stderr(&output).starts_with("agentrun: unexpected argument '--bogus'"));
     assert_usage_error(
-        &env.run(&["--network", "custom"]),
+        &run(&env, &["--network", "custom"]),
         "--network custom requires at least one --allow-host",
     );
     assert_usage_error(
-        &env.run(&["--allow-host", "example.com"]),
+        &run(&env, &["--allow-host", "example.com"]),
         "--allow-host requires --network custom",
     );
     assert_usage_error(
-        &env.run(&["--model", "flash"]),
+        &run(&env, &["--model", "flash"]),
         "--model for pi must be provider/model, got 'flash'",
     );
     assert_usage_error(
-        &env.run(&["claude-code", "--path", "/nonexistent-dir"]),
+        &run(&env, &["claude-code", "--path", "/nonexistent-dir"]),
         "--path /nonexistent-dir: not a directory",
     );
     assert_usage_error(
-        &env.run(&["--env", "1bad=x"]),
+        &run(&env, &["--env", "1bad=x"]),
         "--env: invalid variable name '1bad'",
     );
-    let output = env.run(&["--env-file", "/nonexistent-file"]);
+    let output = run(&env, &["--env-file", "/nonexistent-file"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(stderr(&output).starts_with("agentrun: --env-file /nonexistent-file: "));
-    let output = env
-        .command(&["pi"])
+    let output = doctor(&env, &["pi"])
         .env("AGENTRUN_SANDBOX", "maybe")
         .output()
         .unwrap();
@@ -198,15 +155,14 @@ fn usage_errors_exit_with_2_and_write_only_to_stderr() {
         &output,
         "invalid AGENTRUN_SANDBOX value 'maybe': expected on, relax or off",
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn credential_write_failure_exits_with_2() {
     let env = Env::new();
     env.install("pi", PI_DEEPSEEK);
-    let output = env
-        .command(&["pi", "--sandbox", "off"])
+    let output = doctor(&env, &["pi", "--sandbox", "off"])
         .env_remove("HOME")
         .env("AGENTRUN_PI_AUTH", "{}")
         .output()
@@ -215,13 +171,13 @@ fn credential_write_failure_exits_with_2() {
         &output,
         "cannot write AGENTRUN_PI_AUTH to $HOME/.pi/agent/auth.json: HOME is not set",
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn missing_executable_fails_and_skips_login() {
     let env = Env::new();
-    let output = env.run(&["claude-code", "--sandbox", "off"]);
+    let output = run(&env, &["claude-code", "--sandbox", "off"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stdout_lines(&output),
@@ -232,7 +188,7 @@ fn missing_executable_fails_and_skips_login() {
             "[skip] claude-code  network     --network none",
         ]
     );
-    let output = env.run(&["codex", "--sandbox", "off", "--network", "full"]);
+    let output = run(&env, &["codex", "--sandbox", "off", "--network", "full"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stdout_lines(&output),
@@ -243,14 +199,14 @@ fn missing_executable_fails_and_skips_login() {
             "[skip] codex        network     sandbox not running",
         ]
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn claude_code_login_reports_token_auth_method_and_failures() {
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
-    let output = env.run(&["claude-code", "--sandbox", "off"]);
+    let output = run(&env, &["claude-code", "--sandbox", "off"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let lines = stdout_lines(&output);
     assert_eq!(
@@ -264,13 +220,16 @@ fn claude_code_login_reports_token_auth_method_and_failures() {
         line_for(&lines, "claude-code", "login"),
         "[ok]   claude-code  login       claude.ai"
     );
-    let output = env.run(&[
-        "claude-code",
-        "--sandbox",
-        "off",
-        "--env",
-        "CLAUDE_CODE_OAUTH_TOKEN=secret-token",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "claude-code",
+            "--sandbox",
+            "off",
+            "--env",
+            "CLAUDE_CODE_OAUTH_TOKEN=secret-token",
+        ],
+    );
     let lines = stdout_lines(&output);
     assert_eq!(
         line_for(&lines, "claude-code", "login"),
@@ -282,7 +241,7 @@ fn claude_code_login_reports_token_auth_method_and_failures() {
         "claude",
         "#!/bin/sh\nprintf '%s\\n' '{\"loggedIn\": false}'\nexit 0\n",
     );
-    let output = env.run(&["claude-code", "--sandbox", "off"]);
+    let output = run(&env, &["claude-code", "--sandbox", "off"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         line_for(&stdout_lines(&output), "claude-code", "login"),
@@ -293,26 +252,26 @@ fn claude_code_login_reports_token_auth_method_and_failures() {
         "claude",
         "#!/bin/sh\necho 'something broke' >&2\necho 'second line' >&2\nexit 1\n",
     );
-    let output = env.run(&["claude-code", "--sandbox", "off"]);
+    let output = run(&env, &["claude-code", "--sandbox", "off"]);
     assert_eq!(
         line_for(&stdout_lines(&output), "claude-code", "login"),
         "[fail] claude-code  login       claude auth status failed: something broke"
     );
 
     env.install("claude", "#!/bin/sh\necho not json\nexit 0\n");
-    let output = env.run(&["claude-code", "--sandbox", "off"]);
+    let output = run(&env, &["claude-code", "--sandbox", "off"]);
     assert_eq!(
         line_for(&stdout_lines(&output), "claude-code", "login"),
         "[fail] claude-code  login       claude auth status failed: not json"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn codex_login_needs_the_login_file_and_reads_login_status() {
     let env = Env::new();
     env.install("codex", CODEX_LOGGED_IN);
-    let output = env.run(&["codex", "--sandbox", "off"]);
+    let output = run(&env, &["codex", "--sandbox", "off"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         line_for(&stdout_lines(&output), "codex", "login"),
@@ -321,8 +280,8 @@ fn codex_login_needs_the_login_file_and_reads_login_status() {
             env.home().join(".codex/auth.json").display()
         )
     );
-    env.write_home(".codex/auth.json", "{}");
-    let output = env.run(&["codex", "--sandbox", "off", "--debug"]);
+    write_home(&env, ".codex/auth.json", "{}");
+    let output = run(&env, &["codex", "--sandbox", "off", "--debug"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
         line_for(&stdout_lines(&output), "codex", "login"),
@@ -350,19 +309,19 @@ fn codex_login_needs_the_login_file_and_reads_login_status() {
     std::fs::remove_dir_all(kept).unwrap();
 
     env.install("codex", "#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n");
-    let output = env.run(&["codex", "--sandbox", "off"]);
+    let output = run(&env, &["codex", "--sandbox", "off"]);
     assert_eq!(
         line_for(&stdout_lines(&output), "codex", "login"),
         "[fail] codex        login       codex login status failed: Not logged in"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn pi_login_compares_the_chosen_model() {
     let env = Env::new();
     env.install("pi", PI_DEEPSEEK);
-    let output = env.run(&["pi", "--sandbox", "off"]);
+    let output = run(&env, &["pi", "--sandbox", "off"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
@@ -371,46 +330,55 @@ fn pi_login_compares_the_chosen_model() {
             env.home().join(".pi/agent/settings.json").display()
         )
     );
-    env.pi_settings();
+    pi_settings(&env);
     let started = Instant::now();
-    let output = env.run(&["pi", "--sandbox", "off"]);
+    let output = run(&env, &["pi", "--sandbox", "off"]);
     assert!(started.elapsed() < Duration::from_secs(20));
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[ok]   pi           login       deepseek/deepseek-flash (from pi settings)"
     );
-    let output = env.run(&[
-        "pi",
-        "--sandbox",
-        "off",
-        "--model",
-        "deepseek/deepseek-flash:high",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--sandbox",
+            "off",
+            "--model",
+            "deepseek/deepseek-flash:high",
+        ],
+    );
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[ok]   pi           login       deepseek/deepseek-flash (from --model)"
     );
-    let output = env.run(&[
-        "pi",
-        "--sandbox",
-        "off",
-        "--model",
-        "anthropic/claude-sonnet-4-5",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--sandbox",
+            "off",
+            "--model",
+            "anthropic/claude-sonnet-4-5",
+        ],
+    );
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[fail] pi           login       pi uses deepseek/deepseek-flash, expected anthropic/claude-sonnet-4-5 (from --model). Check the API key for anthropic"
     );
     env.install("pi", PI_UNKNOWN_MODEL);
-    let output = env.run(&[
-        "pi",
-        "--sandbox",
-        "off",
-        "--model",
-        "deepseek/no-such-model",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--sandbox",
+            "off",
+            "--model",
+            "deepseek/no-such-model",
+        ],
+    );
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
@@ -420,25 +388,25 @@ fn pi_login_compares_the_chosen_model() {
         "pi",
         "#!/bin/sh\necho '{\"type\":\"session\"}'\necho 'No API key found for provider deepseek' >&2\nexit 1\n",
     );
-    let output = env.run(&["pi", "--sandbox", "off"]);
+    let output = run(&env, &["pi", "--sandbox", "off"]);
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[fail] pi           login       No API key found for provider deepseek"
     );
     env.install("pi", "#!/bin/sh\nexit 3\n");
-    let output = env.run(&["pi", "--sandbox", "off"]);
+    let output = run(&env, &["pi", "--sandbox", "off"]);
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[fail] pi           login       pi exited with code 3 before choosing a model"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn pi_login_times_out_when_pi_hangs() {
     let env = Env::new();
     env.install("pi", "#!/bin/sh\n/bin/sleep 30\n");
-    env.pi_settings();
+    pi_settings(&env);
     let cli = Cli::try_parse_from(["agentrun", "doctor", "pi", "--sandbox", "off"]).unwrap();
     let Parsed::Doctor(args) = cli.command.into_parsed() else {
         unreachable!("doctor arguments");
@@ -468,15 +436,15 @@ fn pi_login_times_out_when_pi_hangs() {
         text.contains("[fail] pi           login       pi did not finish within 1 seconds\n"),
         "{text}"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn sandbox_off_and_network_none_are_skipped() {
     let env = Env::new();
     env.install("pi", PI_DEEPSEEK);
-    env.pi_settings();
-    let output = env.run(&["pi", "--sandbox", "off", "--network", "full"]);
+    pi_settings(&env);
+    let output = run(&env, &["pi", "--sandbox", "off", "--network", "full"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let lines = stdout_lines(&output);
     assert_eq!(
@@ -487,8 +455,7 @@ fn sandbox_off_and_network_none_are_skipped() {
         line_for(&lines, "pi", "network"),
         "[skip] pi           network     sandbox not running"
     );
-    let output = env
-        .command(&["pi"])
+    let output = doctor(&env, &["pi"])
         .env("AGENTRUN_SANDBOX", "off")
         .output()
         .unwrap();
@@ -501,7 +468,7 @@ fn sandbox_off_and_network_none_are_skipped() {
         line_for(&lines, "pi", "network"),
         "[skip] pi           network     --network none"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[cfg(target_os = "linux")]
@@ -509,7 +476,7 @@ fn sandbox_off_and_network_none_are_skipped() {
 fn sandbox_without_bwrap_fails_on_and_skips_relax() {
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
-    let output = env.run(&["claude-code", "--network", "full"]);
+    let output = run(&env, &["claude-code", "--network", "full"]);
     assert_eq!(output.status.code(), Some(1));
     let lines = stdout_lines(&output);
     assert_eq!(
@@ -520,7 +487,10 @@ fn sandbox_without_bwrap_fails_on_and_skips_relax() {
         line_for(&lines, "claude-code", "network"),
         "[skip] claude-code  network     sandbox not running"
     );
-    let output = env.run(&["claude-code", "--sandbox", "relax", "--network", "full"]);
+    let output = run(
+        &env,
+        &["claude-code", "--sandbox", "relax", "--network", "full"],
+    );
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let lines = stdout_lines(&output);
     assert_eq!(
@@ -531,40 +501,64 @@ fn sandbox_without_bwrap_fails_on_and_skips_relax() {
         line_for(&lines, "claude-code", "network"),
         "[skip] claude-code  network     sandbox not running"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[cfg(target_os = "linux")]
-fn system_bin_with_bwrap() -> Option<PathBuf> {
-    ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| path.exists())
-        .map(|path| path.parent().unwrap().to_path_buf())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn real_bwrap_runs_the_sandbox_and_network_checks() {
-    let Some(system) = system_bin_with_bwrap() else {
+fn real_bwrap_doctor() -> Option<(Env, PathBuf)> {
+    let Some(bwrap) = support::system_bwrap() else {
         eprintln!("skipped: bwrap is not installed");
-        return;
+        return None;
     };
+    if !support::sandbox_available() {
+        return None;
+    }
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
     env.install("pi", PI_DEEPSEEK);
     env.install("codex", CODEX_LOGGED_IN);
-    env.pi_settings();
-    env.write_home(".codex/auth.json", "{}");
-    env.write_home(".pi/agent/auth.json", "{}");
+    pi_settings(&env);
+    write_home(&env, ".codex/auth.json", "{}");
+    write_home(&env, ".pi/agent/auth.json", "{}");
+    Some((env, bwrap.parent().unwrap().to_path_buf()))
+}
+
+#[cfg(target_os = "linux")]
+fn doctor_with_bwrap(env: &Env, system: &Path, args: &[&str]) -> Output {
+    let path = format!("{}:{}", env.bin().display(), system.display());
+    doctor(env, args).env("PATH", path).output().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn kept_dir(debug: &str) -> PathBuf {
+    PathBuf::from(
+        debug
+            .lines()
+            .find_map(|line| line.strip_prefix("[debug] kept "))
+            .unwrap_or_else(|| panic!("no kept directory in {debug}")),
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_claude_code_sandbox_and_network_checks_pass() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
     let server = WebServer::start();
     let allow = format!("127.0.0.1:{}", server.port);
-    let path = format!("{}:{}", env.bin().display(), system.display());
-    let output = env
-        .command(&["--network", "custom", "--allow-host", &allow, "--debug"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+    let output = doctor_with_bwrap(
+        &env,
+        &system,
+        &[
+            "claude-code",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+            "--debug",
+        ],
+    );
     let lines = stdout_lines(&output);
     let debug = stderr(&output);
     if line_for(&lines, "claude-code", "sandbox").contains("bwrap cannot start") {
@@ -583,6 +577,33 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
         ),
         "{debug}"
     );
+    assert_eq!(output.status.code(), Some(0), "{lines:#?}\n{debug}");
+    std::fs::remove_dir_all(kept_dir(&debug)).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_pi_checks_bind_the_state_dir_and_reach_the_allowed_host() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    let server = WebServer::start();
+    let allow = format!("127.0.0.1:{}", server.port);
+    let output = doctor_with_bwrap(
+        &env,
+        &system,
+        &[
+            "pi",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+            "--debug",
+        ],
+    );
+    let lines = stdout_lines(&output);
+    let debug = stderr(&output);
     assert_eq!(
         line_for(&lines, "pi", "sandbox"),
         "[ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started",
@@ -595,12 +616,6 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
         ),
         "{debug}"
     );
-    assert_eq!(
-        line_for(&lines, "codex", "sandbox"),
-        "[fail] codex        sandbox     a write outside the allowed directories succeeded",
-        "{debug}"
-    );
-    assert_eq!(output.status.code(), Some(1));
     let pi_sandbox_commands: Vec<&str> = debug
         .lines()
         .filter(|line| line.starts_with("[debug] pi sandbox command: "))
@@ -627,6 +642,41 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
             && network_command.contains(" doctor-connect 127.0.0.1 "),
         "{network_command}"
     );
+    let kept = kept_dir(&debug);
+    assert!(kept.join("pi-sandbox/work/inside.txt").exists());
+    assert!(!kept.join("pi-sandbox/outside.txt").exists());
+    std::fs::remove_dir_all(kept).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_codex_sandbox_check_reports_the_outside_write() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    let server = WebServer::start();
+    let allow = format!("127.0.0.1:{}", server.port);
+    let output = doctor_with_bwrap(
+        &env,
+        &system,
+        &[
+            "codex",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+            "--debug",
+        ],
+    );
+    let lines = stdout_lines(&output);
+    let debug = stderr(&output);
+    assert_eq!(
+        line_for(&lines, "codex", "sandbox"),
+        "[fail] codex        sandbox     a write outside the allowed directories succeeded",
+        "{debug}"
+    );
+    assert_eq!(output.status.code(), Some(1));
     let codex_command = debug
         .lines()
         .find(|line| line.starts_with("[debug] codex sandbox command: "))
@@ -636,41 +686,36 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
             && codex_command.contains(" -c permissions.agentrun.network.enabled=false -C "),
         "{codex_command}"
     );
-    let kept = debug
-        .lines()
-        .find_map(|line| line.strip_prefix("[debug] kept "))
-        .unwrap();
-    assert!(
-        PathBuf::from(kept)
-            .join("pi-sandbox/work/inside.txt")
-            .exists()
-    );
-    assert!(!PathBuf::from(kept).join("pi-sandbox/outside.txt").exists());
-    assert!(
-        PathBuf::from(kept)
-            .join("codex-sandbox/outside.txt")
-            .exists()
-    );
+    let kept = kept_dir(&debug);
+    assert!(kept.join("codex-sandbox/outside.txt").exists());
     std::fs::remove_dir_all(kept).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
-    let output = env
-        .command(&[
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_network_check_fails_for_an_unreachable_host() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    let output = doctor_with_bwrap(
+        &env,
+        &system,
+        &[
             "claude-code",
             "--network",
             "custom",
             "--allow-host",
             "*.example",
-        ])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+        ],
+    );
     let lines = stdout_lines(&output);
     assert!(
         line_for(&lines, "claude-code", "network")
             .starts_with("[fail] claude-code  network     www.example:443 not reachable: "),
         "{lines:#?}"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
 
 #[cfg(target_os = "macos")]
@@ -679,17 +724,20 @@ fn seatbelt_runs_the_sandbox_and_network_checks() {
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
     env.install("pi", PI_DEEPSEEK);
-    env.pi_settings();
+    pi_settings(&env);
     let server = WebServer::start();
     let allow = format!("127.0.0.1:{}", server.port);
-    let output = env.run(&[
-        "claude-code",
-        "pi",
-        "--network",
-        "custom",
-        "--allow-host",
-        &allow,
-    ]);
+    let output = run(
+        &env,
+        &[
+            "claude-code",
+            "pi",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+        ],
+    );
     let lines = stdout_lines(&output);
     assert_eq!(output.status.code(), Some(0), "{lines:#?}");
     assert_eq!(
@@ -708,7 +756,7 @@ fn seatbelt_runs_the_sandbox_and_network_checks() {
             "{lines:#?}"
         );
     }
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 struct ConnectProxy {
@@ -743,12 +791,8 @@ impl ConnectProxy {
 }
 
 fn doctor_connect(env: &Env, proxy: Option<(&str, u16)>, host: &str, port: u16) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_agentrun"));
-    command
-        .args(["doctor-connect", host, &port.to_string()])
-        .env_clear()
-        .env("PATH", env.bin())
-        .stdin(Stdio::null());
+    let mut command = env.command(&["doctor-connect", host, &port.to_string()]);
+    command.env("PATH", env.bin());
     if let Some((name, proxy_port)) = proxy {
         command.env(name, format!("http://127.0.0.1:{proxy_port}"));
     }
@@ -811,7 +855,10 @@ fn doctor_connect_tunnels_through_the_proxy_or_connects_directly() {
 fn json_output_is_one_array_after_all_checks() {
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
-    let output = env.run(&["claude-code", "codex", "--sandbox", "off", "--json"]);
+    let output = run(
+        &env,
+        &["claude-code", "codex", "--sandbox", "off", "--json"],
+    );
     assert_eq!(output.status.code(), Some(1));
     let lines = stdout_lines(&output);
     assert_eq!(lines.len(), 1, "{lines:#?}");
@@ -838,11 +885,11 @@ fn json_output_is_one_array_after_all_checks() {
     );
     assert_eq!(items[6]["status"], "skip");
     assert_eq!(items[6]["detail"], "--sandbox off");
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
-    let marker = env.root.path().join("started");
+    let marker = env.root().join("started");
     env.install(
         "pi",
         &format!("#!/bin/sh\necho $$ > {}\n/bin/sleep 30\n", marker.display()),
@@ -851,16 +898,14 @@ fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
     if json {
         args.push("--json");
     }
-    let child = env
-        .command(&args)
+    let child = doctor(env, &args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !marker.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
+    wait_until("the fake pi to write its pid", || {
+        std::fs::read_to_string(&marker).is_ok_and(|text| !text.trim().is_empty())
+    });
     let pi_pid: i32 = std::fs::read_to_string(&marker)
         .unwrap()
         .trim()
@@ -870,14 +915,10 @@ fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
         libc::kill(child.id() as i32, libc::SIGINT);
     }
     let output = child.wait_with_output().unwrap();
-    let gone_deadline = Instant::now() + Duration::from_secs(5);
-    while unsafe { libc::kill(pi_pid, 0) } == 0 && Instant::now() < gone_deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert_ne!(
-        unsafe { libc::kill(pi_pid, 0) },
-        0,
-        "the fake pi is still running"
+    assert!(
+        poll_until(WAIT_LIMIT, || process_is_gone(pi_pid)),
+        "the fake pi is still running: {}",
+        describe(pi_pid)
     );
     std::fs::remove_file(&marker).unwrap();
     output
@@ -886,7 +927,7 @@ fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
 #[test]
 fn sigint_kills_the_check_and_keeps_the_finished_lines() {
     let env = Env::new();
-    env.pi_settings();
+    pi_settings(&env);
     let output = interrupt_during_pi_login(&env, false);
     assert_eq!(output.status.code(), Some(130));
     assert_eq!(
@@ -896,7 +937,7 @@ fn sigint_kills_the_check_and_keeps_the_finished_lines() {
             env.bin().join("pi").display()
         )]
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
     let output = interrupt_during_pi_login(&env, true);
     assert_eq!(output.status.code(), Some(130));
     let lines = stdout_lines(&output);
@@ -904,5 +945,5 @@ fn sigint_kills_the_check_and_keeps_the_finished_lines() {
     let items: Value = serde_json::from_str(&lines[0]).unwrap();
     assert_eq!(items.as_array().unwrap().len(), 1);
     assert_eq!(items[0]["check"], "executable");
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }

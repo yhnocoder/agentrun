@@ -1,93 +1,39 @@
+#[allow(dead_code)]
+mod support;
+
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
-use tempfile::TempDir;
+use support::env::Env;
 
-struct Env {
-    root: TempDir,
+fn with_fake(name: &str) -> Env {
+    let env = Env::new();
+    env.install(name, "#!/bin/sh\nexit 0\n");
+    env
 }
 
-impl Env {
-    fn new() -> Env {
-        let env = Env {
-            root: tempfile::tempdir().unwrap(),
-        };
-        std::fs::create_dir(env.bin()).unwrap();
-        std::fs::create_dir(env.tmp()).unwrap();
-        env
-    }
+fn command(env: &Env, args: &[&str]) -> Command {
+    let mut command = env.command(args);
+    command.env("PATH", env.bin()).env_remove("HOME");
+    command
+}
 
-    fn with_fake_claude() -> Env {
-        let env = Env::new();
-        env.install("claude", "#!/bin/sh\nexit 0\n");
-        env
-    }
+fn run(env: &Env, args: &[&str]) -> Output {
+    command(env, args).output().unwrap()
+}
 
-    fn with_fake_pi() -> Env {
-        let env = Env::new();
-        env.install("pi", "#!/bin/sh\nexit 0\n");
-        env
-    }
-
-    fn with_fake_codex() -> Env {
-        let env = Env::new();
-        env.install("codex", "#!/bin/sh\nexit 0\n");
-        env
-    }
-
-    fn install(&self, name: &str, script: &str) {
-        let path = self.bin().join(name);
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    fn bin(&self) -> PathBuf {
-        self.root.path().join("bin")
-    }
-
-    fn tmp(&self) -> PathBuf {
-        self.root.path().join("tmp")
-    }
-
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_agentrun"));
-        command
-            .args(args)
-            .current_dir(self.root.path())
-            .env_clear()
-            .env("PATH", self.bin())
-            .env("TMPDIR", self.tmp())
-            .stdin(Stdio::null());
-        command
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.command(args).output().unwrap()
-    }
-
-    fn run_with_stdin(&self, args: &[&str], input: &str) -> Output {
-        let mut child = self
-            .command(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
-    }
-
-    fn no_leftover_tempdirs(&self) -> bool {
-        std::fs::read_dir(self.tmp()).unwrap().next().is_none()
-    }
+fn run_with_stdin(env: &Env, args: &[&str], input: &str) -> Output {
+    let mut child = command(env, args).stdin(Stdio::piped()).spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
 }
 
 fn assert_rejected(output: &Output) -> String {
@@ -115,7 +61,7 @@ fn assert_rejected(output: &Output) -> String {
 
 #[test]
 fn unknown_option_is_rejected() {
-    let detail = assert_rejected(&Env::new().run(&["pi", "--bogus", "--prompt", "hi"]));
+    let detail = assert_rejected(&run(&Env::new(), &["pi", "--bogus", "--prompt", "hi"]));
     assert!(detail.contains("--bogus"), "{detail}");
     assert!(!detail.contains("Usage:"));
     assert!(!detail.contains("For more information"));
@@ -123,37 +69,40 @@ fn unknown_option_is_rejected() {
 
 #[test]
 fn unknown_subcommand_is_rejected() {
-    let detail = assert_rejected(&Env::new().run(&["nurse"]));
+    let detail = assert_rejected(&run(&Env::new(), &["nurse"]));
     assert!(detail.contains("nurse"), "{detail}");
 }
 
 #[test]
 fn prompt_and_prompt_file_together_are_rejected() {
     let env = Env::new();
-    let file = env.root.path().join("task.md");
+    let file = env.root().join("task.md");
     std::fs::write(&file, "task").unwrap();
-    assert_rejected(&env.run(&[
-        "pi",
-        "--prompt",
-        "hi",
-        "--prompt-file",
-        file.to_str().unwrap(),
-    ]));
+    assert_rejected(&run(
+        &env,
+        &[
+            "pi",
+            "--prompt",
+            "hi",
+            "--prompt-file",
+            file.to_str().unwrap(),
+        ],
+    ));
 }
 
 #[test]
 fn empty_and_blank_prompts_are_rejected() {
     let env = Env::new();
     assert_eq!(
-        assert_rejected(&env.run(&["pi", "--prompt", ""])),
+        assert_rejected(&run(&env, &["pi", "--prompt", ""])),
         "the prompt is empty"
     );
     assert_eq!(
-        assert_rejected(&env.run(&["pi", "--prompt", " \n\t"])),
+        assert_rejected(&run(&env, &["pi", "--prompt", " \n\t"])),
         "the prompt is empty"
     );
     assert_eq!(
-        assert_rejected(&env.run_with_stdin(&["pi"], "  \n")),
+        assert_rejected(&run_with_stdin(&env, &["pi"], "  \n")),
         "the prompt is empty"
     );
 }
@@ -161,8 +110,8 @@ fn empty_and_blank_prompts_are_rejected() {
 #[test]
 fn missing_prompt_file_is_rejected() {
     let env = Env::new();
-    let file = env.root.path().join("missing.md");
-    let detail = assert_rejected(&env.run(&["pi", "--prompt-file", file.to_str().unwrap()]));
+    let file = env.root().join("missing.md");
+    let detail = assert_rejected(&run(&env, &["pi", "--prompt-file", file.to_str().unwrap()]));
     assert!(
         detail.starts_with(&format!("cannot read prompt file {}: ", file.display())),
         "{detail}"
@@ -172,9 +121,9 @@ fn missing_prompt_file_is_rejected() {
 #[test]
 fn non_utf8_prompt_file_is_rejected() {
     let env = Env::new();
-    let file = env.root.path().join("binary.md");
+    let file = env.root().join("binary.md");
     std::fs::write(&file, [0xff, 0xfe]).unwrap();
-    let detail = assert_rejected(&env.run(&["pi", "--prompt-file", file.to_str().unwrap()]));
+    let detail = assert_rejected(&run(&env, &["pi", "--prompt-file", file.to_str().unwrap()]));
     assert_eq!(
         detail,
         format!("prompt file {} is not valid UTF-8", file.display())
@@ -184,9 +133,11 @@ fn non_utf8_prompt_file_is_rejected() {
 #[test]
 fn missing_cwd_is_rejected() {
     let env = Env::new();
-    let dir = env.root.path().join("nowhere");
-    let detail =
-        assert_rejected(&env.run(&["pi", "--cwd", dir.to_str().unwrap(), "--prompt", "hi"]));
+    let dir = env.root().join("nowhere");
+    let detail = assert_rejected(&run(
+        &env,
+        &["pi", "--cwd", dir.to_str().unwrap(), "--prompt", "hi"],
+    ));
     assert!(detail.contains(dir.to_str().unwrap()), "{detail}");
 }
 
@@ -194,24 +145,32 @@ fn missing_cwd_is_rejected() {
 fn max_turns_is_only_for_claude_code() {
     let env = Env::new();
     assert_eq!(
-        assert_rejected(&env.run(&["pi", "--max-turns", "3", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["pi", "--max-turns", "3", "--prompt", "hi"])),
         "--max-turns is only supported by claude-code"
     );
-    assert_rejected(&env.run(&["claude-code", "--max-turns", "0", "--prompt", "hi"]));
+    assert_rejected(&run(
+        &env,
+        &["claude-code", "--max-turns", "0", "--prompt", "hi"],
+    ));
 }
 
 #[test]
 fn invalid_sandbox_value_is_rejected() {
-    let detail = assert_rejected(&Env::new().run(&["pi", "--sandbox", "maybe", "--prompt", "hi"]));
+    let detail = assert_rejected(&run(
+        &Env::new(),
+        &["pi", "--sandbox", "maybe", "--prompt", "hi"],
+    ));
     assert!(detail.contains("maybe"), "{detail}");
 }
 
 #[test]
 fn raw_file_that_cannot_be_created_is_rejected() {
     let env = Env::new();
-    let raw = env.root.path().join("missing-dir/raw.jsonl");
-    let detail =
-        assert_rejected(&env.run(&["pi", "--prompt", "hi", "--raw", raw.to_str().unwrap()]));
+    let raw = env.root().join("missing-dir/raw.jsonl");
+    let detail = assert_rejected(&run(
+        &env,
+        &["pi", "--prompt", "hi", "--raw", raw.to_str().unwrap()],
+    ));
     assert!(
         detail.starts_with(&format!("cannot create raw file {}: ", raw.display())),
         "{detail}"
@@ -226,7 +185,7 @@ fn text_format_rejection_is_one_end_line() {
         &["pi", "--format=text", "--prompt", ""],
     ];
     for args in cases {
-        let output = env.run(args);
+        let output = run(&env, args);
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
@@ -247,7 +206,7 @@ fn prescan_applies_when_parsing_fails() {
         &["pi", "--bogus", "--format=text"],
     ];
     for args in cases {
-        let output = env.run(args);
+        let output = run(&env, args);
         assert_eq!(output.status.code(), Some(2));
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(stdout.starts_with("[end] rejected "), "{stdout}");
@@ -257,9 +216,23 @@ fn prescan_applies_when_parsing_fails() {
 }
 
 #[test]
+fn terminal_stdin_without_prompt_is_rejected() {
+    let env = Env::new();
+    let (_master, slave) = support::open_pty(24, 80);
+    let output = command(&env, &["pi"])
+        .stdin(Stdio::from(slave))
+        .output()
+        .unwrap();
+    assert_eq!(
+        assert_rejected(&output),
+        "no prompt given: use --prompt, --prompt-file or pipe the prompt to standard input"
+    );
+}
+
+#[test]
 fn prompt_from_stdin_passes_prompt_checks() {
     let env = Env::new();
-    let detail = assert_rejected(&env.run_with_stdin(&["claude-code"], "fix the tests\n"));
+    let detail = assert_rejected(&run_with_stdin(&env, &["claude-code"], "fix the tests\n"));
     assert_eq!(detail, "claude not found in PATH");
 }
 
@@ -267,11 +240,11 @@ fn prompt_from_stdin_passes_prompt_checks() {
 fn runtime_missing_from_path_is_rejected() {
     let env = Env::new();
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["claude-code", "--prompt", "hi"])),
         "claude not found in PATH"
     );
     assert_eq!(
-        assert_rejected(&env.run(&["pi", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["pi", "--prompt", "hi"])),
         "pi not found in PATH"
     );
 }
@@ -284,31 +257,34 @@ const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubu
 #[cfg(target_os = "linux")]
 #[test]
 fn sandbox_on_without_bwrap_is_rejected_without_tempdir() {
-    let env = Env::with_fake_claude();
+    let env = with_fake("claude");
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["claude-code", "--prompt", "hi"])),
         format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
     );
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--dry-run", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["claude-code", "--dry-run", "--prompt", "hi"])),
         format!("sandbox is not available: bwrap not found in PATH. {INSTALL_HINT}")
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
-    let env = Env::with_fake_pi();
-    let output = env.run(&[
-        "pi",
-        "--sandbox",
-        "relax",
-        "--debug",
-        "--dry-run",
-        "--prompt",
-        "hi",
-    ]);
+    let env = with_fake("pi");
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--sandbox",
+            "relax",
+            "--debug",
+            "--dry-run",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert_dry_run(&output);
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
@@ -319,21 +295,21 @@ fn sandbox_relax_without_bwrap_passes_the_sandbox_step() {
 #[cfg(target_os = "linux")]
 #[test]
 fn bwrap_that_cannot_start_is_rejected_with_its_message() {
-    let env = Env::with_fake_claude();
+    let env = with_fake("claude");
     env.install(
         "bwrap",
         "#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n",
     );
     env.install("socat", "#!/bin/sh\nexit 0\n");
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["claude-code", "--prompt", "hi"])),
         format!(
             "sandbox is not available: bwrap cannot start: No permissions to create new namespace. {CANNOT_START_HINT}"
         )
     );
     env.install("bwrap", "#!/bin/sh\nexit 3\n");
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["claude-code", "--prompt", "hi"])),
         format!(
             "sandbox is not available: bwrap cannot start: exited with code 3. {CANNOT_START_HINT}"
         )
@@ -343,25 +319,24 @@ fn bwrap_that_cannot_start_is_rejected_with_its_message() {
 #[cfg(target_os = "linux")]
 #[test]
 fn codex_is_rejected_when_bwrap_cannot_start_and_needs_no_socat() {
-    let env = Env::with_fake_codex();
-    let work = env.root.path().join("work");
-    std::fs::create_dir(&work).unwrap();
+    let env = with_fake("codex");
+    let work = env.work();
     let args = ["codex", "--cwd", work.to_str().unwrap(), "--prompt", "hi"];
     env.install(
         "bwrap",
         "#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n",
     );
     assert_eq!(
-        assert_rejected(&env.run(&args)),
+        assert_rejected(&run(&env, &args)),
         format!(
             "sandbox is not available: bwrap cannot start: setting up uid map: Permission denied. {CANNOT_START_HINT}"
         )
     );
     env.install("bwrap", "#!/bin/sh\nexit 0\n");
-    let detail = assert_rejected(&env.run(&args));
+    let detail = assert_rejected(&run(&env, &args));
     assert!(detail.starts_with("codex login file "), "{detail}");
     assert_eq!(
-        assert_rejected(&env.run(&["codex", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["codex", "--prompt", "hi"])),
         "sandbox is not available: bwrap not found in PATH. Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off"
     );
 }
@@ -369,11 +344,11 @@ fn codex_is_rejected_when_bwrap_cannot_start_and_needs_no_socat() {
 #[cfg(target_os = "linux")]
 #[test]
 fn bwrap_that_hangs_is_killed_after_five_seconds() {
-    let env = Env::with_fake_claude();
+    let env = with_fake("claude");
     env.install("bwrap", "#!/bin/sh\nexec /bin/sleep 10\n");
     env.install("socat", "#!/bin/sh\nexit 0\n");
     let started = std::time::Instant::now();
-    let detail = assert_rejected(&env.run(&["claude-code", "--prompt", "hi"]));
+    let detail = assert_rejected(&run(&env, &["claude-code", "--prompt", "hi"]));
     let elapsed = started.elapsed().as_secs_f64();
     assert!((4.5..9.0).contains(&elapsed), "took {elapsed:.2}s");
     assert_eq!(
@@ -387,10 +362,10 @@ fn bwrap_that_hangs_is_killed_after_five_seconds() {
 #[cfg(target_os = "linux")]
 #[test]
 fn missing_socat_is_rejected() {
-    let env = Env::with_fake_claude();
+    let env = with_fake("claude");
     env.install("bwrap", "#!/bin/sh\nexit 0\n");
     assert_eq!(
-        assert_rejected(&env.run(&["claude-code", "--prompt", "hi"])),
+        assert_rejected(&run(&env, &["claude-code", "--prompt", "hi"])),
         format!("sandbox is not available: socat not found in PATH. {INSTALL_HINT}")
     );
 }
@@ -409,62 +384,67 @@ const SANDBOX_ON_WITHOUT_PROVIDER: &str = "cannot tell which host pi's model ser
 
 #[test]
 fn sandbox_variable_from_every_source_and_option_precedence() {
-    let env = Env::with_fake_pi();
-    let output = env
-        .command(&["pi", "--dry-run", "--prompt", "hi"])
+    let env = with_fake("pi");
+    let output = command(&env, &["pi", "--dry-run", "--prompt", "hi"])
         .env("AGENTRUN_SANDBOX", "off")
         .output()
         .unwrap();
     assert_dry_run(&output);
-    let output = env
-        .command(&[
+    let output = command(
+        &env,
+        &[
             "pi",
             "--dry-run",
             "--env",
             "AGENTRUN_SANDBOX",
             "--prompt",
             "hi",
-        ])
-        .env("AGENTRUN_SANDBOX", "off")
-        .output()
-        .unwrap();
-    assert_dry_run(&output);
-    assert_dry_run(&env.run(&[
-        "pi",
-        "--dry-run",
-        "--env",
-        "AGENTRUN_SANDBOX=off",
-        "--prompt",
-        "hi",
-    ]));
-    std::fs::write(
-        env.root.path().join("sandbox.env"),
-        "AGENTRUN_SANDBOX=off\n",
+        ],
     )
+    .env("AGENTRUN_SANDBOX", "off")
+    .output()
     .unwrap();
-    assert_dry_run(&env.run(&[
-        "pi",
-        "--dry-run",
-        "--env-file",
-        "sandbox.env",
-        "--prompt",
-        "hi",
-    ]));
-    assert_eq!(
-        assert_rejected(&env.run(&[
+    assert_dry_run(&output);
+    assert_dry_run(&run(
+        &env,
+        &[
+            "pi",
+            "--dry-run",
+            "--env",
+            "AGENTRUN_SANDBOX=off",
+            "--prompt",
+            "hi",
+        ],
+    ));
+    std::fs::write(env.root().join("sandbox.env"), "AGENTRUN_SANDBOX=off\n").unwrap();
+    assert_dry_run(&run(
+        &env,
+        &[
             "pi",
             "--dry-run",
             "--env-file",
             "sandbox.env",
-            "--sandbox",
-            "on",
             "--prompt",
-            "hi"
-        ])),
+            "hi",
+        ],
+    ));
+    assert_eq!(
+        assert_rejected(&run(
+            &env,
+            &[
+                "pi",
+                "--dry-run",
+                "--env-file",
+                "sandbox.env",
+                "--sandbox",
+                "on",
+                "--prompt",
+                "hi"
+            ]
+        )),
         SANDBOX_ON_WITHOUT_PROVIDER
     );
-    let output = env
-        .command(&["pi", "--prompt", "hi"])
+    let output = command(&env, &["pi", "--prompt", "hi"])
         .env("AGENTRUN_SANDBOX", "maybe")
         .output()
         .unwrap();
@@ -472,12 +452,12 @@ fn sandbox_variable_from_every_source_and_option_precedence() {
         assert_rejected(&output),
         "invalid AGENTRUN_SANDBOX value 'maybe': expected on, relax or off"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn network_usage_errors() {
-    let env = Env::with_fake_pi();
+    let env = with_fake("pi");
     let cases = [
         (
             vec!["--network", "custom"],
@@ -528,9 +508,9 @@ fn network_usage_errors() {
         let mut args = vec!["pi", "--sandbox", "off"];
         args.extend(options);
         args.extend(["--prompt", "hi"]);
-        assert_eq!(assert_rejected(&env.run(&args)), detail, "{args:?}");
+        assert_eq!(assert_rejected(&run(&env, &args)), detail, "{args:?}");
     }
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
@@ -540,19 +520,22 @@ fn start_network_reports_mode_allow_and_enforcement() {
         "pi",
         "#!/bin/sh\necho '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"provider\":\"deepseek\",\"model\":\"deepseek-flash\",\"usage\":{\"input\":1,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0},\"stopReason\":\"stop\"}}'\n",
     );
-    let output = env.run(&[
-        "pi",
-        "--sandbox",
-        "off",
-        "--network",
-        "custom",
-        "--allow-host",
-        "API.Example.com.",
-        "--allow-host",
-        "*.github.com:443",
-        "--prompt",
-        "hi",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--sandbox",
+            "off",
+            "--network",
+            "custom",
+            "--allow-host",
+            "API.Example.com.",
+            "--allow-host",
+            "*.github.com:443",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let start: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
@@ -565,15 +548,18 @@ fn start_network_reports_mode_allow_and_enforcement() {
             "enforced": false,
         })
     );
-    let output = env.run(&[
-        "pi",
-        "--sandbox",
-        "off",
-        "--network",
-        "full",
-        "--prompt",
-        "hi",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--sandbox",
+            "off",
+            "--network",
+            "full",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let start: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
@@ -584,21 +570,40 @@ fn start_network_reports_mode_allow_and_enforcement() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn real_bwrap_passes_the_sandbox_step() {
-    let Some(bwrap) = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| path.exists())
-    else {
+fn real_bwrap() -> Option<(Env, PathBuf)> {
+    let Some(bwrap) = support::system_bwrap() else {
         eprintln!("skipped: bwrap is not installed");
+        return None;
+    };
+    if !support::sandbox_available() {
+        return None;
+    }
+    let env = with_fake("pi");
+    env.install("claude", "#!/bin/sh\nexit 0\n");
+    Some((env, bwrap))
+}
+
+#[cfg(target_os = "linux")]
+fn run_with_bwrap(env: &Env, bwrap: &Path, args: &[&str]) -> Output {
+    let path = format!(
+        "{}:{}",
+        env.bin().display(),
+        bwrap.parent().unwrap().display()
+    );
+    command(env, args).env("PATH", path).output().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_passes_the_sandbox_step_for_pi() {
+    let Some((env, bwrap)) = real_bwrap() else {
         return;
     };
-    let env = Env::with_fake_pi();
     let system = bwrap.parent().unwrap();
-    let path = format!("{}:{}", env.bin().display(), system.display());
-    let output = env
-        .command(&[
+    let output = run_with_bwrap(
+        &env,
+        &bwrap,
+        &[
             "pi",
             "--debug",
             "--dry-run",
@@ -606,10 +611,8 @@ fn real_bwrap_passes_the_sandbox_step() {
             "deepseek/deepseek-flash",
             "--prompt",
             "hi",
-        ])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+        ],
+    );
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     let first = stderr.lines().next().unwrap_or_default();
     if first.contains("bwrap cannot start") {
@@ -626,35 +629,47 @@ fn real_bwrap_passes_the_sandbox_step() {
         "{first}"
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let command = stdout.lines().next().unwrap();
+    let printed = stdout.lines().next().unwrap();
     assert!(
-        command.contains(&format!(
+        printed.contains(&format!(
             " {}/socat '<proxy port>' '<tempdir>/proxy.sock' {}/pi ",
             system.display(),
             env.bin().display()
         )),
-        "{command}"
+        "{printed}"
     );
-    assert!(command.contains("--unshare-net"), "{command}");
-    assert!(env.no_leftover_tempdirs());
-    let output = env
-        .command(&["pi", "--dry-run", "--prompt", "hi"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+    assert!(printed.contains("--unshare-net"), "{printed}");
+    assert!(env.leftovers().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_rejects_pi_when_the_provider_is_unknown() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
+    let output = run_with_bwrap(&env, &bwrap, &["pi", "--dry-run", "--prompt", "hi"]);
     assert_eq!(
         assert_rejected(&output),
         "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>"
     );
-    let output = env
-        .command(&["pi", "--dry-run", "--model", "acme/robot", "--prompt", "hi"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+    let output = run_with_bwrap(
+        &env,
+        &bwrap,
+        &["pi", "--dry-run", "--model", "acme/robot", "--prompt", "hi"],
+    );
     assert_eq!(
         assert_rejected(&output),
         "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_accepts_an_unknown_pi_provider_with_custom_or_full_network() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
     for mode in ["custom", "full"] {
         let mut args = vec![
             "pi",
@@ -668,61 +683,78 @@ fn real_bwrap_passes_the_sandbox_step() {
             args.extend(["--allow-host", "robot.example"]);
         }
         args.extend(["--prompt", "hi"]);
-        let output = env.command(&args).env("PATH", &path).output().unwrap();
-        assert_dry_run(&output);
+        assert_dry_run(&run_with_bwrap(&env, &bwrap, &args));
     }
-    assert!(env.no_leftover_tempdirs());
-    env.install("claude", "#!/bin/sh\nexit 0\n");
-    let output = env
-        .command(&[
+    assert!(env.leftovers().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_gives_claude_code_the_proxy_ports_with_full_network() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
+    let output = run_with_bwrap(
+        &env,
+        &bwrap,
+        &[
             "claude-code",
             "--network",
             "full",
             "--dry-run",
             "--prompt",
             "hi",
-        ])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+        ],
+    );
     assert_dry_run(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let command = stdout.lines().next().unwrap();
+    let printed = stdout.lines().next().unwrap();
     assert!(
-        command.contains(
+        printed.contains(
             r#""network":{"allowedDomains":[],"httpProxyPort":"<proxy port>","socksProxyPort":"<proxy port>"}"#
         ),
-        "{command}"
+        "{printed}"
     );
-    let output = env
-        .command(&["claude-code", "--dry-run", "--prompt", "hi"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_gives_claude_code_no_proxy_with_network_none() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
+    let output = run_with_bwrap(
+        &env,
+        &bwrap,
+        &["claude-code", "--dry-run", "--prompt", "hi"],
+    );
     assert_dry_run(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let command = stdout.lines().next().unwrap();
+    let printed = stdout.lines().next().unwrap();
     assert!(
-        command.contains(r#""network":{"allowedDomains":[]}"#),
-        "{command}"
+        printed.contains(r#""network":{"allowedDomains":[]}"#),
+        "{printed}"
     );
-    assert!(!command.contains("proxy port"), "{command}");
+    assert!(!printed.contains("proxy port"), "{printed}");
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_exec_passes_the_sandbox_step() {
-    let env = Env::with_fake_claude();
+    let env = with_fake("claude");
     env.install("pi", "#!/bin/sh\nexit 0\n");
-    let output = env.run(&[
-        "pi",
-        "--debug",
-        "--dry-run",
-        "--model",
-        "deepseek/deepseek-flash",
-        "--prompt",
-        "hi",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--debug",
+            "--dry-run",
+            "--model",
+            "deepseek/deepseek-flash",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert_dry_run(&output);
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     let first = stderr.lines().next().unwrap_or_default();
@@ -741,8 +773,11 @@ fn sandbox_exec_passes_the_sandbox_step() {
         "{command}"
     );
     assert!(!command.contains("socat"), "{command}");
-    assert!(env.no_leftover_tempdirs());
-    let output = env.run(&["pi", "--sandbox", "off", "--dry-run", "--prompt", "hi"]);
+    assert!(env.leftovers().is_empty());
+    let output = run(
+        &env,
+        &["pi", "--sandbox", "off", "--dry-run", "--prompt", "hi"],
+    );
     assert_dry_run(&output);
     assert!(
         !String::from_utf8(output.stdout)
@@ -750,7 +785,7 @@ fn sandbox_exec_passes_the_sandbox_step() {
             .contains("sandbox-exec"),
         "the unsandboxed command is not wrapped"
     );
-    let output = env.run(&["claude-code", "--dry-run", "--prompt", "hi"]);
+    let output = run(&env, &["claude-code", "--dry-run", "--prompt", "hi"]);
     assert_dry_run(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(r#""sandbox":{"enabled":true"#), "{stdout}");
@@ -761,16 +796,22 @@ fn sandbox_exec_passes_the_sandbox_step() {
 fn env_without_caller_value_is_rejected() {
     let env = Env::new();
     assert_eq!(
-        assert_rejected(&env.run(&["pi", "--env", "NO_SUCH_VAR", "--prompt", "hi"])),
+        assert_rejected(&run(
+            &env,
+            &["pi", "--env", "NO_SUCH_VAR", "--prompt", "hi"]
+        )),
         "--env NO_SUCH_VAR: not set in the caller's environment"
     );
-    assert!(env.no_leftover_tempdirs());
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
 fn env_with_invalid_name_is_rejected() {
     assert_eq!(
-        assert_rejected(&Env::new().run(&["pi", "--env", "1BAD=x", "--prompt", "hi"])),
+        assert_rejected(&run(
+            &Env::new(),
+            &["pi", "--env", "1BAD=x", "--prompt", "hi"]
+        )),
         "--env: invalid variable name '1BAD'"
     );
 }
@@ -778,15 +819,20 @@ fn env_with_invalid_name_is_rejected() {
 #[test]
 fn missing_path_dir_is_rejected() {
     assert_eq!(
-        assert_rejected(&Env::new().run(&["pi", "--path", "/no/such/dir", "--prompt", "hi"])),
+        assert_rejected(&run(
+            &Env::new(),
+            &["pi", "--path", "/no/such/dir", "--prompt", "hi"]
+        )),
         "--path /no/such/dir: not a directory"
     );
 }
 
 #[test]
 fn missing_env_file_is_rejected() {
-    let detail =
-        assert_rejected(&Env::new().run(&["pi", "--env-file", "missing.env", "--prompt", "hi"]));
+    let detail = assert_rejected(&run(
+        &Env::new(),
+        &["pi", "--env-file", "missing.env", "--prompt", "hi"],
+    ));
     assert!(detail.starts_with("--env-file missing.env: "), "{detail}");
 }
 
@@ -794,22 +840,26 @@ fn missing_env_file_is_rejected() {
 fn malformed_env_file_line_is_rejected_without_its_content() {
     let env = Env::new();
     std::fs::write(
-        env.root.path().join("bad.env"),
+        env.root().join("bad.env"),
         "A=1\n# comment\nSECRET_NAME = hunter2\n",
     )
     .unwrap();
-    let detail = assert_rejected(&env.run(&["pi", "--env-file", "bad.env", "--prompt", "hi"]));
+    let detail = assert_rejected(&run(
+        &env,
+        &["pi", "--env-file", "bad.env", "--prompt", "hi"],
+    ));
     assert_eq!(detail, "--env-file bad.env: line 3: expected KEY=VALUE");
     assert!(!detail.contains("hunter2") && !detail.contains("SECRET_NAME"));
 }
 
 #[test]
 fn runtime_is_found_through_path_option() {
-    let env = Env::with_fake_codex();
-    let empty = env.root.path().join("empty");
+    let env = with_fake("codex");
+    let empty = env.root().join("empty");
     std::fs::create_dir(&empty).unwrap();
-    let output = env
-        .command(&[
+    let output = command(
+        &env,
+        &[
             "codex",
             "--sandbox",
             "off",
@@ -817,17 +867,17 @@ fn runtime_is_found_through_path_option() {
             env.bin().to_str().unwrap(),
             "--prompt",
             "hi",
-        ])
-        .env("PATH", &empty)
-        .output()
-        .unwrap();
+        ],
+    )
+    .env("PATH", &empty)
+    .output()
+    .unwrap();
     assert_eq!(
         assert_rejected(&output),
         "codex login file $HOME/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH"
     );
-    assert!(env.no_leftover_tempdirs());
-    let output = env
-        .command(&["codex", "--sandbox", "off", "--prompt", "hi"])
+    assert!(env.leftovers().is_empty());
+    let output = command(&env, &["codex", "--sandbox", "off", "--prompt", "hi"])
         .env("PATH", &empty)
         .output()
         .unwrap();
@@ -838,7 +888,7 @@ fn runtime_is_found_through_path_option() {
 fn help_and_version_print_to_stdout() {
     let env = Env::new();
     for args in [["--help"], ["--version"]] {
-        let output = env.run(&args);
+        let output = run(&env, &args);
         assert_eq!(output.status.code(), Some(0));
         assert!(!output.stdout.is_empty());
         assert!(output.stderr.is_empty());
@@ -848,7 +898,7 @@ fn help_and_version_print_to_stdout() {
                 .contains("\"type\"")
         );
     }
-    let output = env.run(&["claude-code", "--help"]);
+    let output = run(&env, &["claude-code", "--help"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(
         String::from_utf8(output.stdout)
@@ -859,7 +909,7 @@ fn help_and_version_print_to_stdout() {
 
 #[test]
 fn help_starts_with_package_description() {
-    let output = Env::new().run(&["--help"]);
+    let output = run(&Env::new(), &["--help"]);
     let help = String::from_utf8(output.stdout).unwrap();
     assert_eq!(help.lines().next(), Some(env!("CARGO_PKG_DESCRIPTION")));
 }

@@ -1,14 +1,11 @@
-#[path = "support/fake.rs"]
-mod fake;
 #[path = "support/harness.rs"]
 mod harness;
+#[allow(dead_code)]
+#[path = "support/mod.rs"]
+mod support;
 
-use std::fs::File;
-use std::io::{IsTerminal, Read};
-use std::os::fd::FromRawFd;
-use std::os::unix::fs::PermissionsExt;
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::io::Read;
+use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
 use agentrun::adapter::Adapter;
@@ -16,50 +13,28 @@ use agentrun::aggregate::Aggregator;
 use agentrun::cli::SandboxMode;
 use agentrun::output::TextFormatter;
 use agentrun::rich::Rich;
-use agentrun::run::{Caller, Exit, conclude, run, translate_line};
-use agentrun::signal::Signals;
-use fake::FakeAdapter;
+use agentrun::run::{Exit, conclude, translate_line};
+use support::env::Env;
+use support::fake::FakeAdapter;
+use support::process::{self, spawn_lock};
 
-const FAKE_AGENTRUN: &str = "AGENTRUN_RICH_TEST_FAKE_AGENTRUN";
 const COLUMNS: usize = 100;
 const ROWS: usize = 30;
 const RULE_CHAR: char = '─';
 
 fn main() {
-    if std::env::var_os(FAKE_AGENTRUN).is_some() {
-        std::process::exit(fake_agentrun().into());
-    }
-    harness::run_tests(vec![
-        (
-            "scroll_lines_match_text_and_panel_stays_at_bottom",
-            scroll_lines_match_text_and_panel_stays_at_bottom,
-        ),
-        (
-            "stderr_lines_enter_the_scroll_area",
-            stderr_lines_enter_the_scroll_area,
-        ),
-        (
-            "pseudo_terminal_run_ends_with_end_line_and_visible_cursor",
-            pseudo_terminal_run_ends_with_end_line_and_visible_cursor,
-        ),
-    ]);
+    process::take_over_if_spawned();
+    harness::run_tests(tests());
 }
 
-fn fake_agentrun() -> u8 {
-    let caller = Caller {
-        args: std::env::args_os().collect(),
-        env: std::env::vars_os().collect(),
-        stdin: Box::new(std::io::stdin()),
-        stdin_is_terminal: std::io::stdin().is_terminal(),
-        stdout: Arc::new(Mutex::new(std::io::stdout())),
-        stdout_is_terminal: std::io::stdout().is_terminal(),
-        stderr: Arc::new(Mutex::new(std::io::stderr())),
-        stderr_is_terminal: std::io::stderr().is_terminal(),
-        signals: Signals::install(),
-    };
-    run(caller, &|_| {
-        Some(Box::new(FakeAdapter::new(false)) as Box<dyn Adapter>)
-    })
+fn tests() -> Vec<(&'static str, fn())> {
+    harness::test_list![
+        scroll_lines_match_text_and_panel_stays_at_bottom,
+        stderr_lines_enter_the_scroll_area,
+        pseudo_terminal_run_ends_with_end_line_and_visible_cursor,
+        no_color_turns_off_dim_labels_in_the_terminal,
+        harness_lists_its_tests_and_rejects_unknown_options,
+    ]
 }
 
 struct Screen {
@@ -332,54 +307,33 @@ fn stderr_lines_enter_the_scroll_area() {
     assert_eq!(rows[rows.len() - 2], "tail without newline");
 }
 
-fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
-    let root = tempfile::tempdir().unwrap();
-    let bin = root.path().join("bin");
-    let tmp = root.path().join("tmp");
-    let work = root.path().join("work");
-    for dir in [&bin, &tmp, &work] {
-        std::fs::create_dir(dir).unwrap();
-    }
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' '{SUBAGENT_START}'\nprintf '%s\\n' '{SUBAGENT_TOOL_START}'\necho 'oops' >&2\nprintf '%s\\n' '{SUBAGENT_TOOL_END}'\nprintf '%s\\n' '{SUBAGENT_END}'\nprintf '%s\\n' '{MAIN_TEXT}'\n"
+fn run_in_pty(variables: &[(&str, &str)]) -> Vec<u8> {
+    let env = Env::new();
+    env.install(
+        "claude",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' '{SUBAGENT_START}'\nprintf '%s\\n' '{SUBAGENT_TOOL_START}'\necho 'oops' >&2\nprintf '%s\\n' '{SUBAGENT_TOOL_END}'\nprintf '%s\\n' '{SUBAGENT_END}'\nprintf '%s\\n' '{MAIN_TEXT}'\n"
+        ),
     );
-    let claude = bin.join("claude");
-    std::fs::write(&claude, script).unwrap();
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let mut master = 0;
-    let mut slave = 0;
-    let mut size = libc::winsize {
-        ws_row: ROWS as u16,
-        ws_col: COLUMNS as u16,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let opened = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &raw mut size,
-        )
-    };
-    assert_eq!(opened, 0, "openpty");
-    let mut master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    let (mut master, slave) = support::open_pty(ROWS as u16, COLUMNS as u16);
+    let work = env.work();
+    let mut command = env.fake_command(&[
+        "claude-code",
+        "--sandbox",
+        "off",
+        "--prompt",
+        "hi",
+        "--cwd",
+        work.to_str().unwrap(),
+    ]);
     command
-        .args(["claude-code", "--sandbox", "off", "--prompt", "hi", "--cwd"])
-        .arg(&work)
-        .env_clear()
-        .env(FAKE_AGENTRUN, "1")
-        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-        .env("TMPDIR", &tmp)
-        .stdin(Stdio::null())
+        .envs(variables.iter().copied())
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
-    let mut child = command.spawn().unwrap();
+    let mut child = {
+        let _guard = spawn_lock();
+        command.spawn().unwrap()
+    };
     drop(command);
 
     let mut bytes = Vec::new();
@@ -392,20 +346,31 @@ fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
     }
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(0));
+    bytes
+}
 
+fn rows_without_stderr(bytes: &[u8]) -> Vec<String> {
+    let mut screen = Screen::new();
+    screen.feed(bytes);
+    assert!(screen.cursor_visible);
+    let rows = screen.rows();
+    assert!(rows.iter().all(|row| !is_rule(row)), "{rows:?}");
+    assert!(rows.contains(&"oops"), "{rows:?}");
+    rows.iter()
+        .filter(|row| **row != "oops")
+        .map(|row| row.to_string())
+        .collect()
+}
+
+fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
+    let bytes = run_in_pty(&[]);
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("\x1b[?25l"), "cursor was hidden: {text:?}");
     assert!(text.contains("subagent  1 running"), "{text:?}");
     assert!(text.contains("\x1b[2m[main]\x1b[0m prompt hi"), "{text:?}");
     assert!(text.ends_with("\x1b[?25h"), "{text:?}");
 
-    let mut screen = Screen::new();
-    screen.feed(&bytes);
-    let rows = screen.rows();
-    assert!(screen.cursor_visible);
-    assert!(rows.iter().all(|row| !is_rule(row)), "{rows:?}");
-    assert!(rows.contains(&"oops"), "{rows:?}");
-    let without_stderr: Vec<&str> = rows.iter().copied().filter(|row| *row != "oops").collect();
+    let without_stderr = rows_without_stderr(&bytes);
     assert!(without_stderr[0].starts_with("[note] sandbox not running (--sandbox off)."));
     assert_eq!(without_stderr[1], "[main] prompt hi");
     assert_eq!(
@@ -417,4 +382,75 @@ fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
     assert_eq!(without_stderr[5], "[main] text done");
     assert!(without_stderr[6].starts_with("[end] finished "));
     assert_eq!(without_stderr.len(), 7);
+}
+
+fn no_color_turns_off_dim_labels_in_the_terminal() {
+    let bytes = run_in_pty(&[("NO_COLOR", "1")]);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("\x1b[?25l"), "cursor was hidden: {text:?}");
+    assert!(text.ends_with("\x1b[?25h"), "{text:?}");
+    assert!(!text.contains("\x1b[2m"), "{text:?}");
+    assert!(!text.contains("\x1b[0m"), "{text:?}");
+    let without_stderr = rows_without_stderr(&bytes);
+    assert_eq!(without_stderr.len(), 7, "{without_stderr:?}");
+    assert_eq!(without_stderr[1], "[main] prompt hi");
+    assert!(without_stderr[6].starts_with("[end] finished "));
+
+    let bytes = run_in_pty(&[("NO_COLOR", "")]);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("\x1b[2m[main]\x1b[0m prompt hi"), "{text:?}");
+}
+
+fn run_harness(args: &[&str]) -> Output {
+    let child = {
+        let _guard = spawn_lock();
+        Command::new(std::env::current_exe().unwrap())
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    child.wait_with_output().unwrap()
+}
+
+fn harness_stdout(args: &[&str]) -> String {
+    let output = run_harness(args);
+    assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn harness_lists_its_tests_and_rejects_unknown_options() {
+    let mut names: Vec<&str> = tests().into_iter().map(|(name, _)| name).collect();
+    names.sort();
+    let lines: String = names.iter().map(|name| format!("{name}: test\n")).collect();
+    assert_eq!(
+        harness_stdout(&["--list"]),
+        format!("{lines}\n{} tests, 0 benchmarks\n", names.len())
+    );
+    assert_eq!(
+        harness_stdout(&["--list", "--exact", "stderr_lines_enter_the_scroll_area"]),
+        "stderr_lines_enter_the_scroll_area: test\n\n1 test, 0 benchmarks\n"
+    );
+    assert_eq!(
+        harness_stdout(&["--list", "scroll"]),
+        "scroll_lines_match_text_and_panel_stays_at_bottom: test\nstderr_lines_enter_the_scroll_area: test\n\n2 tests, 0 benchmarks\n"
+    );
+    assert_eq!(harness_stdout(&["--list", "--quiet"]), lines);
+    assert_eq!(
+        harness_stdout(&["--list", "no_such_test"]),
+        "0 tests, 0 benchmarks\n"
+    );
+    assert_eq!(
+        harness_stdout(&["--list", "--ignored"]),
+        "0 tests, 0 benchmarks\n"
+    );
+    let output = run_harness(&["--bogus"]);
+    assert_eq!(output.status.code(), Some(101), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: Unrecognized option: 'bogus'\n"
+    );
 }

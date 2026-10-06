@@ -1,8 +1,10 @@
 #![cfg(target_os = "linux")]
 
-use std::io::{BufRead, Read};
+#[allow(dead_code)]
+mod support;
+
+use std::io::{BufRead, ErrorKind, Read};
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -12,6 +14,8 @@ use std::time::{Duration, Instant};
 use agentrun::event::SandboxKind;
 use agentrun::pi::state;
 use agentrun::sandbox::{PiState, ProxyForward, wrap_pi, wrapper_failure};
+use support::env::write_script;
+use support::process::wait_until_gone;
 use tempfile::TempDir;
 
 struct Wrapped {
@@ -21,11 +25,7 @@ struct Wrapped {
 
 impl Wrapped {
     fn new() -> Option<Wrapped> {
-        let bwrap = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
-            .into_iter()
-            .map(PathBuf::from)
-            .find(|path| path.exists());
-        let Some(bwrap) = bwrap else {
+        let Some(bwrap) = support::system_bwrap() else {
             eprintln!("skipped: bwrap is not installed");
             return None;
         };
@@ -86,8 +86,7 @@ impl Wrapped {
 
     fn script(&self, body: &str) -> PathBuf {
         let path = self.cwd().join("script.sh");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_script(&path, &format!("#!/bin/sh\n{body}"));
         path
     }
 
@@ -233,24 +232,15 @@ fn no_network_inside_the_wrapper() {
     };
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let accepted = thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            if listener.accept().is_ok() {
-                return true;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        false
-    });
     let output = wrapped.run(
         "if socat -T 2 - \"TCP:127.0.0.1:$1\" </dev/null 2>/dev/null; then echo connected; else echo refused; fi\n",
         &[&port.to_string()],
     );
     assert_eq!(stdout(&output).trim(), "refused");
-    assert!(
-        !accepted.join().unwrap(),
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().map(|_| ()).map_err(|error| error.kind()),
+        Err(ErrorKind::WouldBlock),
         "the sandboxed script reached the listener"
     );
 }
@@ -275,13 +265,6 @@ fn exit_code_passes_through() {
         wrapper_failure(SandboxKind::Bubblewrap, output.status.code(), ""),
         None
     );
-}
-
-fn process_is_gone(pid: i32) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/status")) {
-        Ok(status) => status.lines().any(|line| line.starts_with("State:\tZ")),
-        Err(_) => true,
-    }
 }
 
 #[test]
@@ -319,15 +302,10 @@ fn sigterm_to_the_process_group_kills_the_wrapped_command_before_its_trap() {
         sent.elapsed()
     );
     assert_eq!(status.code(), None, "{status:?}");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !process_is_gone(script_pid) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
     assert!(
-        process_is_gone(script_pid),
+        wait_until_gone(script_pid),
         "the wrapped script {script_pid} is still running"
     );
-    thread::sleep(Duration::from_millis(1500));
     assert!(!marker.exists(), "the trap of the wrapped script ran");
 }
 

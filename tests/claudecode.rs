@@ -2,13 +2,11 @@
 mod support;
 
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use agentrun::claudecode::ClaudeCode;
 use serde_json::{Value, json};
-use tempfile::TempDir;
+use support::env::Env;
 
 fn replay(name: &str) {
     support::assert_replay(&mut ClaudeCode::new(), "claude-code", name, "unused");
@@ -69,66 +67,26 @@ fn replay_prompt_multiline() {
     replay("prompt-multiline");
 }
 
-struct Env {
-    root: TempDir,
+fn with_claude(script: &str) -> Env {
+    let env = Env::new();
+    env.install("claude", script);
+    env
 }
 
-impl Env {
-    fn new(script: &str) -> Env {
-        let env = Env {
-            root: tempfile::tempdir().unwrap(),
-        };
-        std::fs::create_dir(env.bin()).unwrap();
-        std::fs::create_dir(env.tmp()).unwrap();
-        std::fs::create_dir(env.work()).unwrap();
-        let path = env.bin().join("claude");
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        env
-    }
-
-    fn bin(&self) -> PathBuf {
-        self.root.path().join("bin")
-    }
-
-    fn tmp(&self) -> PathBuf {
-        self.root.path().join("tmp")
-    }
-
-    fn work(&self) -> PathBuf {
-        self.root.path().join("work")
-    }
-
-    fn run(&self, args: &[&str], stdin: &str) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_agentrun"))
-            .arg("claude-code")
-            .arg("--cwd")
-            .arg(self.work())
-            .args(args)
-            .env_clear()
-            .env("PATH", format!("{}:/usr/bin:/bin", self.bin().display()))
-            .env("TMPDIR", self.tmp())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
-    }
-}
-
-fn events(output: &Output) -> Vec<Value> {
-    String::from_utf8(output.stdout.clone())
+fn run(env: &Env, args: &[&str], stdin: &str) -> Output {
+    let work = env.work();
+    let mut child = env
+        .command(&[&["claude-code", "--cwd", work.to_str().unwrap()], args].concat())
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
         .unwrap()
-        .lines()
-        .map(|line| support::without_timing(serde_json::from_str(line).unwrap()))
-        .collect()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
 }
 
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -146,8 +104,9 @@ LINES
 
 #[test]
 fn fake_claude_run_without_sandbox() {
-    let env = Env::new(FAKE_CLAUDE);
-    let output = env.run(
+    let env = with_claude(FAKE_CLAUDE);
+    let output = run(
+        &env,
         &["--sandbox", "off", "--model", "sonnet", "--", "--extra"],
         "say hi\n",
     );
@@ -156,7 +115,7 @@ fn fake_claude_run_without_sandbox() {
         std::fs::read_to_string(env.bin().join("claude.stdin")).unwrap(),
         r#"{"type":"user","message":{"role":"user","content":"say hi\n"}}"#
     );
-    let events = events(&output);
+    let events = support::events(&output);
     let start = &events[0];
     let argv: Vec<&str> = start["argv"]
         .as_array()
@@ -216,8 +175,9 @@ fn fake_claude_run_without_sandbox() {
 
 #[test]
 fn no_subagents_removes_task_and_reports_when_it_comes_back() {
-    let env = Env::new(FAKE_CLAUDE);
-    let output = env.run(
+    let env = with_claude(FAKE_CLAUDE);
+    let output = run(
+        &env,
         &[
             "--sandbox",
             "off",
@@ -229,7 +189,7 @@ fn no_subagents_removes_task_and_reports_when_it_comes_back() {
         "",
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let start = &events(&output)[0];
+    let start = &support::events(&output)[0];
     let argv = start["argv"].as_array().unwrap();
     assert_eq!(argv[17], "Read,Edit,Write,Glob,Grep,Bash");
     assert_eq!(argv[19], "Read,Edit,Write,Glob,Grep");
@@ -238,17 +198,21 @@ fn no_subagents_removes_task_and_reports_when_it_comes_back() {
         stderr.contains("[debug] subagents: Task is in the tool list despite --no-subagents\n"),
         "{stderr}"
     );
-    let output = env.run(&["--sandbox", "off", "--debug", "--prompt", "say hi"], "");
+    let output = run(
+        &env,
+        &["--sandbox", "off", "--debug", "--prompt", "say hi"],
+        "",
+    );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(!stderr.contains("[debug] subagents"), "{stderr}");
 }
 
 #[test]
 fn exit_without_result_fails() {
-    let env = Env::new("#!/bin/sh\nexit 0\n");
-    let output = env.run(&["--sandbox", "off", "--prompt", "hi"], "");
+    let env = with_claude("#!/bin/sh\nexit 0\n");
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"], "");
     assert_eq!(output.status.code(), Some(1));
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "failed");
     assert_eq!(
         end["detail"],
@@ -261,8 +225,8 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
     if !support::sandbox_available() {
         return;
     }
-    let env = Env::new(FAKE_CLAUDE);
-    let output = env.run(&["--dry-run", "--prompt", "hi"], "");
+    let env = with_claude(FAKE_CLAUDE);
+    let output = run(&env, &["--dry-run", "--prompt", "hi"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let command = stdout.lines().next().unwrap();
@@ -280,7 +244,7 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
         "{command}"
     );
     assert!(command.contains("--permission-mode dontAsk"), "{command}");
-    assert!(std::fs::read_dir(env.tmp()).unwrap().next().is_none());
+    assert!(env.leftovers().is_empty());
 }
 
 const CURL_CLAUDE: &str = r#"#!/bin/sh
@@ -305,22 +269,6 @@ cat <<LINES
 LINES
 "#;
 
-fn text_of(events: &[Value]) -> String {
-    events
-        .iter()
-        .find(|event| event["type"] == "text")
-        .map(|event| event["text"].as_str().unwrap().to_string())
-        .unwrap_or_else(|| panic!("no text event in {events:?}"))
-}
-
-fn network_events(events: &[Value]) -> Vec<Value> {
-    events
-        .iter()
-        .filter(|event| event["type"] == "network")
-        .cloned()
-        .collect()
-}
-
 fn option_value(argv: &Value, name: &str) -> String {
     let argv = argv.as_array().unwrap();
     let index = argv.iter().position(|arg| arg == name).unwrap();
@@ -333,17 +281,16 @@ fn network_settings(argv: &Value) -> Value {
 }
 
 #[test]
-fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
+fn sandboxed_claude_with_full_network_gets_the_proxy_ports() {
     if !support::sandbox_available() {
         return;
     }
     let server = support::WebServer::start();
-    let env = Env::new(CURL_CLAUDE);
+    let env = with_claude(CURL_CLAUDE);
     std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
-
-    let output = env.run(&["--network", "full", "--prompt", "fetch"], "");
+    let output = run(&env, &["--network", "full", "--prompt", "fetch"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let full = events(&output);
+    let full = support::events(&output);
     let start = &full[0];
     assert_eq!(
         start["network"],
@@ -366,16 +313,28 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         "{}",
         option_value(&start["argv"], "--allowedTools")
     );
-    assert_eq!(text_of(&full), "code=403 socat=4 proxy=unset");
+    assert_eq!(support::text_of(&full, 0), "code=403 socat=4 proxy=unset");
     assert_eq!(
-        network_events(&full),
+        support::network_events(&full),
         [
             json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": false, "reason": "private_address"})
         ]
     );
+    assert_eq!(server.served(), 0);
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
+#[test]
+fn sandboxed_claude_with_custom_network_reaches_the_listed_host() {
+    if !support::sandbox_available() {
+        return;
+    }
+    let server = support::WebServer::start();
+    let env = with_claude(CURL_CLAUDE);
+    std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
     let port_rule = format!("127.0.0.1:{}", server.port);
-    let output = env.run(
+    let output = run(
+        &env,
         &[
             "--network",
             "custom",
@@ -389,7 +348,7 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         "",
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let custom = events(&output);
+    let custom = support::events(&output);
     let start = &custom[0];
     assert_eq!(
         start["network"],
@@ -408,17 +367,26 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         "{}",
         option_value(&start["argv"], "--allowedTools")
     );
-    assert_eq!(text_of(&custom), "code=200 socat=4 proxy=unset");
+    assert_eq!(support::text_of(&custom, 0), "code=200 socat=4 proxy=unset");
     assert_eq!(
-        network_events(&custom),
+        support::network_events(&custom),
         [
             json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": true, "reason": null})
         ]
     );
+    assert_eq!(server.served(), 1);
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
-    let output = env.run(&["--prompt", "fetch"], "");
+#[test]
+fn sandboxed_claude_with_network_none_gets_no_proxy() {
+    if !support::sandbox_available() {
+        return;
+    }
+    let env = with_claude(CURL_CLAUDE);
+    let output = run(&env, &["--prompt", "fetch"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let none = events(&output);
+    let none = support::events(&output);
     let start = &none[0];
     assert_eq!(
         start["network"],
@@ -432,15 +400,24 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         option_value(&start["argv"], "--tools"),
         "Read,Edit,Write,Glob,Grep,Bash,Task"
     );
-    assert_eq!(text_of(&none), "code=noproxy socat=4 proxy=unset");
-    assert!(network_events(&none).is_empty());
+    assert_eq!(
+        support::text_of(&none, 0),
+        "code=noproxy socat=4 proxy=unset"
+    );
+    assert!(support::network_events(&none).is_empty());
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
-    let output = env.run(
+#[test]
+fn unsandboxed_claude_with_full_network_gets_no_settings() {
+    let env = with_claude(CURL_CLAUDE);
+    let output = run(
+        &env,
         &["--sandbox", "off", "--network", "full", "--prompt", "fetch"],
         "",
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let open = events(&output);
+    let open = support::events(&output);
     let start = &open[0];
     assert_eq!(
         start["network"],
@@ -456,7 +433,9 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         option_value(&start["argv"], "--allowedTools"),
         "Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch"
     );
-    assert_eq!(text_of(&open), "code=noproxy socat=unset proxy=unset");
-    assert_eq!(server.served(), 1);
-    assert!(std::fs::read_dir(env.tmp()).unwrap().next().is_none());
+    assert_eq!(
+        support::text_of(&open, 0),
+        "code=noproxy socat=unset proxy=unset"
+    );
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
