@@ -494,10 +494,13 @@ fn accept_until_stopped(
         if !readable_within(fd, STOP_POLL_INTERVAL) {
             continue;
         }
-        if let Some(client) = accept() {
-            let _ = client.set_nonblocking(false);
-            let server = Arc::clone(server);
-            thread::spawn(move || handle(client, &server));
+        match accept() {
+            Some(client) => {
+                let _ = client.set_nonblocking(false);
+                let server = Arc::clone(server);
+                thread::spawn(move || handle(client, &server));
+            }
+            None => thread::sleep(STOP_POLL_INTERVAL),
         }
     }
 }
