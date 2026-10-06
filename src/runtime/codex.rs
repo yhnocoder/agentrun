@@ -118,7 +118,9 @@ impl Codex {
         if !self.sandboxed || self.sandbox_failure.is_some() {
             return;
         }
-        if let Some(reason) = first_line(&string(output)).strip_prefix(BWRAP_PREFIX) {
+        if let Some(reason) =
+            first_line(output.as_str().unwrap_or_default()).strip_prefix(BWRAP_PREFIX)
+        {
             self.sandbox_failure = Some(start_failure(reason));
         }
     }

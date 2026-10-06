@@ -396,7 +396,9 @@ fn counts(usage: &Value) -> TokenCounts {
 
 fn tool_summary(name: &str, args: &Value) -> String {
     let value = match name {
-        "bash" => args["command"].as_str().map(first_line),
+        "bash" => args["command"]
+            .as_str()
+            .map(|command| first_line(command).to_string()),
         "read" | "write" | "edit" => args["path"].as_str().map(str::to_string),
         "ls" => Some(args["path"].as_str().unwrap_or(".").to_string()),
         "grep" | "find" => args["pattern"].as_str().map(str::to_string),

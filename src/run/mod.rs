@@ -14,20 +14,19 @@ use clap::error::ErrorKind as ClapErrorKind;
 use tempfile::TempDir;
 
 use crate::cli::{
-    Cli, Format, Parsed, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
-    usage_error_detail,
+    Cli, Format, Parsed, RunArgs, Runtime, default_format, prescan_format, usage_error_detail,
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
 use crate::network::{self, FilterProxy, ProxyEndpoint};
-use crate::output::{Body, End, EndStatus, Event, OpenTool, Output, Usage};
+use crate::output::{End, EndStatus, Event, Output, write_end};
 use crate::runtime::{Adapter, Invocation, Launch, codex, pi};
 use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use execute::execute;
 use signal::SharedWriter;
 
-pub use execute::{Exit, Translated, conclude, stderr_tail, translate_line};
+pub use execute::{Exit, conclude, stderr_tail, translate_line};
 pub use signal::Signals;
 
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
@@ -63,8 +62,8 @@ impl Caller {
         }
     }
 
-    fn emit(&self, output: &mut Output, event: &Event, open_tool: OpenTool) {
-        self.with_stdout(|stdout| output.write(stdout, event, open_tool));
+    fn emit(&self, output: &mut Output, event: &Event) {
+        self.with_stdout(|stdout| output.write(stdout, event));
     }
 
     fn with_stdout(&self, write: impl FnOnce(&mut dyn Write)) {
@@ -242,16 +241,12 @@ impl Drop for PrivateDir {
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
     caller.signals.finishing();
-    let end = Event::now(Body::End(End {
-        status: EndStatus::Rejected,
-        exit_code: None,
-        detail: detail.to_string(),
-        duration_ms: elapsed_ms(started),
-        usage: Usage::default(),
-        result: None,
-    }));
-    caller.emit(&mut Output::new(format, SandboxMode::On, ""), &end, &|_| {
-        None
+    caller.with_stdout(|out| {
+        write_end(
+            out,
+            format,
+            End::early(EndStatus::Rejected, detail.to_string(), started),
+        )
     });
     caller.print_error_line(&format!("agentrun: {detail}"));
     EndStatus::Rejected.exit_code()

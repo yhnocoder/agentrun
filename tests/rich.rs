@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
 use agentrun::cli::SandboxMode;
-use agentrun::output::{Aggregator, Rich, TextFormatter};
+use agentrun::output::{Aggregator, OpenTools, Rich, TextFormatter};
 use agentrun::run::{Exit, conclude, translate_line};
 use agentrun::runtime::Adapter;
 use support::env::Env;
@@ -152,9 +152,7 @@ impl Session {
         for event in events {
             self.expected.extend(self.text.lines(event));
             let mut bytes = Vec::new();
-            let aggregator = &self.aggregator;
-            self.rich
-                .event(&mut bytes, event, &|agent| aggregator.open_tool(agent));
+            self.rich.event(&mut bytes, event);
             self.screen.feed(&bytes);
         }
     }
@@ -162,14 +160,13 @@ impl Session {
     fn push(&mut self, record: &str) {
         let events =
             translate_line(record.as_bytes(), &mut self.adapter, &mut self.aggregator).events;
+        self.rich.set_open_tools(self.aggregator.open_tools());
         self.emit(&events);
     }
 
     fn stderr(&mut self, bytes: &[u8]) {
         let mut out = Vec::new();
-        let aggregator = &self.aggregator;
-        self.rich
-            .stderr(&mut out, bytes, &|agent| aggregator.open_tool(agent));
+        self.rich.stderr(&mut out, bytes);
         self.screen.feed(&out);
     }
 
@@ -191,6 +188,7 @@ impl Session {
             timed_out: false,
         };
         let aggregator = std::mem::replace(&mut self.aggregator, Aggregator::new(false));
+        self.rich.set_open_tools(OpenTools::default());
         let (events, _) = conclude(aggregator, &mut self.adapter, &exit, "", self.started);
         self.emit(&events);
         let rows = self.screen.rows();
@@ -218,10 +216,7 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
 
     session.push(r#"{"record":"tool_start","id":"t1","parent":null,"name":"Bash","summary":"Bash: cargo check"}"#);
     let mut refresh = Vec::new();
-    let aggregator = &session.aggregator;
-    session
-        .rich
-        .refresh(&mut refresh, &|agent| aggregator.open_tool(agent));
+    session.rich.refresh(&mut refresh);
     session.screen.feed(&refresh);
     let panel = session.panel();
     assert!(

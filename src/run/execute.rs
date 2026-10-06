@@ -11,11 +11,11 @@ use tempfile::TempDir;
 
 use super::signal::Signals;
 use super::{Caller, Ready, create_raw, elapsed_ms, reject};
-use crate::cli::{Format, Runtime};
+use crate::cli::Runtime;
 use crate::network::{FilterProxy, Policy};
 use crate::output::{
-    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD, Record,
-    Rich, Signal, Start, Usage, terminal_size,
+    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, OpenTools, Output,
+    REFRESH_PERIOD, Signal, Start, Translated,
 };
 use crate::process_tree;
 use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Launch, detail_tail};
@@ -87,21 +87,14 @@ pub(super) fn execute(
         }
     }
     let mut raw = raw.map(|(_, file)| file);
-    let mut output = if invocation.format == Format::Rich && caller.stdout_is_terminal {
-        let color = caller.var("NO_COLOR").is_none_or(|value| value.is_empty());
-        Output::Rich(Box::new(Rich::new(
-            invocation.sandbox.mode,
-            &invocation.sandbox.reason,
-            color,
-            Box::new(terminal_size),
-        )))
-    } else {
-        Output::new(
-            invocation.format,
-            invocation.sandbox.mode,
-            &invocation.sandbox.reason,
-        )
-    };
+    let color = caller.var("NO_COLOR").is_none_or(|value| value.is_empty());
+    let mut output = Output::select(
+        invocation.format,
+        caller.stdout_is_terminal,
+        color,
+        invocation.sandbox.mode,
+        &invocation.sandbox.reason,
+    );
     let rich_stderr = output.is_rich() && caller.stderr_is_terminal;
 
     let (program, program_args) = launch
@@ -127,15 +120,12 @@ pub(super) fn execute(
         Ok(child) => child,
         Err(error) => {
             caller.signals.finishing();
-            let end = Event::now(Body::End(End {
-                status: EndStatus::Failed,
-                exit_code: None,
-                detail: format!("failed to start {program}: {error}"),
-                duration_ms: elapsed_ms(started),
-                usage: Usage::default(),
-                result: None,
-            }));
-            caller.emit(&mut output, &end, &|_| None);
+            let end = Event::now(Body::End(End::early(
+                EndStatus::Failed,
+                format!("failed to start {program}: {error}"),
+                started,
+            )));
+            caller.emit(&mut output, &end);
             finish_tempdir(tempdir, debug);
             return EndStatus::Failed.exit_code();
         }
@@ -165,10 +155,10 @@ pub(super) fn execute(
             .collect(),
         env: invocation.session.set.clone(),
     }));
-    caller.emit(&mut output, &start, &|_| None);
+    caller.emit(&mut output, &start);
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
     for event in aggregator.begin(&invocation.prompt) {
-        caller.emit(&mut output, &event, &|_| None);
+        caller.emit(&mut output, &event);
     }
 
     let mut stdin = child.stdin.take().expect("stdin is piped");
@@ -202,15 +192,14 @@ pub(super) fn execute(
 
     let exit_code = supervise(&caller, &receiver, |input| {
         let Input::Line(content) = input else {
-            let open_tool = |agent: Option<&str>| aggregator.open_tool(agent);
             match input {
                 Input::Network(network) => {
-                    caller.emit(&mut output, &Event::now(Body::Network(network)), &open_tool);
+                    caller.emit(&mut output, &Event::now(Body::Network(network)));
                 }
                 Input::Stderr(bytes) => {
-                    caller.with_stdout(|stdout| output.stderr(stdout, bytes, &open_tool));
+                    caller.with_stdout(|stdout| output.stderr(stdout, bytes));
                 }
-                _ => caller.with_stdout(|stdout| output.refresh(stdout, &open_tool)),
+                _ => caller.with_stdout(|stdout| output.refresh(stdout)),
             }
             return false;
         };
@@ -221,15 +210,17 @@ pub(super) fn execute(
             let _ = file.write_all(&bytes);
         }
         let translated = translate_line(content, adapter.as_mut(), &mut aggregator);
-        let open_tool = |agent: Option<&str>| aggregator.open_tool(agent);
+        if output.is_rich() {
+            output.set_open_tools(aggregator.open_tools());
+        }
         for event in translated.events {
-            caller.emit(&mut output, &event, &open_tool);
+            caller.emit(&mut output, &event);
         }
         if debug {
             for line in translated.debug {
                 let line = format!("[debug] {line}\n");
                 if rich_stderr {
-                    caller.with_stdout(|stdout| output.stderr(stdout, line.as_bytes(), &open_tool));
+                    caller.with_stdout(|stdout| output.stderr(stdout, line.as_bytes()));
                 } else {
                     caller.print_error_line(line.trim_end());
                 }
@@ -247,9 +238,12 @@ pub(super) fn execute(
         signal: caller.signals.first_signal(),
         timed_out: caller.signals.timed_out(),
     };
+    if output.is_rich() {
+        output.set_open_tools(OpenTools::default());
+    }
     let (events, status) = conclude(aggregator, adapter.as_mut(), &exit, &stderr_tail, started);
     for event in &events {
-        caller.emit(&mut output, event, &|_| None);
+        caller.emit(&mut output, event);
     }
     drop(raw);
     finish_tempdir(tempdir, debug);
@@ -350,12 +344,6 @@ fn wait_child(mut child: Child, signals: &Signals, sender: &Sender<Message>) {
     }
 }
 
-pub struct Translated {
-    pub events: Vec<Event>,
-    pub debug: Vec<String>,
-    pub terminate: bool,
-}
-
 pub fn translate_line(
     line: &[u8],
     adapter: &mut dyn Adapter,
@@ -365,23 +353,7 @@ pub fn translate_line(
         Ok(value) => adapter.translate(&value),
         Err(_) => Vec::new(),
     };
-    push_records(records, aggregator)
-}
-
-fn push_records(records: Vec<Record>, aggregator: &mut Aggregator) -> Translated {
-    let mut translated = Translated {
-        events: Vec::new(),
-        debug: Vec::new(),
-        terminate: false,
-    };
-    for record in records {
-        match record {
-            Record::Terminate => translated.terminate = true,
-            Record::Debug(line) => translated.debug.push(line),
-            record => translated.events.extend(aggregator.push(record)),
-        }
-    }
-    translated
+    aggregator.push(records)
 }
 
 fn forward_stderr(
@@ -436,7 +408,7 @@ pub fn conclude(
     stderr_tail: &str,
     started: Instant,
 ) -> (Vec<Event>, EndStatus) {
-    let mut events = push_records(adapter.after_exit(), &mut aggregator).events;
+    let mut events = aggregator.push(adapter.after_exit()).events;
     let (rest, summary) = aggregator.finish();
     events.extend(rest);
     let (status, detail) = match (exit.signal, exit.timed_out) {

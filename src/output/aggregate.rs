@@ -49,9 +49,28 @@ pub enum Record {
     Terminate,
 }
 
+pub struct Translated {
+    pub events: Vec<Event>,
+    pub debug: Vec<String>,
+    pub terminate: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenTools(HashMap<Option<String>, String>);
+
+impl OpenTools {
+    pub fn insert(&mut self, agent: Option<String>, summary: String) {
+        self.0.insert(agent, summary);
+    }
+
+    pub fn get(&self, agent: Option<&str>) -> Option<&str> {
+        self.0.get(&agent.map(str::to_string)).map(String::as_str)
+    }
+}
+
 pub struct Aggregator {
     echoes_prompt: bool,
-    open_tools: Vec<OpenTool>,
+    open_tools: Vec<StartedTool>,
     subagent_parents: HashMap<String, Option<String>>,
     running: Vec<RunningSubagent>,
     started_subagents: u64,
@@ -61,7 +80,7 @@ pub struct Aggregator {
     last_main_text: Option<String>,
 }
 
-struct OpenTool {
+struct StartedTool {
     id: String,
     parent: Option<String>,
     name: String,
@@ -107,105 +126,106 @@ impl Aggregator {
         }
     }
 
-    pub fn push(&mut self, record: Record) -> Vec<Event> {
-        match record {
-            Record::PromptEcho { text } => {
-                if self.echoes_prompt {
-                    vec![prompt_event(&text)]
-                } else {
-                    Vec::new()
+    pub fn push(&mut self, records: Vec<Record>) -> Translated {
+        let mut translated = Translated {
+            events: Vec::new(),
+            debug: Vec::new(),
+            terminate: false,
+        };
+        for record in records {
+            match record {
+                Record::PromptEcho { text } => {
+                    if self.echoes_prompt {
+                        translated.events.push(prompt_event(&text));
+                    }
                 }
-            }
-            Record::ToolStart {
-                id,
-                parent,
-                name,
-                summary,
-            } => {
-                self.open_tools.push(OpenTool {
+                Record::ToolStart {
                     id,
                     parent,
                     name,
                     summary,
-                });
-                Vec::new()
-            }
-            Record::ToolEnd { id, denied } => {
-                match self.open_tools.iter().position(|tool| tool.id == id) {
-                    Some(index) => {
-                        let tool = self.open_tools.remove(index);
-                        vec![self.tool_event(tool, denied)]
-                    }
-                    None => Vec::new(),
-                }
-            }
-            Record::SubagentStart {
-                id,
-                parent,
-                kind,
-                model,
-                description,
-            } => {
-                let parent = self.known_parent(parent);
-                self.started_subagents += 1;
-                self.subagent_parents.insert(id.clone(), parent.clone());
-                self.running.push(RunningSubagent {
-                    id: id.clone(),
-                    started: Instant::now(),
-                });
-                vec![Event::now(Body::SubagentStart(event::SubagentStart {
+                } => self.open_tools.push(StartedTool {
                     id,
                     parent,
-                    number: self.started_subagents,
+                    name,
+                    summary,
+                }),
+                Record::ToolEnd { id, denied } => {
+                    if let Some(index) = self.open_tools.iter().position(|tool| tool.id == id) {
+                        let tool = self.open_tools.remove(index);
+                        translated.events.push(self.tool_event(tool, denied));
+                    }
+                }
+                Record::SubagentStart {
+                    id,
+                    parent,
                     kind,
                     model,
                     description,
-                }))]
-            }
-            Record::SubagentEnd { id, status } => {
-                match self.running.iter().position(|subagent| subagent.id == id) {
-                    Some(index) => {
+                } => {
+                    let parent = self.known_parent(parent);
+                    self.started_subagents += 1;
+                    self.subagent_parents.insert(id.clone(), parent.clone());
+                    self.running.push(RunningSubagent {
+                        id: id.clone(),
+                        started: Instant::now(),
+                    });
+                    translated
+                        .events
+                        .push(Event::now(Body::SubagentStart(event::SubagentStart {
+                            id,
+                            parent,
+                            number: self.started_subagents,
+                            kind,
+                            model,
+                            description,
+                        })));
+                }
+                Record::SubagentEnd { id, status } => {
+                    if let Some(index) = self.running.iter().position(|subagent| subagent.id == id)
+                    {
                         let subagent = self.running.remove(index);
-                        vec![self.subagent_end_event(subagent, status)]
+                        translated
+                            .events
+                            .push(self.subagent_end_event(subagent, status));
                     }
-                    None => Vec::new(),
                 }
-            }
-            Record::Text { parent, text } => {
-                let parent = self.known_parent(parent);
-                if parent.is_none() {
-                    self.last_main_text = Some(text.clone());
+                Record::Text { parent, text } => {
+                    let parent = self.known_parent(parent);
+                    if parent.is_none() {
+                        self.last_main_text = Some(text.clone());
+                    }
+                    translated
+                        .events
+                        .push(Event::now(Body::Text(event::Text { parent, text })));
                 }
-                vec![Event::now(Body::Text(event::Text { parent, text }))]
-            }
-            Record::Usage {
-                parent,
-                model,
-                counts,
-            } => {
-                let parent = self.known_parent(parent);
-                self.usages.push(UsageEntry {
-                    parent: parent.clone(),
-                    model: model.clone(),
-                    counts,
-                });
-                vec![Event::now(Body::Usage(event::UsageReport {
+                Record::Usage {
                     parent,
                     model,
                     counts,
-                    context_tokens: counts.context_tokens(),
-                }))]
+                } => {
+                    let parent = self.known_parent(parent);
+                    self.usages.push(UsageEntry {
+                        parent: parent.clone(),
+                        model: model.clone(),
+                        counts,
+                    });
+                    translated
+                        .events
+                        .push(Event::now(Body::Usage(event::UsageReport {
+                            parent,
+                            model,
+                            counts,
+                            context_tokens: counts.context_tokens(),
+                        })));
+                }
+                Record::RunUsage(usage) => self.run_usage = Some(usage),
+                Record::Result { text } => self.result = Some(text),
+                Record::Debug(line) => translated.debug.push(line),
+                Record::Terminate => translated.terminate = true,
             }
-            Record::RunUsage(usage) => {
-                self.run_usage = Some(usage);
-                Vec::new()
-            }
-            Record::Result { text } => {
-                self.result = Some(text);
-                Vec::new()
-            }
-            Record::Debug(_) | Record::Terminate => Vec::new(),
         }
+        translated
     }
 
     pub fn finish(mut self) -> (Vec<Event>, Summary) {
@@ -228,19 +248,22 @@ impl Aggregator {
         (events, Summary { usage, result })
     }
 
-    pub fn open_tool(&self, agent: Option<&str>) -> Option<String> {
-        self.open_tools
-            .iter()
-            .rev()
-            .find(|tool| self.known_parent(tool.parent.clone()).as_deref() == agent)
-            .map(|tool| truncate_summary(&tool.summary))
+    pub fn open_tools(&self) -> OpenTools {
+        let mut open_tools = OpenTools::default();
+        for tool in &self.open_tools {
+            open_tools.insert(
+                self.known_parent(tool.parent.clone()),
+                truncate_summary(&tool.summary),
+            );
+        }
+        open_tools
     }
 
     fn known_parent(&self, parent: Option<String>) -> Option<String> {
         parent.filter(|id| self.subagent_parents.contains_key(id))
     }
 
-    fn tool_event(&self, tool: OpenTool, denied: bool) -> Event {
+    fn tool_event(&self, tool: StartedTool, denied: bool) -> Event {
         Event::now(Body::Tool(event::Tool {
             id: tool.id,
             parent: self.known_parent(tool.parent),
@@ -305,5 +328,86 @@ mod tests {
         assert_eq!(truncated.chars().count(), SUMMARY_MAX_CHARS);
         assert!(truncated.ends_with('…'));
         assert_eq!(truncate_summary(&"b".repeat(120)), "b".repeat(120));
+    }
+
+    fn tool_start(id: &str, parent: Option<&str>, summary: &str) -> Record {
+        Record::ToolStart {
+            id: id.to_string(),
+            parent: parent.map(str::to_string),
+            name: "Bash".to_string(),
+            summary: summary.to_string(),
+        }
+    }
+
+    fn tool_end(id: &str) -> Record {
+        Record::ToolEnd {
+            id: id.to_string(),
+            denied: false,
+        }
+    }
+
+    #[test]
+    fn open_tools_takes_the_last_open_call_of_each_agent() {
+        let mut aggregator = Aggregator::new(false);
+        assert_eq!(aggregator.open_tools(), OpenTools::default());
+        aggregator.push(vec![
+            Record::SubagentStart {
+                id: "s1".to_string(),
+                parent: None,
+                kind: "Explore".to_string(),
+                model: None,
+                description: "look".to_string(),
+            },
+            tool_start("t1", None, "Bash: first"),
+            tool_start("t2", Some("s1"), "Read: a.rs"),
+            tool_start("t3", None, "Bash: second"),
+            tool_start("t4", Some("unknown"), "Bash: unknown parent"),
+        ]);
+        let open_tools = aggregator.open_tools();
+        assert_eq!(open_tools.get(None), Some("Bash: unknown parent"));
+        assert_eq!(open_tools.get(Some("s1")), Some("Read: a.rs"));
+        assert_eq!(open_tools.get(Some("unknown")), None);
+
+        aggregator.push(vec![tool_end("t4")]);
+        assert_eq!(aggregator.open_tools().get(None), Some("Bash: second"));
+        aggregator.push(vec![tool_end("t3")]);
+        assert_eq!(aggregator.open_tools().get(None), Some("Bash: first"));
+        aggregator.push(vec![tool_end("t2")]);
+        assert_eq!(aggregator.open_tools().get(Some("s1")), None);
+
+        let long = format!("Bash: {}", "x".repeat(200));
+        aggregator.push(vec![tool_start("t5", None, &long)]);
+        let shown = aggregator.open_tools().get(None).unwrap().to_string();
+        let translated = aggregator.push(vec![tool_end("t5")]);
+        let Body::Tool(tool) = &translated.events[0].body else {
+            panic!("{:?}", translated.events);
+        };
+        assert_eq!(shown, tool.summary);
+        assert_eq!(shown.chars().count(), SUMMARY_MAX_CHARS);
+    }
+
+    #[test]
+    fn push_separates_debug_lines_and_terminate_from_events() {
+        let mut aggregator = Aggregator::new(false);
+        let translated = aggregator.push(vec![
+            Record::Debug("init".to_string()),
+            Record::Text {
+                parent: None,
+                text: "hello".to_string(),
+            },
+            Record::Terminate,
+            Record::Debug("more".to_string()),
+        ]);
+        assert_eq!(translated.debug, ["init", "more"]);
+        assert!(translated.terminate);
+        assert_eq!(translated.events.len(), 1);
+        assert!(matches!(&translated.events[0].body, Body::Text(text) if text.text == "hello"));
+
+        let translated = aggregator.push(vec![Record::Text {
+            parent: None,
+            text: "again".to_string(),
+        }]);
+        assert!(translated.debug.is_empty());
+        assert!(!translated.terminate);
     }
 }

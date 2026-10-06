@@ -170,7 +170,8 @@ impl ClaudeCode {
                     .unwrap_or(DEFAULT_SUBAGENT_KIND)
                     .to_string(),
                 model: optional_string(&input["model"]),
-                description: first_line(input["description"].as_str().unwrap_or_default()),
+                description: first_line(input["description"].as_str().unwrap_or_default())
+                    .to_string(),
             });
         }
         if name == HANDBACK_TOOL {
@@ -489,7 +490,9 @@ fn format_uuid_v4(mut bytes: [u8; 16]) -> String {
 
 fn tool_summary(name: &str, input: &Value, cwd: &Path) -> String {
     let value = match name {
-        "Bash" => input["command"].as_str().map(first_line),
+        "Bash" => input["command"]
+            .as_str()
+            .map(|command| first_line(command).to_string()),
         "Read" | "Edit" | "Write" => input["file_path"]
             .as_str()
             .map(|path| display_path(Path::new(path), cwd)),

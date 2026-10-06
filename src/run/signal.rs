@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator;
 
-use crate::cli::{Format, SandboxMode};
-use crate::output::{Body, End, EndStatus, Event, Output, Signal, Usage};
+use crate::cli::Format;
+use crate::output::{End, EndStatus, Signal, write_end};
 use crate::process_tree::{
     self, ForkWatcher, PROC_ROOT, ProcessTable, RECORDS_DESCENDANTS, Recorded, SNAPSHOT_PERIOD,
     wrapped_child,
@@ -387,16 +387,12 @@ impl Preparation {
         }
         process_tree::kill_tree(self.check_pid.as_slice(), &Recorded::default());
         let status = EndStatus::Interrupted(signal);
-        let end = Event::now(Body::End(End {
-            status,
-            exit_code: None,
-            detail: String::new(),
-            duration_ms: self.started.elapsed().as_millis() as u64,
-            usage: Usage::default(),
-            result: None,
-        }));
         if let Ok(mut stdout) = self.stdout.lock() {
-            Output::new(self.format, SandboxMode::On, "").write(&mut *stdout, &end, &|_| None);
+            write_end(
+                &mut *stdout,
+                self.format,
+                End::early(status, String::new(), self.started),
+            );
         }
         if !self.keep_tempdir {
             for tempdir in &self.tempdirs {
