@@ -3,7 +3,7 @@ use std::net::{Shutdown, TcpStream};
 use std::thread;
 
 use super::address::{HTTP_DEFAULT_PORT, Target, authority_text, parse_host_port, target_text};
-use super::proxy::{Client, Route, Server, admit, connect, read_head, relay, write_all};
+use super::proxy::{Client, Decision, Route, Server, admit, connect, read_head, relay, write_all};
 use crate::output::NetworkReason;
 
 const UNRESOLVED: &str = "could not be resolved";
@@ -29,17 +29,21 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
             return;
         };
         let route = match admit(server, &target, true) {
-            Err(reason) => {
+            Decision::Denied(reason) => {
                 respond(&mut client, "403 Forbidden", &denied_body(&target, reason));
                 return;
             }
-            Ok(route) => route,
+            Decision::Unreachable => {
+                respond(
+                    &mut client,
+                    "502 Bad Gateway",
+                    &failed_body(&target, UNRESOLVED),
+                );
+                return;
+            }
+            Decision::Route(route) => route,
         };
-        let connected = match route {
-            None => Err(UNRESOLVED.to_string()),
-            Some(route) => connect(&route, &target, true),
-        };
-        match connected {
+        match connect(&route, &target, true) {
             Err(reason) => {
                 respond(
                     &mut client,
@@ -77,12 +81,12 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
         }
     };
     let route = match admit(server, &target, false) {
-        Err(reason) => {
+        Decision::Denied(reason) => {
             respond(&mut client, "403 Forbidden", &denied_body(&target, reason));
             return;
         }
-        Ok(Some(route)) => route,
-        Ok(None) => {
+        Decision::Route(route) => route,
+        Decision::Unreachable => {
             respond(
                 &mut client,
                 "502 Bad Gateway",

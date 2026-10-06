@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::net::Ipv4Addr;
 
 use super::address::{Target, normalize_host};
-use super::proxy::{Client, Server, admit, connect, relay, write_all};
+use super::proxy::{Client, Decision, Server, admit, connect, relay, write_all};
 
 pub(super) const SOCKS_VERSION: u8 = 0x05;
 const SOCKS_NO_AUTH: u8 = 0x00;
@@ -77,12 +77,12 @@ pub(super) fn handle_socks(mut client: Client, server: &Server) {
         port: u16::from_be_bytes(port),
     };
     let route = match admit(server, &target, true) {
-        Err(_) => {
+        Decision::Denied(_) => {
             let _ = client.write_all(&socks_reply(SOCKS_NOT_ALLOWED));
             return;
         }
-        Ok(Some(route)) => route,
-        Ok(None) => {
+        Decision::Route(route) => route,
+        Decision::Unreachable => {
             let _ = client.write_all(&socks_reply(SOCKS_HOST_UNREACHABLE));
             return;
         }
