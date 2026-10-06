@@ -18,10 +18,9 @@ use crate::output::{
     Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD, Rich,
     Signal, Start, Usage, terminal_size,
 };
-use crate::runtime::{Adapter, Launch, Record};
+use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Launch, Record, detail_tail};
 
-const STDERR_TAIL_CHARS: usize = 500;
-const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;
+const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
@@ -422,12 +421,7 @@ fn forward_stderr(
 }
 
 pub fn stderr_tail(stderr: &str) -> String {
-    tail_chars(stderr.trim_end(), STDERR_TAIL_CHARS)
-}
-
-fn tail_chars(text: &str, count: usize) -> String {
-    let skip = text.chars().count().saturating_sub(count);
-    text.chars().skip(skip).collect()
+    detail_tail(stderr.trim_end())
 }
 
 fn finish_tempdir(tempdir: TempDir, debug: bool) {
@@ -485,8 +479,8 @@ mod tests {
 
     #[test]
     fn tail_keeps_last_characters() {
-        assert_eq!(tail_chars("abcdef", 3), "def");
-        assert_eq!(tail_chars("ab", 3), "ab");
-        assert_eq!(tail_chars("é修复", 2), "修复");
+        let stderr = format!("{}修复 \n\n", "a".repeat(600));
+        assert_eq!(stderr_tail(&stderr), format!("{}修复", "a".repeat(498)));
+        assert_eq!(stderr_tail("short\n"), "short");
     }
 }

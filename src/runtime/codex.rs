@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record, detail_head};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
@@ -67,7 +67,6 @@ const NO_SUBAGENTS_ARGS: [&str; 6] = [
     "multi_agent_v2",
 ];
 const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
-const DETAIL_MAX_CHARS: usize = 500;
 
 #[derive(Default)]
 pub struct Codex {
@@ -258,10 +257,10 @@ impl Adapter for Codex {
             return Some(detail.clone());
         }
         if let Some(message) = &self.turn_failed {
-            return Some(truncate(message));
+            return Some(detail_head(message));
         }
         if let (false, Some(message)) = (self.turn_completed, &self.last_error) {
-            return Some(truncate(message));
+            return Some(detail_head(message));
         }
         if exit_code != Some(0) {
             return Some(String::new());
@@ -384,10 +383,6 @@ fn counts(usage: &Value) -> TokenCounts {
         cache_read_tokens: Some(cached),
         cache_write_tokens: Some(field("cache_write_input_tokens")),
     }
-}
-
-fn truncate(message: &str) -> String {
-    message.chars().take(DETAIL_MAX_CHARS).collect()
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record, detail_head};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};
@@ -50,7 +50,6 @@ const FIXED_ARGS: [&str; 12] = [
 const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
 const FAILED_STOP_REASONS: [&str; 2] = ["error", "aborted"];
 const NO_REPLY_DETAIL: &str = "pi produced no model reply";
-const DETAIL_MAX_CHARS: usize = 500;
 
 pub struct Pi {
     sandbox: SandboxKind,
@@ -262,7 +261,7 @@ impl Adapter for Pi {
         match &self.last_stop {
             Some(stop) if FAILED_STOP_REASONS.contains(&stop.reason.as_str()) => {
                 Some(match &stop.error_message {
-                    Some(message) => message.chars().take(DETAIL_MAX_CHARS).collect(),
+                    Some(message) => detail_head(message),
                     None => format!("stopReason: {}", stop.reason),
                 })
             }
