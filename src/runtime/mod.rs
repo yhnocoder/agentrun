@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::cli::{Format, RunArgs, Runtime};
 use crate::network::{HostRule, ProxyEndpoint};
-use crate::output::Record;
+use crate::output::{Record, SandboxKind};
 use crate::sandbox::Sandbox;
 use crate::session::Session;
 use claudecode::ClaudeCode;
@@ -24,7 +24,7 @@ pub trait Adapter {
     fn echoes_prompt(&self) -> bool;
     fn translate(&mut self, line: &Value) -> Vec<Record>;
     fn after_exit(&mut self) -> Vec<Record>;
-    fn failure(&self, exit_code: Option<i32>, stderr_tail: &str) -> Option<String>;
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure>;
 }
 
 pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
@@ -32,6 +32,22 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    Message(String),
+    Unexplained,
+}
+
+impl Failure {
+    pub fn from_detail(detail: String) -> Failure {
+        if detail.is_empty() {
+            Failure::Unexplained
+        } else {
+            Failure::Message(detail)
+        }
     }
 }
 
@@ -65,6 +81,7 @@ pub struct Launch {
     pub env: Vec<(OsString, OsString)>,
     pub signal_wrapped_child: bool,
     pub service_hosts: Vec<String>,
+    pub wrapped: SandboxKind,
 }
 
 #[cfg(test)]

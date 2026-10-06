@@ -4,7 +4,7 @@ use std::path::Path;
 use agentrun::cli::Runtime;
 use agentrun::network::proxy_environment;
 use agentrun::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
-use agentrun::runtime::{Adapter, Invocation, Launch};
+use agentrun::runtime::{Adapter, Failure, Invocation, Launch};
 use agentrun::sandbox;
 use serde_json::Value;
 
@@ -47,6 +47,7 @@ impl Adapter for FakeAdapter {
             env: port.as_deref().map(proxy_environment).unwrap_or_default(),
             signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts: Vec::new(),
+            wrapped: wrapped.kind,
         })
     }
 
@@ -125,10 +126,11 @@ impl Adapter for FakeAdapter {
         Vec::new()
     }
 
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
-        self.failure
-            .clone()
-            .or_else(|| (exit_code != Some(0)).then(String::new))
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
+        match &self.failure {
+            Some(detail) => Some(Failure::from_detail(detail.clone())),
+            None => (exit_code != Some(0)).then_some(Failure::Unexplained),
+        }
     }
 }
 

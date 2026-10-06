@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, detail_head};
+use super::{Adapter, Failure, Invocation, Launch, detail_head};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
 use crate::output::{Record, SandboxKind, TokenCounts};
-use crate::sandbox::{self, PiState, wrapper_failure};
+use crate::sandbox::{self, PiState};
 use crate::session::Session;
 
 const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
@@ -52,7 +52,6 @@ const FAILED_STOP_REASONS: [&str; 2] = ["error", "aborted"];
 const NO_REPLY_DETAIL: &str = "pi produced no model reply";
 
 pub struct Pi {
-    sandbox: SandboxKind,
     model_option: Option<String>,
     expected: Option<Model>,
     model_checked: bool,
@@ -81,7 +80,6 @@ impl Default for Pi {
 impl Pi {
     pub fn new() -> Pi {
         Pi {
-            sandbox: SandboxKind::None,
             model_option: None,
             expected: None,
             model_checked: false,
@@ -203,13 +201,13 @@ impl Adapter for Pi {
             invocation.args.dry_run,
         )?;
         argv = wrapped.argv(&argv);
-        self.sandbox = wrapped.kind;
         Ok(Launch {
             argv,
             stdin: Vec::new(),
             env,
             signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts,
+            wrapped: wrapped.kind,
         })
     }
 
@@ -243,25 +241,22 @@ impl Adapter for Pi {
         Vec::new()
     }
 
-    fn failure(&self, exit_code: Option<i32>, stderr_tail: &str) -> Option<String> {
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
         if let Some(detail) = &self.mismatch {
-            return Some(detail.clone());
-        }
-        if let Some(detail) = wrapper_failure(self.sandbox, exit_code, stderr_tail) {
-            return Some(detail);
+            return Some(Failure::Message(detail.clone()));
         }
         if exit_code != Some(0) {
-            return Some(String::new());
+            return Some(Failure::Unexplained);
         }
         match &self.last_stop {
             Some(stop) if FAILED_STOP_REASONS.contains(&stop.reason.as_str()) => {
                 Some(match &stop.error_message {
-                    Some(message) => detail_head(message),
-                    None => format!("stopReason: {}", stop.reason),
+                    Some(message) => Failure::from_detail(detail_head(message)),
+                    None => Failure::Message(format!("stopReason: {}", stop.reason)),
                 })
             }
             Some(_) => None,
-            None => Some(NO_REPLY_DETAIL.to_string()),
+            None => Some(Failure::Message(NO_REPLY_DETAIL.to_string())),
         }
     }
 }
@@ -1060,17 +1055,14 @@ mod tests {
     }
 
     #[test]
-    fn seatbelt_failure_uses_the_sandbox_exec_prefix() {
+    fn launch_records_how_agentrun_wraps_pi() {
         let setup = Setup::new();
-        let (adapter, _) = seatbelt(&setup, Some(1), &["--model", "deepseek/deepseek-flash"]);
-        assert_eq!(
-            adapter.failure(Some(65), "sandbox-exec: syntax error\n"),
-            Some("sandbox failed to start: syntax error".to_string())
-        );
-        assert_eq!(
-            adapter.failure(Some(1), "bwrap: not on macOS\n"),
-            Some(String::new())
-        );
+        let (_, launch) = seatbelt(&setup, Some(1), &["--model", "deepseek/deepseek-flash"]);
+        assert_eq!(launch.wrapped, SandboxKind::Seatbelt);
+        let launch = self::launch(&setup, &[], true, &[]);
+        assert_eq!(launch.wrapped, SandboxKind::Bubblewrap);
+        let launch = self::launch(&setup, &[], false, &[]);
+        assert_eq!(launch.wrapped, SandboxKind::None);
     }
 
     #[test]
@@ -1207,8 +1199,8 @@ mod tests {
             if matches {
                 assert_eq!(records, vec![], "{option} {provider}/{model}");
                 assert_eq!(
-                    adapter.failure(Some(0), ""),
-                    Some(NO_REPLY_DETAIL.to_string())
+                    adapter.failure(Some(0)),
+                    Some(Failure::Message(NO_REPLY_DETAIL.to_string()))
                 );
             } else {
                 assert_eq!(
@@ -1217,17 +1209,17 @@ mod tests {
                     "{option} {provider}/{model}"
                 );
                 assert_eq!(
-                    adapter.failure(None, ""),
-                    Some(format!(
+                    adapter.failure(None),
+                    Some(Failure::Message(format!(
                         "pi uses {provider}/{model}, which does not match --model {option}"
-                    ))
+                    )))
                 );
             }
             assert_eq!(adapter.translate(&start("other", "model")), vec![]);
         }
         let mut unchecked = adapter_with_model(&setup, None);
         assert_eq!(unchecked.translate(&start("other", "model")), vec![]);
-        assert_eq!(unchecked.failure(None, ""), Some(String::new()));
+        assert_eq!(unchecked.failure(None), Some(Failure::Unexplained));
         let mut system_first = adapter_with_model(&setup, Some("deepseek/deepseek-flash"));
         let system = json!({"type": "message_start", "message": {"role": "system", "content": ""}});
         assert_eq!(system_first.translate(&system), vec![]);
@@ -1380,61 +1372,68 @@ mod tests {
     #[test]
     fn failure_cases_in_order() {
         let setup = Setup::new();
-        let bwrap_line = "bwrap: Can't mkdir /x: Permission denied";
-        let mut sandboxed = Pi::new();
-        sandboxed
+        let mut checked = Pi::new();
+        checked
             .launch(
                 Path::new("/opt/bin/pi"),
                 &setup.invocation(&[], true, &["--model", "deepseek/deepseek-flash"]),
             )
             .unwrap();
         assert_eq!(
-            sandboxed.failure(Some(1), bwrap_line),
-            Some("sandbox failed to start: Can't mkdir /x: Permission denied".to_string())
+            checked.failure(Some(0)),
+            Some(Failure::Message(NO_REPLY_DETAIL.to_string()))
         );
+        assert_eq!(checked.failure(Some(1)), Some(Failure::Unexplained));
         assert_eq!(
-            sandboxed.failure(Some(0), bwrap_line),
-            Some(NO_REPLY_DETAIL.to_string())
-        );
-        assert_eq!(
-            sandboxed.translate(&start("openai", "gpt")),
+            checked.translate(&start("openai", "gpt")),
             vec![Record::Terminate]
         );
         assert_eq!(
-            sandboxed.failure(Some(1), bwrap_line),
-            Some(
+            checked.failure(Some(1)),
+            Some(Failure::Message(
                 "pi uses openai/gpt, which does not match --model deepseek/deepseek-flash"
                     .to_string()
-            )
+            ))
         );
 
         let mut open = Pi::new();
-        assert_eq!(open.failure(Some(1), bwrap_line), Some(String::new()));
-        assert_eq!(open.failure(None, ""), Some(String::new()));
-        assert_eq!(open.failure(Some(0), ""), Some(NO_REPLY_DETAIL.to_string()));
+        assert_eq!(open.failure(Some(1)), Some(Failure::Unexplained));
+        assert_eq!(open.failure(None), Some(Failure::Unexplained));
+        assert_eq!(
+            open.failure(Some(0)),
+            Some(Failure::Message(NO_REPLY_DETAIL.to_string()))
+        );
         open.translate(&assistant_end(json!([]), "error", Some("401: bad key")));
-        assert_eq!(open.failure(Some(0), ""), Some("401: bad key".to_string()));
-        assert_eq!(open.failure(Some(1), ""), Some(String::new()));
+        assert_eq!(
+            open.failure(Some(0)),
+            Some(Failure::Message("401: bad key".to_string()))
+        );
+        assert_eq!(open.failure(Some(1)), Some(Failure::Unexplained));
         open.translate(&assistant_end(json!([]), "aborted", None));
         assert_eq!(
-            open.failure(Some(0), ""),
-            Some("stopReason: aborted".to_string())
+            open.failure(Some(0)),
+            Some(Failure::Message("stopReason: aborted".to_string()))
         );
         let long = "é".repeat(700);
         open.translate(&assistant_end(json!([]), "error", Some(&long)));
-        assert_eq!(open.failure(Some(0), ""), Some("é".repeat(500)));
+        assert_eq!(
+            open.failure(Some(0)),
+            Some(Failure::Message("é".repeat(500)))
+        );
+        open.translate(&assistant_end(json!([]), "error", Some("")));
+        assert_eq!(open.failure(Some(0)), Some(Failure::Unexplained));
         open.translate(&assistant_end(json!([]), "length", None));
-        assert_eq!(open.failure(Some(0), ""), None);
+        assert_eq!(open.failure(Some(0)), None);
         open.translate(&assistant_end(
             json!([{"type": "text", "text": "ok"}]),
             "stop",
             None,
         ));
-        assert_eq!(open.failure(Some(0), ""), None);
+        assert_eq!(open.failure(Some(0)), None);
         open.translate(&assistant_end(json!([]), "error", None));
         assert_eq!(
-            open.failure(Some(0), ""),
-            Some("stopReason: error".to_string())
+            open.failure(Some(0)),
+            Some(Failure::Message("stopReason: error".to_string()))
         );
     }
 }

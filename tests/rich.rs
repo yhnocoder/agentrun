@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
 use agentrun::cli::SandboxMode;
-use agentrun::output::{Aggregator, OpenTools, Rich, TextFormatter};
+use agentrun::output::{Aggregator, OpenTools, Rich, SandboxKind, TextFormatter};
 use agentrun::run::{Exit, conclude, translate_line};
 use agentrun::runtime::Adapter;
 use support::env::Env;
@@ -189,7 +189,14 @@ impl Session {
         };
         let aggregator = std::mem::replace(&mut self.aggregator, Aggregator::new(false));
         self.rich.set_open_tools(OpenTools::default());
-        let (events, _) = conclude(aggregator, &mut self.adapter, &exit, "", self.started);
+        let (events, _) = conclude(
+            aggregator,
+            &mut self.adapter,
+            SandboxKind::None,
+            &exit,
+            "",
+            self.started,
+        );
         self.emit(&events);
         let rows = self.screen.rows();
         assert_eq!(rows, self.expected, "no panel after end");

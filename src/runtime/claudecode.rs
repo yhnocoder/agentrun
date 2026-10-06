@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch};
+use super::{Adapter, Failure, Invocation, Launch};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
-use crate::output::{Record, SubagentStatus, TokenCounts, Usage};
+use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
 
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
@@ -363,6 +363,7 @@ impl Adapter for ClaudeCode {
             env,
             signal_wrapped_child: false,
             service_hosts: Vec::new(),
+            wrapped: SandboxKind::None,
         })
     }
 
@@ -406,13 +407,13 @@ impl Adapter for ClaudeCode {
         records
     }
 
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
         match &self.last_result {
-            Some(result) if result["is_error"] == Value::Bool(true) => {
-                Some(result["result"].as_str().unwrap_or_default().to_string())
-            }
-            _ if exit_code != Some(0) => Some(String::new()),
-            None => Some(NO_RESULT_DETAIL.to_string()),
+            Some(result) if result["is_error"] == Value::Bool(true) => Some(Failure::from_detail(
+                result["result"].as_str().unwrap_or_default().to_string(),
+            )),
+            _ if exit_code != Some(0) => Some(Failure::Unexplained),
+            None => Some(Failure::Message(NO_RESULT_DETAIL.to_string())),
             Some(_) => None,
         }
     }
@@ -1113,18 +1114,26 @@ mod tests {
     fn failure_cases_in_order() {
         let mut adapter = ClaudeCode::new();
         assert_eq!(
-            adapter.failure(Some(0), ""),
-            Some(NO_RESULT_DETAIL.to_string())
+            adapter.failure(Some(0)),
+            Some(Failure::Message(NO_RESULT_DETAIL.to_string()))
         );
-        assert_eq!(adapter.failure(Some(1), "err"), Some(String::new()));
-        assert_eq!(adapter.failure(None, "err"), Some(String::new()));
+        assert_eq!(adapter.failure(Some(1)), Some(Failure::Unexplained));
+        assert_eq!(adapter.failure(None), Some(Failure::Unexplained));
         adapter.translate(&json!({"type": "result", "is_error": false, "result": "ok"}));
-        assert_eq!(adapter.failure(Some(0), ""), None);
-        assert_eq!(adapter.failure(Some(2), ""), Some(String::new()));
+        assert_eq!(adapter.failure(Some(0)), None);
+        assert_eq!(adapter.failure(Some(2)), Some(Failure::Unexplained));
         adapter.translate(&json!({"type": "result", "is_error": true, "result": "bad model"}));
-        assert_eq!(adapter.failure(Some(0), ""), Some("bad model".to_string()));
-        assert_eq!(adapter.failure(Some(1), "x"), Some("bad model".to_string()));
+        assert_eq!(
+            adapter.failure(Some(0)),
+            Some(Failure::Message("bad model".to_string()))
+        );
+        assert_eq!(
+            adapter.failure(Some(1)),
+            Some(Failure::Message("bad model".to_string()))
+        );
         adapter.translate(&json!({"type": "result", "is_error": true}));
-        assert_eq!(adapter.failure(Some(0), ""), Some(String::new()));
+        assert_eq!(adapter.failure(Some(0)), Some(Failure::Unexplained));
+        adapter.translate(&json!({"type": "result", "is_error": true, "result": ""}));
+        assert_eq!(adapter.failure(Some(0)), Some(Failure::Unexplained));
     }
 }

@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, detail_head};
+use super::{Adapter, Failure, Invocation, Launch, detail_head};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
-use crate::output::{Record, TokenCounts};
+use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
@@ -220,6 +220,7 @@ impl Adapter for Codex {
             env,
             signal_wrapped_child: false,
             service_hosts,
+            wrapped: SandboxKind::None,
         })
     }
 
@@ -254,20 +255,20 @@ impl Adapter for Codex {
         Vec::new()
     }
 
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
         if let Some(detail) = &self.sandbox_failure {
-            return Some(detail.clone());
+            return Some(Failure::Message(detail.clone()));
         }
         if let Some(message) = &self.turn_failed {
-            return Some(detail_head(message));
+            return Some(Failure::from_detail(detail_head(message)));
         }
         if let (false, Some(message)) = (self.turn_completed, &self.last_error) {
-            return Some(detail_head(message));
+            return Some(Failure::from_detail(detail_head(message)));
         }
         if exit_code != Some(0) {
-            return Some(String::new());
+            return Some(Failure::Unexplained);
         }
-        (!self.turn_completed).then(|| NO_TURN_DETAIL.to_string())
+        (!self.turn_completed).then(|| Failure::Message(NO_TURN_DETAIL.to_string()))
     }
 }
 
@@ -844,23 +845,36 @@ mod tests {
             &mut codex,
             json!({"type":"turn.failed","error":{"message":long.clone()}}),
         );
-        assert_eq!(codex.failure(Some(0), ""), Some("e".repeat(500)));
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message("e".repeat(500)))
+        );
 
         let mut codex = Codex::new();
         translate(&mut codex, json!({"type":"error","message":"first"}));
         translate(&mut codex, json!({"type":"error","message":long}));
-        assert_eq!(codex.failure(Some(0), ""), Some("e".repeat(500)));
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message("e".repeat(500)))
+        );
 
         let mut codex = Codex::new();
         translate(&mut codex, json!({"type":"error","message":"retry"}));
         translate(&mut codex, json!({"type":"turn.completed","usage":{}}));
-        assert_eq!(codex.failure(Some(0), ""), None);
-        assert_eq!(codex.failure(Some(1), "stderr"), Some(String::new()));
+        assert_eq!(codex.failure(Some(0)), None);
+        assert_eq!(codex.failure(Some(1)), Some(Failure::Unexplained));
 
         let codex = Codex::new();
-        assert_eq!(codex.failure(Some(2), "usage"), Some(String::new()));
-        assert_eq!(codex.failure(Some(0), ""), Some(NO_TURN_DETAIL.to_string()));
-        assert_eq!(codex.failure(None, ""), Some(String::new()));
+        assert_eq!(codex.failure(Some(2)), Some(Failure::Unexplained));
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message(NO_TURN_DETAIL.to_string()))
+        );
+        assert_eq!(codex.failure(None), Some(Failure::Unexplained));
+
+        let mut codex = Codex::new();
+        translate(&mut codex, json!({"type":"turn.failed","error":{}}));
+        assert_eq!(codex.failure(Some(0)), Some(Failure::Unexplained));
     }
 
     fn bwrap_output(id: &str, output: &str) -> Value {
@@ -890,15 +904,17 @@ mod tests {
             json!({"type":"turn.failed","error":{"message":"later"}}),
         );
         assert_eq!(
-            codex.failure(Some(0), ""),
-            Some("sandbox failed to start: setting up uid map: Permission denied".to_string())
+            codex.failure(Some(0)),
+            Some(Failure::Message(
+                "sandbox failed to start: setting up uid map: Permission denied".to_string()
+            ))
         );
 
         let mut codex = Codex::new();
         codex.sandboxed = true;
         translate(&mut codex, bwrap_output("item_1", "bwrap:no space"));
         translate(&mut codex, json!({"type":"turn.completed","usage":{}}));
-        assert_eq!(codex.failure(Some(0), ""), None);
+        assert_eq!(codex.failure(Some(0)), None);
 
         let mut codex = Codex::new();
         translate(
@@ -906,7 +922,7 @@ mod tests {
             bwrap_output("item_1", "bwrap: setting up uid map: Permission denied"),
         );
         translate(&mut codex, json!({"type":"turn.completed","usage":{}}));
-        assert_eq!(codex.failure(Some(0), ""), None);
+        assert_eq!(codex.failure(Some(0)), None);
     }
 
     #[test]

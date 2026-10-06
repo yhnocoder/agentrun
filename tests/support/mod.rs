@@ -9,7 +9,7 @@ use std::process::Output;
 use std::time::Instant;
 
 use agentrun::cli::{Cli, Format, Parsed, Runtime, SandboxMode};
-use agentrun::output::Aggregator;
+use agentrun::output::{Aggregator, SandboxKind};
 use agentrun::run::{Exit, conclude, stderr_tail, translate_line};
 use agentrun::runtime::{Adapter, Invocation};
 use agentrun::sandbox::{Sandbox, Wrapper};
@@ -78,12 +78,12 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
         ),
     );
     let tempdir = tempfile::tempdir().expect("replay tempdir");
-    let (exit, stderr) = match &meta {
+    let (exit, stderr, wrapped) = match &meta {
         Some(meta) => {
             let runtime = adapter.runtime();
             let mut invocation = invocation(runtime, &meta.cwd, prompt, true);
             invocation.tempdir = tempdir.path().to_path_buf();
-            adapter
+            let launch = adapter
                 .launch(Path::new(runtime.executable()), &invocation)
                 .unwrap();
             let exit = Exit {
@@ -91,7 +91,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
                 signal: None,
                 timed_out: false,
             };
-            (exit, stderr_tail(&meta.stderr))
+            (exit, stderr_tail(&meta.stderr), launch.wrapped)
         }
         None => {
             let exit = Exit {
@@ -99,7 +99,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
                 signal: None,
                 timed_out: false,
             };
-            (exit, String::new())
+            (exit, String::new(), SandboxKind::None)
         }
     };
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
@@ -107,7 +107,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
     for line in content.split(|byte| *byte == b'\n') {
         events.extend(translate_line(line, adapter, &mut aggregator).events);
     }
-    let (rest, _) = conclude(aggregator, adapter, &exit, &stderr, started);
+    let (rest, _) = conclude(aggregator, adapter, wrapped, &exit, &stderr, started);
     events.extend(rest);
     events
         .iter()

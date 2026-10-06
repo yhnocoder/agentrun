@@ -15,10 +15,11 @@ use crate::cli::Runtime;
 use crate::network::{FilterProxy, Policy};
 use crate::output::{
     Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, OpenTools, Output,
-    REFRESH_PERIOD, Signal, Start, Translated,
+    REFRESH_PERIOD, SandboxKind, Signal, Start, Translated,
 };
 use crate::process_tree;
-use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Launch, detail_tail};
+use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Failure, Launch, detail_tail};
+use crate::sandbox::wrapper_failure;
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
@@ -241,7 +242,14 @@ pub(super) fn execute(
     if output.is_rich() {
         output.set_open_tools(OpenTools::default());
     }
-    let (events, status) = conclude(aggregator, adapter.as_mut(), &exit, &stderr_tail, started);
+    let (events, status) = conclude(
+        aggregator,
+        adapter.as_mut(),
+        launch.wrapped,
+        &exit,
+        &stderr_tail,
+        started,
+    );
     for event in &events {
         caller.emit(&mut output, event);
     }
@@ -404,6 +412,7 @@ fn finish_tempdir(tempdir: TempDir, debug: bool) {
 pub fn conclude(
     mut aggregator: Aggregator,
     adapter: &mut dyn Adapter,
+    wrapped: SandboxKind,
     exit: &Exit,
     stderr_tail: &str,
     started: Instant,
@@ -414,12 +423,14 @@ pub fn conclude(
     let (status, detail) = match (exit.signal, exit.timed_out) {
         (Some(signal), _) => (EndStatus::Interrupted(signal), String::new()),
         (None, true) => (EndStatus::Timeout, String::new()),
-        (None, false) => match adapter.failure(exit.code, stderr_tail) {
-            Some(detail) => (
-                EndStatus::Failed,
-                failure_detail(detail, stderr_tail, adapter.runtime()),
-            ),
+        (None, false) => match adapter.failure(exit.code) {
             None => (EndStatus::Finished, String::new()),
+            Some(Failure::Message(detail)) => (EndStatus::Failed, detail),
+            Some(Failure::Unexplained) => (
+                EndStatus::Failed,
+                wrapper_failure(wrapped, exit.code, stderr_tail)
+                    .unwrap_or_else(|| unexplained_detail(stderr_tail, adapter.runtime())),
+            ),
         },
     };
     events.push(Event::now(Body::End(End {
@@ -433,10 +444,7 @@ pub fn conclude(
     (events, status)
 }
 
-fn failure_detail(detail: String, stderr_tail: &str, runtime: Runtime) -> String {
-    if !detail.is_empty() {
-        return detail;
-    }
+fn unexplained_detail(stderr_tail: &str, runtime: Runtime) -> String {
     let stderr_tail = stderr_tail.trim();
     if !stderr_tail.is_empty() {
         return stderr_tail.to_string();
@@ -446,7 +454,108 @@ fn failure_detail(detail: String, stderr_tail: &str, runtime: Runtime) -> String
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+    use crate::output::Record;
+    use crate::runtime::Invocation;
+
+    struct Reported(Option<Failure>);
+
+    impl Adapter for Reported {
+        fn runtime(&self) -> Runtime {
+            Runtime::Pi
+        }
+
+        fn launch(&mut self, _: &Path, _: &Invocation) -> Result<Launch, String> {
+            unreachable!("conclude does not launch")
+        }
+
+        fn echoes_prompt(&self) -> bool {
+            false
+        }
+
+        fn translate(&mut self, _: &Value) -> Vec<Record> {
+            Vec::new()
+        }
+
+        fn after_exit(&mut self) -> Vec<Record> {
+            Vec::new()
+        }
+
+        fn failure(&self, _: Option<i32>) -> Option<Failure> {
+            self.0.clone()
+        }
+    }
+
+    fn detail(failure: Option<Failure>, wrapped: SandboxKind, code: i32, stderr: &str) -> String {
+        let exit = Exit {
+            code: Some(code),
+            signal: None,
+            timed_out: false,
+        };
+        let (events, _) = conclude(
+            Aggregator::new(false),
+            &mut Reported(failure),
+            wrapped,
+            &exit,
+            &stderr_tail(stderr),
+            Instant::now(),
+        );
+        match &events.last().unwrap().body {
+            Body::End(end) => end.detail.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn unexplained_failure_checks_the_wrapper_before_the_stderr_tail() {
+        let bwrap = "starting\nbwrap: Can't mkdir /x: Permission denied\n";
+        let unexplained = || Some(Failure::Unexplained);
+        assert_eq!(
+            detail(unexplained(), SandboxKind::Bubblewrap, 1, bwrap),
+            "sandbox failed to start: Can't mkdir /x: Permission denied"
+        );
+        assert_eq!(
+            detail(
+                unexplained(),
+                SandboxKind::Seatbelt,
+                65,
+                "sandbox-exec: syntax error\n"
+            ),
+            "sandbox failed to start: syntax error"
+        );
+        assert_eq!(
+            detail(unexplained(), SandboxKind::Seatbelt, 1, "bwrap: x\n"),
+            "bwrap: x"
+        );
+        assert_eq!(
+            detail(unexplained(), SandboxKind::None, 1, bwrap),
+            "starting\nbwrap: Can't mkdir /x: Permission denied"
+        );
+        assert_eq!(
+            detail(unexplained(), SandboxKind::Bubblewrap, 0, bwrap),
+            "starting\nbwrap: Can't mkdir /x: Permission denied"
+        );
+        assert_eq!(
+            detail(unexplained(), SandboxKind::Bubblewrap, 1, ""),
+            "pi failed without an error message"
+        );
+    }
+
+    #[test]
+    fn failure_message_comes_before_the_wrapper() {
+        assert_eq!(
+            detail(
+                Some(Failure::Message("pi uses openai/gpt".to_string())),
+                SandboxKind::Bubblewrap,
+                1,
+                "bwrap: Can't mkdir /x: Permission denied\n"
+            ),
+            "pi uses openai/gpt"
+        );
+        assert_eq!(detail(None, SandboxKind::Bubblewrap, 0, ""), "");
+    }
 
     #[test]
     fn tail_keeps_last_characters() {
