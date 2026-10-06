@@ -88,7 +88,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 <p>样本来源：<code>scripts/probe/probe.sh</code> 在 Cloud Managed 容器、docker 与 macOS 上直接运行三个运行时，每个场景一个目录，记录原始输出、退出码与标准错误；<code>meta.json</code> 里 <code>/tmp/agentrun-probe-&lt;随机&gt;/&lt;场景&gt;-&lt;运行时&gt;</code> 形式的 <code>cwd</code> 就是这些目录。<code>events.jsonl</code> 是写适配器时由当时的适配器生成、逐条核对后保存的。样本记录时的运行时版本见<a href="run.html">运行</a>页的「运行时版本」。</p>
 <p>更新样本的步骤：</p>
 <ol>
-  <li>在装有该运行时的环境里运行 <code>scripts/probe/probe.sh --runtimes &lt;运行时&gt; --only &lt;场景&gt;</code>，或者直接用 <code>agentrun &lt;运行时&gt; --raw &lt;文件&gt; --format jsonl</code> 运行一次，<code>--raw</code> 文件就是新的 <code>raw.jsonl</code>。</li>
+  <li>在装有该运行时的环境里录制原始输出。claude-code 与 codex 运行 <code>scripts/probe/probe.sh --runtimes &lt;运行时&gt; --only &lt;场景&gt;</code>，或者直接用 <code>agentrun &lt;运行时&gt; --raw &lt;文件&gt; --format jsonl</code> 运行一次，<code>--raw</code> 文件就是新的 <code>raw.jsonl</code>。pi 只用 <code>agentrun pi --raw &lt;文件&gt; --format jsonl</code> 录制，因为 probe 为 pi 另建状态目录并只写默认服务商与默认模型，agentrun 直接使用用户的状态目录（见<a href="session.html#pi-state">pi 使用用户的状态目录</a>），用 probe 录制的样本与 agentrun 实际运行的环境不同。</li>
   <li>把工作目录、退出码与标准错误写进 <code>meta.json</code>。</li>
   <li>运行 <code>cargo test --test &lt;运行时&gt; replay_&lt;场景&gt;</code>，失败输出里的实际事件与期望事件逐条比较，确认差异来自运行时的变化而不是适配器的错误，再把实际事件写进 <code>events.jsonl</code>。</li>
 </ol>

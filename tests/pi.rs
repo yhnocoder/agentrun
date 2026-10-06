@@ -370,7 +370,7 @@ fn dry_run_creates_no_state_dir_and_lists_no_state_variable() {
 
 const CURL_PI: &str = r#"#!/bin/sh
 port=$(cat "$PWD/port")
-code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || echo failed)
+code=$(curl -sS --retry-connrefused --retry 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || echo failed)
 printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"code=%s proxy=%s https=%s all=%s noproxy=%s/%s"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}\n' \
   "$code" "$http_proxy" "$HTTPS_PROXY" "$ALL_PROXY" "${NO_PROXY-unset}" "${no_proxy-unset}"
 "#;

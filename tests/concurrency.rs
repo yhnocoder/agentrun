@@ -352,7 +352,7 @@ fn each_run_reports_only_its_own_network_and_cannot_reach_another_proxy() {
     let env = Env::new();
     env.install(
         &["claude"],
-        "printf '%s' \"$http_proxy\" > \"$PWD/proxy.txt\"\ncurl -s -m 5 -o /dev/null -w '%{http_code}' \"http://127.0.0.1:$TARGET/\" > \"$PWD/own.txt\"\nwait_for \"$PWD/peer.txt\"\ncurl -s -m 5 -o /dev/null -w '%{http_code}' -x \"$(cat \"$PWD/peer.txt\")\" \"http://127.0.0.1:$TARGET/\" > \"$PWD/cross.txt\"\nexit 0\n",
+        "printf '%s' \"$http_proxy\" > \"$PWD/proxy.txt\"\ncurl -s -m 5 --retry-connrefused --retry 5 -o /dev/null -w '%{http_code}' \"http://127.0.0.1:$TARGET/\" > \"$PWD/own.txt\"\nwait_for \"$PWD/peer.txt\"\ncurl -s -m 5 -o /dev/null -w '%{http_code}' -x \"$(cat \"$PWD/peer.txt\")\" \"http://127.0.0.1:$TARGET/\" > \"$PWD/cross.txt\"\nexit 0\n",
     );
     let servers = [WebServer::start(), WebServer::start()];
     let works = [env.work(0), env.work(1)];

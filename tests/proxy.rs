@@ -100,6 +100,37 @@ fn read_all(stream: &mut impl Read) -> String {
     text
 }
 
+fn body_of(response: &str) -> &str {
+    response.split_once("\r\n\r\n").map_or("", |(_, body)| body)
+}
+
+fn start_upstream_answering(answer: &'static [u8]) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            read_head(&mut stream);
+            let _ = stream.write_all(answer);
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    });
+    port
+}
+
+fn upstream_at(address: ProxyAddress) -> Upstream {
+    Upstream {
+        secure: Some(address.clone()),
+        plain: Some(address),
+        no_proxy: Vec::new(),
+    }
+}
+
 fn closed_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -254,6 +285,10 @@ fn connect_to_a_closed_port_gets_502() {
         response.starts_with("HTTP/1.1 502 Bad Gateway\r\n"),
         "{response}"
     );
+    assert!(
+        body_of(&response).starts_with(&format!("agentrun: 127.0.0.1:{port} connection failed (")),
+        "{response}"
+    );
     assert_eq!(running.events(), vec![event("127.0.0.1", port, None)]);
 }
 
@@ -326,6 +361,10 @@ fn service_hosts_skip_the_private_check_and_other_hosts_stay_denied_in_none_mode
     assert!(response.starts_with("HTTP/1.1 403"), "{response}");
     let response = running.http(&connect_request("localhost:443"));
     assert!(response.starts_with("HTTP/1.1 502"), "{response}");
+    assert!(
+        body_of(&response).starts_with("agentrun: localhost:443 connection failed ("),
+        "{response}"
+    );
     assert_eq!(
         running.events(),
         vec![
@@ -448,9 +487,105 @@ fn unresolvable_hosts_go_to_the_upstream_or_fail_with_502() {
     let response = direct.http(&connect_request("nonexistent.invalid:443"));
     assert!(response.starts_with("HTTP/1.1 502"), "{response}");
     assert_eq!(
-        direct.events(),
-        vec![event("nonexistent.invalid", 443, None)]
+        body_of(&response),
+        "agentrun: nonexistent.invalid:443 could not be resolved\n"
     );
+    let response = direct.http("GET http://nonexistent.invalid/ HTTP/1.1\r\n\r\n");
+    assert!(response.starts_with("HTTP/1.1 502"), "{response}");
+    assert_eq!(
+        body_of(&response),
+        "agentrun: nonexistent.invalid:80 could not be resolved\n"
+    );
+    assert_eq!(
+        direct.events(),
+        vec![
+            event("nonexistent.invalid", 443, None),
+            event("nonexistent.invalid", 80, None),
+        ]
+    );
+}
+
+#[test]
+fn upstream_refusing_connect_gets_502_with_its_status() {
+    let port = start_upstream_answering(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+    let running = Running::start(
+        custom(vec![rule("example.com", None)]),
+        upstream_at(ProxyAddress {
+            host: "127.0.0.1".to_string(),
+            port,
+            authorization: None,
+        }),
+    );
+    let response = running.http(&connect_request("example.com:443"));
+    assert!(
+        response.starts_with("HTTP/1.1 502 Bad Gateway\r\n"),
+        "{response}"
+    );
+    assert_eq!(
+        body_of(&response),
+        "agentrun: example.com:443 upstream proxy answered 403\n"
+    );
+}
+
+#[test]
+fn upstream_closing_without_an_answer_gets_502() {
+    let port = start_upstream_answering(b"");
+    let running = Running::start(
+        custom(vec![rule("example.com", None)]),
+        upstream_at(ProxyAddress {
+            host: "127.0.0.1".to_string(),
+            port,
+            authorization: None,
+        }),
+    );
+    let response = running.http(&connect_request("example.com:443"));
+    assert_eq!(
+        body_of(&response),
+        "agentrun: example.com:443 upstream proxy closed the connection\n"
+    );
+}
+
+#[test]
+fn unreachable_upstream_gets_502_without_its_address_or_credentials() {
+    let port = closed_port();
+    let running = Running::start(
+        custom(vec![rule("example.com", None)]),
+        upstream_at(ProxyAddress {
+            host: "localhost".to_string(),
+            port,
+            authorization: Some(BASIC_USER_PASS.to_string()),
+        }),
+    );
+    for (request, target) in [
+        (connect_request("example.com:443"), "example.com:443"),
+        (
+            "GET http://example.com/ HTTP/1.1\r\n\r\n".to_string(),
+            "example.com:80",
+        ),
+    ] {
+        let response = running.http(&request);
+        assert!(
+            response.starts_with("HTTP/1.1 502 Bad Gateway\r\n"),
+            "{response}"
+        );
+        let body = body_of(&response);
+        assert!(
+            body.starts_with(&format!(
+                "agentrun: {target} upstream proxy connection failed ("
+            )),
+            "{body}"
+        );
+        for secret in [
+            "user",
+            "pass",
+            "dXNlcjpwYXNz",
+            "localhost",
+            "127.0.0.1",
+            &port.to_string(),
+        ] {
+            assert!(!body.contains(secret), "{secret} in {body}");
+        }
+    }
 }
 
 #[test]
@@ -694,6 +829,70 @@ fn plain_http_forwards_one_request_per_connection_with_its_body() {
         server.requests.lock().unwrap().clear();
         upstream.requests.lock().unwrap().clear();
     }
+}
+
+const SLOW_RESPONSE: &str =
+    "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world";
+
+fn start_slow_server() -> (u16, Receiver<bool>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, half_closed) = channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        read_head(&mut stream);
+        thread::sleep(Duration::from_millis(100));
+        stream.set_nonblocking(true).unwrap();
+        let mut byte = [0u8; 1];
+        let _ = sender.send(matches!(stream.read(&mut byte), Ok(0)));
+        stream.set_nonblocking(false).unwrap();
+        let _ = stream.write_all(SLOW_RESPONSE.as_bytes());
+        let _ = stream.shutdown(Shutdown::Both);
+    });
+    (port, half_closed)
+}
+
+fn get_and_half_close(running: &Running, url: &str) -> String {
+    let mut stream = running.tcp();
+    stream
+        .write_all(format!("GET {url} HTTP/1.1\r\nHost: ignored\r\n\r\n").as_bytes())
+        .unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    read_all(&mut stream)
+}
+
+#[test]
+fn half_closed_client_gets_the_direct_response() {
+    let (port, _) = start_slow_server();
+    let running = Running::start(
+        custom(vec![rule("127.0.0.1", Some(port))]),
+        Upstream::default(),
+    );
+    let response = get_and_half_close(&running, &format!("http://127.0.0.1:{port}/"));
+    assert_eq!(response, SLOW_RESPONSE);
+}
+
+#[test]
+fn half_closed_client_gets_the_response_through_the_upstream_proxy() {
+    let (port, half_closed) = start_slow_server();
+    let running = Running::start(
+        custom(vec![rule("example.com", None)]),
+        Upstream {
+            secure: None,
+            plain: Some(ProxyAddress {
+                host: "127.0.0.1".to_string(),
+                port,
+                authorization: None,
+            }),
+            no_proxy: Vec::new(),
+        },
+    );
+    let response = get_and_half_close(&running, "http://example.com/");
+    assert_eq!(response, SLOW_RESPONSE);
+    assert_eq!(half_closed.recv_timeout(Duration::from_secs(5)), Ok(false));
 }
 
 #[test]

@@ -64,6 +64,22 @@ struct State {
     first_signal: Option<Signal>,
     timed_out: bool,
     phase: Phase,
+    held: bool,
+    pending: Vec<Signal>,
+}
+
+pub struct Hold {
+    shared: Arc<Shared>,
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let mut state = self.shared.lock();
+        state.held = false;
+        for signal in std::mem::take(&mut state.pending) {
+            self.shared.handle(&mut state, signal);
+        }
+    }
 }
 
 enum Phase {
@@ -146,18 +162,26 @@ impl Running {
 }
 
 impl Signals {
-    pub fn install() -> Signals {
-        let shared = Arc::new(Shared {
-            state: Mutex::new(State {
-                first_signal: None,
-                timed_out: false,
-                phase: Phase::Starting,
+    fn new() -> Signals {
+        Signals {
+            shared: Arc::new(Shared {
+                state: Mutex::new(State {
+                    first_signal: None,
+                    timed_out: false,
+                    phase: Phase::Starting,
+                    held: false,
+                    pending: Vec::new(),
+                }),
+                changed: Condvar::new(),
             }),
-            changed: Condvar::new(),
-        });
+        }
+    }
+
+    pub fn install() -> Signals {
+        let installed = Signals::new();
         let mut signals =
             iterator::Signals::new([SIGINT, SIGTERM]).expect("SIGINT and SIGTERM can be received");
-        let receiver = Arc::clone(&shared);
+        let receiver = Arc::clone(&installed.shared);
         thread::spawn(move || {
             for number in signals.forever() {
                 if let Some(signal) = Signal::from_number(number) {
@@ -165,7 +189,14 @@ impl Signals {
                 }
             }
         });
-        Signals { shared }
+        installed
+    }
+
+    pub fn hold(&self) -> Hold {
+        self.shared.lock().held = true;
+        Hold {
+            shared: Arc::clone(&self.shared),
+        }
     }
 
     pub fn prepare(
@@ -293,7 +324,16 @@ impl Shared {
 
     fn receive(&self, signal: Signal) {
         let mut state = self.lock();
-        let first = *state.first_signal.get_or_insert(signal);
+        state.first_signal.get_or_insert(signal);
+        if state.held {
+            state.pending.push(signal);
+            return;
+        }
+        self.handle(&mut state, signal);
+    }
+
+    fn handle(&self, state: &mut State, signal: Signal) {
+        let first = state.first_signal.unwrap_or(signal);
         match &mut state.phase {
             Phase::Starting | Phase::Finishing => {}
             Phase::Preparing(preparation) => std::process::exit(preparation.abort(first).into()),
@@ -397,5 +437,74 @@ fn kill_group(pgid: i32, signal: i32) {
 fn kill_process(pid: i32, signal: i32) {
     unsafe {
         libc::kill(pid, signal);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Child, Command};
+
+    use super::*;
+
+    fn preparing() -> (Signals, Arc<Mutex<Vec<u8>>>) {
+        let signals = Signals::new();
+        let stdout = Arc::new(Mutex::new(Vec::new()));
+        signals
+            .prepare(stdout.clone(), Format::Jsonl, Instant::now())
+            .unwrap();
+        (signals, stdout)
+    }
+
+    fn sleeper() -> Child {
+        Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn signal_during_a_hold_is_forwarded_once_the_runtime_is_running() {
+        let (signals, stdout) = preparing();
+        let mut child = sleeper();
+        let hold = signals.hold();
+        signals.shared.receive(Signal::Interrupt);
+        assert!(child.try_wait().unwrap().is_none());
+        signals.running(child.id() as i32, None, false);
+        assert!(child.try_wait().unwrap().is_none());
+        drop(hold);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("sleep was not interrupted within 1 second");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        signals.finishing();
+        assert_eq!(status.signal(), Some(SIGINT));
+        assert_eq!(signals.first_signal(), Some(Signal::Interrupt));
+        assert!(stdout.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn signal_during_a_hold_that_ends_in_finishing_is_ignored() {
+        let (signals, stdout) = preparing();
+        let mut child = sleeper();
+        let hold = signals.hold();
+        signals.shared.receive(Signal::Terminate);
+        signals.finishing();
+        drop(hold);
+        assert!(matches!(signals.shared.lock().phase, Phase::Finishing));
+        assert_eq!(signals.first_signal(), Some(Signal::Terminate));
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(stdout.lock().unwrap().is_empty());
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }

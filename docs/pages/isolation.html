@@ -36,7 +36,7 @@
     <tr><td><code>src/doctor.rs</code></td><td><code>sandbox</code>、<code>sandbox_test</code>、<code>network</code>、<code>network_test</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
   </tbody>
 </table>
-<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个线程；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。</p>
+<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个处理线程，建立转发后再加一个复制下行数据的线程，线程数没有上限；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
 <p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
@@ -139,10 +139,21 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成、最长 253 个字节的名字与 IPv4 字面量，其他字节或更长的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
   <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
   <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
-  <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB，连接目标最多等 10 秒。</li>
+  <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB；连接目标时依次尝试解析出的每个地址，每个地址最多等 10 秒。</li>
   <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 与它们的小写形式指向代理，<code>NO_PROXY</code> 与 <code>no_proxy</code> 清空。小写也要设，因为 pi 先读小写的 <code>https_proxy</code>，调用方环境里原有的小写变量会让 pi 绕过过滤代理（pi 1.0.1 实测）。</li>
   <li>调用方环境里原有的代理变量改由过滤代理作为上游使用，所以 Cloud Managed 容器自带的出口代理仍然生效：<code>CONNECT</code> 与 SOCKS5 依次取 <code>https_proxy</code>、<code>HTTPS_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，普通 HTTP 依次取 <code>http_proxy</code>、<code>HTTP_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，第一个非空的值生效。只支持 <code>http://</code> 上游，地址里的用户名与密码转为 <code>Proxy-Authorization: Basic</code>；其他协议的值当作没有上游。调用方原有的 <code>no_proxy</code> 或 <code>NO_PROXY</code> 匹配的主机直接连接。目标主机解析失败时，有上游则交给上游连接，没有上游则按连接失败处理。代理变量的值可能带凭据，不出现在任何输出里。</li>
   <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#event-types">事件与输出</a>。</li>
+  <li>HTTP 代理拒绝请求时回复 403，响应体为 <code>agentrun: &lt;主机&gt;:&lt;端口&gt; is not allowed (&lt;reason&gt;)</code>。放行后连接失败时回复 502，响应体为 <code>agentrun: &lt;主机&gt;:&lt;端口&gt; &lt;原因&gt;</code>，让沙箱里的 agent 与调用方能看出连接为什么失败。原因是下面几种之一，括号里的错误是操作系统给出的错误描述：
+    <ul>
+      <li><code>could not be resolved</code>：本机解析不到目标主机的 IPv4 地址，又没有上游代理。</li>
+      <li><code>connection failed (&lt;错误&gt;)</code>：直接连接时每个地址都连接失败，错误取最后一个地址的。</li>
+      <li><code>upstream proxy connection failed (&lt;错误&gt;)</code>：连不上上游代理，或者向上游代理写请求、读回复时出错。</li>
+      <li><code>upstream proxy did not answer in time</code>：上游代理在 30 秒内没有回复完 <code>CONNECT</code> 的回复头。</li>
+      <li><code>upstream proxy closed the connection</code>：上游代理在回复头结束之前关闭了连接。</li>
+      <li><code>upstream proxy answered &lt;状态码&gt;</code>：上游代理对 <code>CONNECT</code> 回复了 200 到 299 以外的状态码。</li>
+      <li><code>upstream proxy answered an invalid response</code>：上游代理的回复头超过 64 KB，或者读不出状态码。</li>
+    </ul>
+  原因里不出现上游代理的主机、端口与凭据。SOCKS5 的回复只有回复码，没有原因文字；<code>network</code> 事件只记放行或拒绝，不记连接结果。</li>
 </ul>
 <figure>
 <svg class="diagram" viewBox="0 0 600 370" style="max-width:600px" role="img" aria-label="沙箱内进程经过滤代理访问网络"><defs><marker id="arr-net" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="20" y="10" width="560" height="84" rx="10" style="fill:none;stroke-dasharray:6 4"/><text class="note" x="34" y="30" text-anchor="start">沙箱</text><rect x="110" y="34" width="380" height="44" rx="8"/><text x="300.0" y="61.0" text-anchor="middle">agent 进程：运行时与它执行的命令</text><path d="M300,78 L300,138" marker-end="url(#arr-net)"/><text class="note" x="312" y="113" text-anchor="start">只能连接 127.0.0.1 上的随机端口</text><rect x="130" y="140" width="340" height="44" rx="8"/><text x="300.0" y="167.0" text-anchor="middle">过滤代理：在 agentrun 进程里，沙箱外</text><path d="M300,184 C300,214 100,214 100,248" marker-end="url(#arr-net)"/><path d="M300,184 L300,248" marker-end="url(#arr-net)"/><path d="M300,184 C300,214 500,214 500,248" marker-end="url(#arr-net)"/><rect x="20" y="250" width="160" height="60" rx="8"/><text x="100.0" y="276.0" text-anchor="middle">放行</text><text x="100.0" y="294.0" text-anchor="middle">经上游代理或直连</text><rect x="220" y="250" width="160" height="60" rx="8"/><text x="300.0" y="276.0" text-anchor="middle">拒绝</text><text x="300.0" y="294.0" text-anchor="middle">not_allowed</text><rect x="420" y="250" width="160" height="60" rx="8"/><text x="500.0" y="276.0" text-anchor="middle">拒绝</text><text x="500.0" y="294.0" text-anchor="middle">private_address</text><text class="note" x="100" y="330" text-anchor="middle">主机在放行列表里</text><text class="note" x="300" y="330" text-anchor="middle">主机不在放行列表里</text><text class="note" x="500" y="330" text-anchor="middle">解析到私有地址</text><text class="note" x="300" y="358" text-anchor="middle">每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 network 事件</text></svg>
@@ -211,13 +222,13 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <tbody>
     <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）；Linux 上这个目录在会话临时目录之内，没有这项风险（本机 Linux 与云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置；<code>--network custom</code> 下 WebFetch 能读放行列表以外的主机（均为云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）。<code>--network full</code> 下命令直接联网，不经过滤代理，没有私有地址检查，<code>169.254.169.254</code> 这类地址可以访问（用户定）</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
-    <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
+    <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。agent 可以把状态目录里的 <code>auth.json</code> 换成指向其他文件的符号链接，之后带 <code>AGENTRUN_PI_AUTH</code> 运行时，agentrun 把凭据写到那个文件，这个文件可以在沙箱之外，见<a href="session.html#credentials">凭据</a>。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>
 </table>
 <p>过滤代理本身的剩余风险：</p>
 <ul>
   <li>HTTPS 只按 <code>CONNECT</code> 的主机名与端口判定，TLS 里的 SNI 与 <code>Host</code> 不检查。放行的主机如果和别的站点共用 IP 并按 SNI 选站点，隧道里可以访问那些站点。</li>
-  <li>有上游代理时，私有地址只看本机的解析结果，上游会自己再解析一次；本机解析失败时不做检查，直接交给上游。</li>
+  <li>有上游代理时，私有地址只看本机的解析结果，上游会自己再解析一次；本机解析失败时不做检查，直接交给上游，主机只有 IPv6 地址时同样不做检查。理由：Cloud Managed 容器的本机 DNS 常常不可用，解析不出地址时拒绝会让 <code>full</code> 在那里几乎不能用。</li>
   <li>过滤代理在本机回环地址上监听 TCP 端口，会话期间同一台机器上的其他用户也能连这个端口，经它发出的请求会带上调用方的上游代理凭据。</li>
   <li><code>full</code> 下 claude-code 的 WebFetch 在 claude 进程里运行，不经过过滤代理，也就没有私有地址检查。</li>
 </ul>

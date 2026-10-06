@@ -37,6 +37,8 @@ const HEAD_LIMIT: usize = 64 * 1024;
 const HOST_NAME_LIMIT: usize = 253;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const UNRESOLVED: &str = "could not be resolved";
+const INVALID_UPSTREAM_RESPONSE: &str = "upstream proxy answered an invalid response";
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PRIVATE_RANGES: [(Ipv4Addr, u8); 7] = [
     (Ipv4Addr::new(0, 0, 0, 0), 8),
@@ -494,10 +496,13 @@ fn accept_until_stopped(
         if !readable_within(fd, STOP_POLL_INTERVAL) {
             continue;
         }
-        if let Some(client) = accept() {
-            let _ = client.set_nonblocking(false);
-            let server = Arc::clone(server);
-            thread::spawn(move || handle(client, &server));
+        match accept() {
+            Some(client) => {
+                let _ = client.set_nonblocking(false);
+                let server = Arc::clone(server);
+                thread::spawn(move || handle(client, &server));
+            }
+            None => thread::sleep(STOP_POLL_INTERVAL),
         }
     }
 }
@@ -606,7 +611,7 @@ fn handle(mut client: Client, server: &Server) {
 }
 
 fn handle_http(mut client: Client, server: &Server, first: u8) {
-    let Some((head, leftover)) = read_head(&mut client, vec![first]) else {
+    let Ok((head, leftover)) = read_head(&mut client, vec![first]) else {
         return;
     };
     let _ = client.set_read_timeout(None);
@@ -632,9 +637,19 @@ fn handle_http(mut client: Client, server: &Server, first: u8) {
             }
             Ok(route) => route,
         };
-        match route.and_then(|route| connect(&route, &target, true)) {
-            None => respond(&mut client, "502 Bad Gateway", ""),
-            Some((stream, early)) => {
+        let connected = match route {
+            None => Err(UNRESOLVED.to_string()),
+            Some(route) => connect(&route, &target, true),
+        };
+        match connected {
+            Err(reason) => {
+                respond(
+                    &mut client,
+                    "502 Bad Gateway",
+                    &failed_body(&target, &reason),
+                );
+            }
+            Ok((stream, early)) => {
                 if write_all(&mut client, b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     && write_all(&mut client, &early)
                 {
@@ -670,7 +685,11 @@ fn handle_http(mut client: Client, server: &Server, first: u8) {
         }
         Ok(Some(route)) => route,
         Ok(None) => {
-            respond(&mut client, "502 Bad Gateway", "");
+            respond(
+                &mut client,
+                "502 Bad Gateway",
+                &failed_body(&target, UNRESOLVED),
+            );
             return;
         }
     };
@@ -696,8 +715,12 @@ fn handle_http(mut client: Client, server: &Server, first: u8) {
     }
     forwarded.push_str("\r\n");
     match connect(&route, &target, false) {
-        None => respond(&mut client, "502 Bad Gateway", ""),
-        Some((stream, _)) => {
+        Err(reason) => respond(
+            &mut client,
+            "502 Bad Gateway",
+            &failed_body(&target, &reason),
+        ),
+        Ok((stream, _)) => {
             forward_request(client, stream, forwarded.as_bytes(), &leftover, body_length);
         }
     }
@@ -764,9 +787,9 @@ fn forward_request(
     });
     let mut discarded = [0u8; 4096];
     while matches!(client.read(&mut discarded), Ok(count) if count > 0) {}
-    let _ = server_stream.shutdown(Shutdown::Both);
     let _ = downstream.join();
     let _ = client.shutdown(Shutdown::Both);
+    let _ = server_stream.shutdown(Shutdown::Both);
 }
 
 fn handle_socks(mut client: Client, server: &Server) {
@@ -840,10 +863,10 @@ fn handle_socks(mut client: Client, server: &Server) {
         }
     };
     match connect(&route, &target, true) {
-        None => {
+        Err(_) => {
             let _ = client.write_all(&socks_reply(SOCKS_CONNECTION_REFUSED));
         }
-        Some((stream, early)) => {
+        Ok((stream, early)) => {
             if write_all(&mut client, &socks_reply(SOCKS_SUCCEEDED))
                 && write_all(&mut client, &early)
             {
@@ -899,18 +922,25 @@ fn decide(server: &Server, target: &Target, secure: bool) -> Result<Option<Route
     Ok(Some(Route::Direct(addresses)))
 }
 
-fn connect(route: &Route, target: &Target, tunnel: bool) -> Option<(TcpStream, Vec<u8>)> {
+fn connect(route: &Route, target: &Target, tunnel: bool) -> Result<(TcpStream, Vec<u8>), String> {
     match route {
-        Route::Direct(addresses) => connect_direct(addresses).map(|stream| (stream, Vec::new())),
+        Route::Direct(addresses) => connect_direct(addresses)
+            .map(|stream| (stream, Vec::new()))
+            .map_err(|error| format!("connection failed ({error})")),
         Route::Upstream(proxy) => {
-            let stream = connect_direct(&resolve(&proxy.host, proxy.port))?;
+            let stream =
+                connect_direct(&resolve(&proxy.host, proxy.port)).map_err(upstream_failure)?;
             if tunnel {
                 tunnel_through(stream, proxy, target)
             } else {
-                Some((stream, Vec::new()))
+                Ok((stream, Vec::new()))
             }
         }
     }
+}
+
+fn upstream_failure(error: impl std::fmt::Display) -> String {
+    format!("upstream proxy connection failed ({error})")
 }
 
 fn resolve(host: &str, port: u16) -> Vec<SocketAddrV4> {
@@ -930,33 +960,57 @@ fn resolve(host: &str, port: u16) -> Vec<SocketAddrV4> {
         .unwrap_or_default()
 }
 
-fn connect_direct(addresses: &[SocketAddrV4]) -> Option<TcpStream> {
-    addresses.iter().find_map(|address| {
-        TcpStream::connect_timeout(&SocketAddr::from(*address), CONNECT_TIMEOUT).ok()
-    })
+fn connect_direct(addresses: &[SocketAddrV4]) -> Result<TcpStream, String> {
+    let mut failure = "no IPv4 address".to_string();
+    for address in addresses {
+        match TcpStream::connect_timeout(&SocketAddr::from(*address), CONNECT_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => failure = error.to_string(),
+        }
+    }
+    Err(failure)
 }
 
 fn tunnel_through(
     mut stream: TcpStream,
     proxy: &ProxyAddress,
     target: &Target,
-) -> Option<(TcpStream, Vec<u8>)> {
+) -> Result<(TcpStream, Vec<u8>), String> {
     let host_port = target_text(target);
     let mut request = format!("CONNECT {host_port} HTTP/1.1\r\nHost: {host_port}\r\n");
     if let Some(authorization) = &proxy.authorization {
         request.push_str(&format!("Proxy-Authorization: {authorization}\r\n"));
     }
     request.push_str("\r\n");
-    stream.write_all(request.as_bytes()).ok()?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(upstream_failure)?;
     let _ = stream.set_read_timeout(Some(HEAD_TIMEOUT));
-    let (head, leftover) = read_head(&mut stream, Vec::new())?;
+    let (head, leftover) = read_head(&mut stream, Vec::new()).map_err(|error| match error {
+        HeadError::TooLarge => INVALID_UPSTREAM_RESPONSE.to_string(),
+        HeadError::Closed => "upstream proxy closed the connection".to_string(),
+        HeadError::Read(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            "upstream proxy did not answer in time".to_string()
+        }
+        HeadError::Read(error) => upstream_failure(error),
+    })?;
     let _ = stream.set_read_timeout(None);
     let status = String::from_utf8_lossy(&head);
     let code = status
         .split(' ')
         .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())?;
-    (200..300).contains(&code).then_some((stream, leftover))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or(INVALID_UPSTREAM_RESPONSE)?;
+    if (200..300).contains(&code) {
+        Ok((stream, leftover))
+    } else {
+        Err(format!("upstream proxy answered {code}"))
+    }
 }
 
 fn relay(client: Client, server_stream: TcpStream, initial: &[u8]) {
@@ -984,17 +1038,27 @@ fn relay(client: Client, server_stream: TcpStream, initial: &[u8]) {
     let _ = server_stream.shutdown(Shutdown::Both);
 }
 
-fn read_head(stream: &mut impl Read, mut buffer: Vec<u8>) -> Option<(Vec<u8>, Vec<u8>)> {
+enum HeadError {
+    TooLarge,
+    Closed,
+    Read(io::Error),
+}
+
+fn read_head(stream: &mut impl Read, mut buffer: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>), HeadError> {
     let mut chunk = [0u8; 4096];
     loop {
         if let Some(end) = find_blank_line(&buffer) {
             let leftover = buffer.split_off(end);
-            return Some((buffer, leftover));
+            return Ok((buffer, leftover));
         }
         if buffer.len() >= HEAD_LIMIT {
-            return None;
+            return Err(HeadError::TooLarge);
         }
-        let count = stream.read(&mut chunk).ok().filter(|count| *count > 0)?;
+        let count = match stream.read(&mut chunk) {
+            Ok(0) => return Err(HeadError::Closed),
+            Ok(count) => count,
+            Err(error) => return Err(HeadError::Read(error)),
+        };
         buffer.extend_from_slice(&chunk[..count]);
     }
 }
@@ -1023,6 +1087,10 @@ fn respond(client: &mut Client, status: &str, body: &str) {
     let _ = client.write_all(response.as_bytes());
     let _ = client.flush();
     let _ = client.shutdown(Shutdown::Both);
+}
+
+fn failed_body(target: &Target, reason: &str) -> String {
+    format!("agentrun: {} {reason}\n", target_text(target))
 }
 
 fn denied_body(target: &Target, reason: NetworkReason) -> String {
@@ -1179,6 +1247,40 @@ mod tests {
             wildcard,
             port,
         }
+    }
+
+    #[test]
+    fn read_head_reports_too_large_closed_and_read_errors() {
+        let mut endless = io::repeat(b'a');
+        assert!(matches!(
+            read_head(&mut endless, Vec::new()),
+            Err(HeadError::TooLarge)
+        ));
+        let mut cut = &b"HTTP/1.1 200 OK\r\n"[..];
+        assert!(matches!(
+            read_head(&mut cut, Vec::new()),
+            Err(HeadError::Closed)
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut silent = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        silent
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let timed_out = read_head(&mut silent, Vec::new());
+        assert!(
+            matches!(
+                &timed_out,
+                Err(HeadError::Read(error))
+                    if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
+            ),
+            "the read did not time out"
+        );
+        let mut complete = &b"HTTP/1.1 200 OK\r\n\r\nrest"[..];
+        let Ok((head, leftover)) = read_head(&mut complete, Vec::new()) else {
+            panic!("the complete head was not read");
+        };
+        assert_eq!(head, b"HTTP/1.1 200 OK\r\n\r\n");
+        assert_eq!(leftover, b"rest");
     }
 
     #[test]

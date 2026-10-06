@@ -137,13 +137,13 @@ impl TextFormatter {
             },
             Body::End(end) => {
                 if end.status == EndStatus::Rejected {
-                    return vec![format!("[end] rejected {}", end.detail)];
+                    return vec![format!("[end] rejected {}", single_line(&end.detail))];
                 }
                 let mut line = format!("[end] {} {}", end.status.name(), seconds(end.duration_ms));
                 line.push_str(&usage_items(&end.usage.totals));
                 if !end.detail.is_empty() {
                     line.push_str("  ");
-                    line.push_str(&end.detail);
+                    line.push_str(&single_line(&end.detail));
                 }
                 vec![line]
             }
@@ -174,6 +174,10 @@ impl TextFormatter {
 
 pub fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
+}
+
+fn single_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
 }
 
 pub fn subagent_label(kind: &str, number: u64) -> String {
@@ -422,6 +426,27 @@ mod tests {
                 TokenCounts::default()
             )),
             vec!["[end] rejected claude not found in PATH"]
+        );
+    }
+
+    #[test]
+    fn end_lines_put_a_multiline_detail_on_one_line() {
+        let mut text = TextFormatter::new(SandboxMode::On, "");
+        assert_eq!(
+            text.lines(&end(
+                EndStatus::Failed,
+                "first\nsecond\r\nthird\rfourth",
+                TokenCounts::default()
+            )),
+            vec!["[end] failed 31.3s  first second third fourth"]
+        );
+        assert_eq!(
+            text.lines(&end(
+                EndStatus::Rejected,
+                "cannot start\r\nsee above\n",
+                TokenCounts::default()
+            )),
+            vec!["[end] rejected cannot start see above "]
         );
     }
 }

@@ -35,7 +35,7 @@
     <tr><td><code>src/pi.rs</code>、<code>src/codex.rs</code>、<code>src/sandbox.rs</code></td><td>pi：<code>user_state_dir</code>、<code>prepare_state</code>、<code>state</code>、<code>WRITABLE_STATE_ENTRIES</code>，<code>PiState</code> 在 <code>src/sandbox.rs</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 的状态目录与 codex 的私有配置目录、多个运行同时进行</td></tr>
     <tr><td><code>src/credential.rs</code></td><td><code>write_session_credential</code>、<code>write_credential</code>、<code>CredentialReport</code>、<code>CredentialStatus</code></td><td>凭据</td></tr>
     <tr><td><code>src/process_tree.rs</code></td><td><code>ProcessTable</code>、<code>claim_orphans</code>、<code>ForkWatcher</code>、<code>Recorded</code>、<code>wait_for_exit</code>、<code>kill_group_members</code>、<code>kill_tree</code>、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
-    <tr><td><code>src/signal.rs</code></td><td><code>Signals</code>（<code>install</code>、按阶段切换的 <code>prepare</code>、<code>checking</code>、<code>doctoring</code>、<code>running</code>、<code>finishing</code>、<code>exited</code>、<code>kill_group</code>）、<code>Signal</code>（含退出码）、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
+    <tr><td><code>src/signal.rs</code></td><td><code>Signals</code>（<code>install</code>、按阶段切换的 <code>prepare</code>、<code>checking</code>、<code>doctoring</code>、<code>running</code>、<code>finishing</code>、<code>exited</code>、<code>kill_group</code>，以及推迟处理信号的 <code>hold</code>）、<code>Hold</code>、<code>Signal</code>（含退出码）、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
   </tbody>
 </table>
 <p><code>Signals</code> 在进程启动时安装一次，之后按运行所处的阶段决定收到信号时的动作：启动前只记录，检查沙箱时终止检查进程，运行中转发给进程组。理由：信号可能在任何时刻到达，每个阶段的清理动作不同，由同一个对象记录阶段，处理函数里只读它。</p>
@@ -130,6 +130,7 @@ GREETING='hello world'</code></pre>
 <p>一次运行只写当前运行时的变量。变量未设或为空时不写。路径变量与 <code>HOME</code> 从组装后的会话环境读取，相对路径按 <code>--cwd</code> 解析。</p>
 <p>每次写入时，工具在同一目录记一个旁注文件 <code>auth.json.agentrun-sha256</code>，内容是这次变量值的 SHA-256（小写十六进制加换行）。下次运行时：登录文件不存在就写入；变量值的 SHA-256 与旁注相同就不动；不同或没有旁注就覆盖登录文件并更新旁注。理由：运行时会在使用中刷新令牌并改写登录文件，变量没变时保留刷新后的令牌；启动方轮换了凭据时，即使登录文件在持久卷上，会话也会改用新账号。</p>
 <p>写入前先创建登录文件所在的目录（新建的每一级权限 0700，已有目录不改权限），再对这个目录加排他的 <code>flock</code>，比较旁注、写登录文件、写旁注都在锁内完成。理由：两次运行同时写入不同的值时，没有锁会出现登录文件来自一次、旁注来自另一次，之后的运行按旁注判断会保留错误的账号。登录文件与旁注都用同目录的临时文件写入，以排他方式创建、权限 0600、fsync 后重命名，同时启动的其他运行不会读到写了一半的文件。写入失败时启动前报错（退出码 2），<code>detail</code> 写变量名与路径，不写值。</p>
+<p>登录文件是符号链接且链接目标存在时，工具写到链接目标，链接本身保留；目录锁、旁注与临时文件都放在链接目标所在的目录，旁注名是目标文件名加 <code>.agentrun-sha256</code>。链接目标不存在时按普通文件处理，链接被替换为登录文件。理由：几个状态目录链接到同一个登录文件时，它们的写入因此排队，旁注也只有一份。<code>--debug</code> 的 <code>credentials:</code> 一行与错误信息里的路径仍是链接本身的路径。</p>
 <p>claude-code 在容器里用它自己的令牌变量 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 登录，没有登录文件。工具不做转换，只保证它不被删除（它不以 <code>ANTHROPIC_</code> 或 <code>CLAUDE_CODE_USE_</code> 开头）。</p>
 <p>codex 要求登录信息以文件形式保存，登录文件不存在时启动前报错，提示先运行 <code>codex login</code> 或在容器里用 <code>AGENTRUN_CODEX_AUTH</code> 传入。</p>
 <p>凭据内容不出现在事件流、标准错误、<code>--raw</code> 与错误信息里，只显示变量名与文件路径。</p>
@@ -144,6 +145,7 @@ GREETING='hello world'</code></pre>
   <li>先清理再回收：<code>waitid</code> 带 <code>WNOWAIT</code>，得知主进程退出时不回收它，进程组与进程树清理完之后才回收。理由：主进程被回收后，它的进程号与进程组号可以分给新进程，同时运行的其他程序这时启动的进程会收到本次运行的 SIGKILL。启动前的沙箱检查与 doctor 的检查进程也按这个顺序处理。</li>
   <li>向进程组发 SIGKILL 后等 5 毫秒，再读一遍进程表，组里还有进程就再发一次，至多三轮。理由：macOS 上组里的进程恰好在 <code>killpg</code> 执行时 fork，新的子进程可能收不到这次信号而留下，它持有标准错误时 agentrun 读不到 EOF（macOS 复现）；紧接着 <code>killpg</code> 读进程表时，正在创建的子进程可能还不在表里，所以先等一轮再读。</li>
   <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
+  <li>创建会话临时目录、创建 codex 的私有配置目录与启动运行时这三步进行中收到的信号，在这一步完成后处理（<code>Signals::hold</code>）：目录已经登记，会被删除；运行时已经进入运行阶段，信号按运行中的规则转发，事件流是 <code>start</code>、<code>prompt</code>、<code>end interrupted</code>。创建目录失败时结果是 <code>rejected</code>（退出码 2），启动运行时失败时结果是 <code>failed</code>（退出码 1），两种情况下信号都被忽略，因为这时已经输出了 <code>end</code>。理由：信号在目录创建之后、登记之前到达时，目录会留下；在运行时启动之后、进入运行阶段之前到达时，macOS 上刚启动的运行时可能继续运行。</li>
   <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>
   <li>pi 被 <code>bwrap</code> 包裹时，第一个信号（转发的 SIGINT 或 SIGTERM，以及超时的 SIGTERM）只发给 bwrap 的子进程 pi，不发给进程组：agentrun 读 <code>/proc/&lt;bwrap 进程号&gt;/task/&lt;bwrap 进程号&gt;/children</code> 找到它，读不到时扫描 <code>/proc/*/stat</code> 找父进程是 bwrap 的进程；都找不到时仍向进程组发信号。之后的 SIGKILL 仍发给整个进程组。理由：bwrap 0.9.0 不转发 SIGTERM，向进程组发信号时 bwrap 自己退出，<code>--die-with-parent</code> 随即 SIGKILL 被包裹的 pi，pi 没有宽限期，正在改写的 <code>auth.json</code> 可能写坏（云端实测）。pi 自己的子进程收不到第一个信号，由最后的 SIGKILL 清理。</li>
   <li>结束顺序：输出 <code>end</code>，删除临时目录，按<a href="run.html#exit-codes">退出码</a>表退出。agentrun 不重新给自己发信号。</li>
