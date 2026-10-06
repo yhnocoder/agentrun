@@ -8,7 +8,7 @@ agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linu
 - Unified Experience：同一条命令在四种环境里都能运行，输出格式与成败判定相同。
 - Doctor：每个平台一个可执行文件，能在启动前检查环境，失败时能看出原因。
 
-设计从 `docs/index.html` 开始读，Task 计划与进度见 GitHub issue #1。
+文档从 `docs/index.html` 开始读，计划与进度见 GitHub issue #1。
 
 ## 协作方式
 
@@ -21,15 +21,11 @@ agentrun 是一个独立的 Rust 命令行工具，在本机 macOS、本机 Linu
 
 ## 工作流程
 
-整体流程是 Design -> Graph[Task(Spec -> Implement -> Test -> Validate)]：先写 Design，再拆出多个 Task，Task 之间可以有依赖；每个 Task 依次经过 Spec、Implement、Test、Validate。
-
-### Design
-
-Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/`，具体内容由用户和 AI 一起维护，可以加可视化内容来描述需求。文档的格式要求见「文档规范」。
+一项改动对应一个 GitHub issue，Spec 写在 issue 正文；每个 issue 依次经过 Spec、Implement、Test、Validate，issue 之间可以有依赖。改变用户能看到的行为、接口或常量的 PR，同时修改开发者文档；影响用法时，同时修改用户文档。文档的要求见「文档规范」。
 
 ### Task
 
-一个 Task 对应 Design 中的一个模块或功能，也对应一个 GitHub issue。每一步的执行者和是否需要用户确认如下：
+一个 Task 对应一个模块或功能，也对应一个 GitHub issue。每一步的执行者和是否需要用户确认如下：
 
 | 步骤 | 执行者 | 用户确认 |
 |---|---|---|
@@ -37,7 +33,7 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 | 与用户沟通需求并写 Spec | 主 agent | 用户审核通过后才开始开发 |
 | Implement 和 Test | implementer subagent | 不需要 |
 | Review | 主 agent | 不需要；同一个 subagent 两轮未通过时报告用户 |
-| 偏离 Design Doc、新增 Design Doc 没有的字段或选项、Design Doc 没给数值的常量 | 主 agent 提出 | 需要 |
+| 偏离开发者文档、新增开发者文档没有的字段或选项、开发者文档没给数值的常量 | 主 agent 提出 | 需要 |
 | 在 issue 中写 comment | 主 agent | 不需要 |
 | Validate | 用户 | AI 提供测试步骤或临时脚本 |
 | commit、PR、关闭 issue | 主 agent | 需要 |
@@ -59,39 +55,52 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 - 代码里不写注释和 docstring，代码的含义靠命名与结构表达。唯一例外是代码看起来可以删除或修改、实际上不能改的地方，写一行 `why(#N): 原因`，必须带 issue 编号，尽量少用。工具指令（如 `# noqa`、`#pragma`）不算注释。检查由 `scripts/check_comment.py` 执行，该脚本在项目确定语言后再写，现在是空文件。
 - commit message 的格式是 `<type>(<scope>): <中文一句话>`。
 - PR 标题用一句话说明改了什么。PR 描述分两节，末尾写 `Closes #N`：
-  - `## Summary`：每项一行，写改了哪个文件或模块、它做什么。设计文档只写增加或修改了哪个页面。
-  - `## Main Takeaway`：这个 PR 带来了什么、有什么变化，用读者能直接看到的形式给出。命令行行为贴命令与实际输出，界面改动贴截图。按 PR 内容选择写法，例如改动设计时给出设计中的预期输出，实现功能时给出当前能运行的命令与输出，完善已有功能时给出前后对比。
+  - `## Summary`：每项一行，写改了哪个文件或模块、它做什么。文档只写增加或修改了哪个页面。
+  - `## Main Takeaway`：这个 PR 带来了什么、有什么变化，用读者能直接看到的形式给出。命令行行为贴命令与实际输出，界面改动贴截图。按 PR 内容选择写法，例如改动文档时给出文档中的预期输出，实现功能时给出当前能运行的命令与输出，完善已有功能时给出前后对比。
   - 背景、决定、验证过程与环境问题写在 issue 中，不写进 PR。
 
 ## 文档规范
 
-### Design Doc
+`docs/` 是一套文档，给两类读者：用户文档写怎么用 agentrun，开发者文档写 agentrun 现在怎么工作。两类文档都是 HTML，共用样式，都按「行文」的规则写。
 
-写以下内容：
+### 用户文档
+
+读者是调用 agentrun 的人与脚本作者。写法：
+
+- 用「你」称呼读者，步骤用祈使句。
+- 标题写读者要做的事，例如「在 docker 里运行」，不写机制名。
+- 每节按这个顺序写：什么时候需要、命令、实际输出、输出怎么读、下一步。
+- 示例输出取自实际运行，不手写；太长的输出可以省略一部分，省略处写明。
+- 只写读者据此要做什么。机制与理由链接到开发者文档；选项、事件字段、退出码的完整参考链接到 `run.html` 与 `events.html`，不重复列出。
+- 常见问题以读者看到的报错为标题，写原因与改法。
+- 不写还没有实现的功能，不出现「待补」「Task」「实测」这类开发过程的词。
+
+### 开发者文档
+
+读者是修改 agentrun 代码的人。写以下内容：
 
 - 用户能看到的行为：命令、选项、配置格式等；
-- 重要模块的输入输出、API 接口类定义；
+- 代码位置：每个内容页开头写对应的源文件与主要的类型和接口；
+- 重要模块的输入输出、接口类型定义；
 - 影响结果的常量，例如阈值、超时、上限、默认值等；
-- 改动时容易被破坏的设计决定，附一句理由。
+- 改动时容易被破坏的决定，附一句理由。
 
 以下内容不写：
 
 - 代码里能直接读到的实现步骤、正则、规则名单的具体条目；
-- 修改历史、实测过程、调研依据，这些写在 issue 与 commit message。
+- 修改历史、实测过程、调研依据，这些写在 issue 与 commit message；
+- 还没有实现的计划。
 
-章节按读者会问的问题划分。上面列的几类内容写在相关章节里，和它们解释的机制放在一起，不单独成章；常量不在文末另做汇总。
+章节按读者会问的问题划分。上面列的几类内容写在相关章节里，和它们解释的机制放在一起，不单独成章；常量不在文末另做汇总。文档与代码不一致时以代码为准，修改文档；代码看起来有缺陷时报告用户，不在文档里迁就。
 
-文件组织：
+### 文件组织
 
-- `docs/index.html` 是总览页，按 Motivation、Environment、Event and Output、Runtime、TBD、暂不做的功能六节列出所有文档。
-- `docs/style.css` 是所有页面共用的样式。新文档参考 `pages/isolation.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
-- 项目的设计文档放在 `docs/pages/`。
+- `docs/index.html` 是总览页，按 Motivation、Get Started、Environment、Event and Output、Runtime、Testing and Release、不支持的功能七节列出所有文档。
+- 用户文档是 `docs/pages/quickstart.html`（快速开始）与 `docs/pages/guide.html`（使用指南）；其余页面是开发者文档，测试与发布写在 `docs/pages/testing.html`。
+- `docs/style.css` 是所有页面共用的样式。新页面参考 `pages/isolation.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
+- 每个页面的导航行右侧有 Copy page 按钮，把页面正文转成 Markdown 复制到剪贴板，转换代码在 `docs/markdown.js`。新页面照抄现有页面的导航行，并引入 `markdown.js`。
 - `docs/` 由 GitHub Pages 从 `main` 分支的 `/docs` 目录发布到 https://yhnocoder.github.io/agentrun/ ，合并到 `main` 后自动更新。`docs/` 下的所有文件都会公开，`docs/.nojekyll` 让 Pages 原样发布文件。
-- 改动 `docs/` 后运行 `uv run scripts/check_docs.py`（默认用本机的 Chrome；在 Cloud Managed 容器里加 `--browser chromium`，用 playwright 自带的 Chromium），它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
-
-### Intro Doc
-
-除了 Design Doc 外，还需要提供给用户看的 Intro Doc。Intro Doc 同样采用 HTML，共享 Design Doc 的样式代码，在 v1.0 之前完成，开始时间由用户指定。
+- 改动 `docs/` 后运行 `uv run scripts/check_docs.py`（默认用本机的 Chrome；在 Cloud Managed 容器里加 `--browser chromium`，用 playwright 自带的 Chromium），它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合要求仍然需要看截图。
 
 ## 行文
 
@@ -110,4 +119,4 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 
 1. 报告正文发布成 Artifact（claude.ai 上的私有页面），不写进仓库。之后的 agent 会搜索和读取仓库里的文件，调研过程写进仓库会混进这些结果。
 2. 同时开一个 issue，加 `question` 标签，写明调研动机、Artifact 链接与结论摘要。结论确定后关闭 issue。
-3. 调研结论中需要实施的改动，写进 Design Doc 或 feature issue，注明来源 issue 编号。
+3. 调研结论中需要实施的改动，写进开发者文档或 feature issue，注明来源 issue 编号。

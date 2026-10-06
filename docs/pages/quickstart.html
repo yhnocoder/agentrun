@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentrun 快速开始</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
+<link rel="stylesheet" href="../style.css">
+<script defer src="../math.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-chtml.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
+</head>
+<body>
+<main>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · 快速开始 · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
+<h1>快速开始</h1>
+<p class="lead">这一页带你装好 agentrun，检查环境，在沙箱里运行第一个任务，再把它放进脚本。照着做一遍大约需要五分钟。</p>
+
+<h2 id="install">安装 agentrun</h2>
+<p>agentrun 是一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64。用 Rust 工具链安装：</p>
+<pre><code class="language-bash">cargo install --git https://github.com/yhnocoder/agentrun</code></pre>
+<p>确认它已经在 PATH 里：</p>
+<div class="term"><span class="prompt">$</span> agentrun --version
+agentrun 0.1.0</div>
+
+<h2 id="runtimes">准备运行时</h2>
+<p>agentrun 负责启动和隔离 agent，agent 本身来自运行时。按各自的文档安装你要用的运行时并登录一次：</p>
+<table>
+  <thead>
+    <tr><th>运行时</th><th>子命令</th><th>版本</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td><code>agentrun claude-code</code></td><td>&gt;= 2.1.288</td></tr>
+    <tr><td>codex</td><td><code>agentrun codex</code></td><td>&gt;= 0.159.2</td></tr>
+    <tr><td>pi（npm 包 <code>@earendil-works/pi-coding-agent</code>）</td><td><code>agentrun pi</code></td><td>&gt;= 1.0.1</td></tr>
+  </tbody>
+</table>
+<p>agentrun 在 PATH 里查找运行时，并沿用你已有的登录。用 pi 时，在 pi 的设置里选好默认模型，或者每次用 <code>--model 服务商/模型</code> 指定。</p>
+<p>在 macOS 上，沙箱由系统提供，不需要另外安装。在 Linux 上，安装 <code>bwrap</code> 与 <code>socat</code>：</p>
+<pre><code class="language-bash"># Debian、Ubuntu
+sudo apt install bubblewrap socat
+# Fedora
+sudo dnf install bubblewrap socat</code></pre>
+
+<h2 id="doctor">检查环境</h2>
+<p>运行 <code>agentrun doctor</code>，后面写上你要用的运行时：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  login       oauth_token
+<span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
+<span class="dim">[skip]</span> claude-code  network     --network none</div>
+<p>每一行是一项检查：运行时能不能找到，能不能登录，沙箱能不能启动，网络限制能不能执行。<code>sandbox</code> 一行说明 agentrun 在一个临时目录里试过了：沙箱里的命令能写这个目录，写不了目录以外的地方。全部是 <code>ok</code> 或 <code>skip</code> 就可以继续。出现 <code>fail</code> 时，这一行会写明原因和改法，也可以查<a href="guide.html#faq">常见问题</a>。</p>
+
+<h2 id="first-run">运行第一个任务</h2>
+<p>新建一个目录，放一个小文件：</p>
+<pre><code class="language-bash">mkdir hello &amp;&amp; cd hello
+printf 'def greet(name):\n    return "hello " + name\n' &gt; greet.py</code></pre>
+<p>让 claude-code 给它写测试：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 greet.py 写一个测试并运行"
+<span class="dim">[main]</span> prompt 给 greet.py 写一个测试并运行
+<span class="dim">[main]</span> tool Read: greet.py
+<span class="dim">[main]</span> tool Glob: **/*test*.py
+<span class="dim">[main]</span> tool Write: test_greet.py
+<span class="dim">[main]</span> tool Bash: python3 -m unittest -v test_greet
+<span class="dim">[main]</span> text 我写了 `/tmp/hello/test_greet.py`，用的是 `unittest`，运行后 3 个测试全部通过。
+<span class="dim">[end]</span> finished 9.9s  in 67.4k  out 0.7k  cached 82%</div>
+<p>怎么读这段输出：</p>
+<ul>
+  <li>每行开头的 <code>[main]</code> 表示这一行来自主 agent。agent 启动 subagent 时，subagent 的行以它自己的标签开头，例如 <code>[explore#1]</code>。</li>
+  <li><code>tool</code> 行是一次完成的工具调用，<code>text</code> 行是 agent 说的话。</li>
+  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出，以及输入中命中缓存的比例。</li>
+</ul>
+<p>这次运行发生在沙箱里：agent 只能写 <code>hello</code> 目录和一个临时目录，它运行的命令不能联网，它也读不到你自己的运行时配置、插件和会话记录。</p>
+<p>不加 <code>--format text</code> 时，终端里显示的是动态界面：上方滚动显示同样的行，下方显示正在运行的 subagent 和主 agent 的状态。</p>
+<p>换成 pi 或 codex，只需要换子命令：</p>
+<pre><code class="language-bash">agentrun pi --model deepseek/deepseek-flash --prompt "给 greet.py 写一个测试并运行"
+agentrun codex --prompt "给 greet.py 写一个测试并运行"</code></pre>
+
+<h2 id="script">在脚本里使用</h2>
+<p>输出不是终端时，agentrun 默认输出 jsonl：每行一个 JSON 事件，最后一行是 <code>end</code> 事件，里面有结果和 agent 的最后一段话。用退出码判断成败，用 <code>jq</code> 取结果：</p>
+<pre><code class="language-bash">#!/bin/sh
+agentrun claude-code --prompt "用一句话说明 greet.py 做什么" &gt; run.jsonl
+status=$?
+if [ "$status" -eq 0 ]; then
+  jq -r 'select(.type == "end") | .result' run.jsonl
+else
+  jq -r 'select(.type == "end") | "\(.status): \(.detail)"' run.jsonl
+  exit "$status"
+fi</code></pre>
+<div class="term"><span class="prompt">$</span> ./review.sh
+greet.py 定义了一个 `greet(name)` 函数，返回字符串 "hello " 加上传入的名字。</div>
+<p>环境有问题时，脚本拿到退出码 2，<code>detail</code> 写明原因。下面是 PATH 里没有 claude 时的输出，第一行是 agentrun 写到标准错误的说明：</p>
+<div class="term"><span class="prompt">$</span> ./review.sh
+agentrun: claude not found in PATH
+rejected: claude not found in PATH</div>
+<p>退出码的含义：</p>
+<table>
+  <thead>
+    <tr><th>退出码</th><th>结果</th><th>你可以怎么做</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>0</td><td>正常完成</td><td>读 <code>result</code></td></tr>
+    <tr><td>1</td><td>agent 没有完成，例如模型调用失败</td><td>看 <code>detail</code>，按需重试</td></tr>
+    <tr><td>2</td><td>启动前就失败，环境或命令有问题</td><td>先改环境或命令，原样重试不会成功</td></tr>
+    <tr><td>3</td><td>超过 <code>--timeout</code></td><td>放宽时限或拆小任务</td></tr>
+    <tr><td>130、143</td><td>agentrun 被 Ctrl-C 或 SIGTERM 中断</td><td>agent 已经停止，<code>result</code> 是中断前收到的内容</td></tr>
+  </tbody>
+</table>
+
+<h2 id="next">接下来</h2>
+<ul>
+  <li>让 agent 访问网络、传入密钥、限制时间、在 docker 里运行：见<a href="guide.html">使用指南</a>。</li>
+  <li>全部命令行选项与退出码：见<a href="run.html">运行</a>。</li>
+  <li>jsonl 里每种事件的字段：见<a href="events.html">事件与输出</a>。</li>
+</ul>
+</main>
+</body>
+</html>
