@@ -231,7 +231,8 @@ fn set_up(
     };
     let debug = ready.invocation.args.debug;
     let hold = caller.signals.hold();
-    let tempdir = create_tempdir(caller, TEMPDIR_PREFIX)?;
+    let tempdir =
+        create_tempdir(caller, TEMPDIR_PREFIX).inspect_err(|_| caller.signals.finishing())?;
     caller.signals.tempdir(tempdir.path().to_path_buf(), debug);
     drop(hold);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
@@ -242,7 +243,10 @@ fn set_up(
         guards.proxy = Some(bound);
     }
     let hold = caller.signals.hold();
-    let launch = ready.adapter.launch(&ready.executable, &ready.invocation)?;
+    let launch = ready
+        .adapter
+        .launch(&ready.executable, &ready.invocation)
+        .inspect_err(|_| caller.signals.finishing())?;
     for dir in &launch.private_dirs {
         caller.signals.tempdir(dir.path.clone(), debug);
         guards.private_dirs.push(OwnedDir {
