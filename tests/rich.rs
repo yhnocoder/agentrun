@@ -5,7 +5,7 @@ mod harness;
 mod support;
 
 use std::io::Read;
-use std::process::Stdio;
+use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
 use agentrun::adapter::Adapter;
@@ -33,6 +33,7 @@ fn tests() -> Vec<(&'static str, fn())> {
         stderr_lines_enter_the_scroll_area,
         pseudo_terminal_run_ends_with_end_line_and_visible_cursor,
         no_color_turns_off_dim_labels_in_the_terminal,
+        harness_lists_its_tests_and_rejects_unknown_options,
     ]
 }
 
@@ -398,4 +399,58 @@ fn no_color_turns_off_dim_labels_in_the_terminal() {
     let bytes = run_in_pty(&[("NO_COLOR", "")]);
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("\x1b[2m[main]\x1b[0m prompt hi"), "{text:?}");
+}
+
+fn run_harness(args: &[&str]) -> Output {
+    let child = {
+        let _guard = spawn_lock();
+        Command::new(std::env::current_exe().unwrap())
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    child.wait_with_output().unwrap()
+}
+
+fn harness_stdout(args: &[&str]) -> String {
+    let output = run_harness(args);
+    assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn harness_lists_its_tests_and_rejects_unknown_options() {
+    let mut names: Vec<&str> = tests().into_iter().map(|(name, _)| name).collect();
+    names.sort();
+    let lines: String = names.iter().map(|name| format!("{name}: test\n")).collect();
+    assert_eq!(
+        harness_stdout(&["--list"]),
+        format!("{lines}\n{} tests, 0 benchmarks\n", names.len())
+    );
+    assert_eq!(
+        harness_stdout(&["--list", "--exact", "stderr_lines_enter_the_scroll_area"]),
+        "stderr_lines_enter_the_scroll_area: test\n\n1 test, 0 benchmarks\n"
+    );
+    assert_eq!(
+        harness_stdout(&["--list", "scroll"]),
+        "scroll_lines_match_text_and_panel_stays_at_bottom: test\nstderr_lines_enter_the_scroll_area: test\n\n2 tests, 0 benchmarks\n"
+    );
+    assert_eq!(harness_stdout(&["--list", "--quiet"]), lines);
+    assert_eq!(
+        harness_stdout(&["--list", "no_such_test"]),
+        "0 tests, 0 benchmarks\n"
+    );
+    assert_eq!(
+        harness_stdout(&["--list", "--ignored"]),
+        "0 tests, 0 benchmarks\n"
+    );
+    let output = run_harness(&["--bogus"]);
+    assert_eq!(output.status.code(), Some(101), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: Unrecognized option: 'bogus'\n"
+    );
 }

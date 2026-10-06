@@ -12,14 +12,62 @@ macro_rules! test_list {
 pub(crate) use test_list;
 
 pub fn run_tests(tests: Vec<(&'static str, fn())>) {
-    let filters: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .collect();
-    let selected: Vec<(&'static str, fn())> = tests
+    let mut list = false;
+    let mut exact = false;
+    let mut quiet = false;
+    let mut ignored = false;
+    let mut filters: Vec<String> = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--list" => list = true,
+            "--exact" => exact = true,
+            "--quiet" | "-q" => quiet = true,
+            "--ignored" => ignored = true,
+            "--nocapture" | "--show-output" | "--include-ignored" => {}
+            "--test-threads" => {
+                args.next();
+            }
+            _ if arg.starts_with("--test-threads=") => {}
+            _ if arg.starts_with('-') => {
+                eprintln!(
+                    "error: Unrecognized option: '{}'",
+                    arg.trim_start_matches('-')
+                );
+                std::process::exit(101);
+            }
+            _ => filters.push(arg),
+        }
+    }
+    let mut selected: Vec<(&'static str, fn())> = tests
         .into_iter()
-        .filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str())))
+        .filter(|(name, _)| {
+            !ignored
+                && (filters.is_empty()
+                    || filters.iter().any(|filter| {
+                        if exact {
+                            name == filter
+                        } else {
+                            name.contains(filter.as_str())
+                        }
+                    }))
+        })
         .collect();
+    if list {
+        selected.sort_by_key(|(name, _)| *name);
+        for (name, _) in &selected {
+            println!("{name}: test");
+        }
+        if !quiet {
+            if !selected.is_empty() {
+                println!();
+            }
+            let count = selected.len();
+            let noun = if count == 1 { "test" } else { "tests" };
+            println!("{count} {noun}, 0 benchmarks");
+        }
+        return;
+    }
     println!("\nrunning {} tests", selected.len());
     let deadline = Instant::now() + TEST_LIMIT;
     let (sender, results) = mpsc::channel();
