@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Adapter, Failure, Invocation, Launch};
-use crate::cli::{NetworkMode, Runtime};
+use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
@@ -265,6 +265,10 @@ impl Adapter for ClaudeCode {
         Runtime::ClaudeCode
     }
 
+    fn check_args(&self, _args: &RunArgs) -> Result<(), String> {
+        Ok(())
+    }
+
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
         self.cwd = invocation.cwd.clone();
         self.no_subagents = invocation.args.no_subagents;
@@ -364,6 +368,7 @@ impl Adapter for ClaudeCode {
             signal_wrapped_child: false,
             service_hosts: Vec::new(),
             wrapped: SandboxKind::None,
+            private_dirs: Vec::new(),
         })
     }
 
@@ -582,7 +587,6 @@ mod tests {
             session: Session::assemble(runtime, &[], &[], &[], &[]),
             allow_hosts: Vec::new(),
             proxy: None,
-            codex_home: None,
         }
     }
 
@@ -1108,6 +1112,12 @@ mod tests {
         assert_eq!(usage.totals.cache_write_tokens, Some(4));
         assert_eq!(usage.by_model["claude-haiku-4-5"].cache_read_tokens, None);
         assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn check_args_accepts_max_turns() {
+        let invocation = invocation(false, &["--max-turns", "3"]);
+        assert_eq!(ClaudeCode::new().check_args(&invocation.args), Ok(()));
     }
 
     #[test]

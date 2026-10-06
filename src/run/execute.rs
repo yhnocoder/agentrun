@@ -1,5 +1,7 @@
+use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, mpsc};
@@ -10,7 +12,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::signal::Signals;
-use super::{Caller, Ready, create_raw, elapsed_ms, reject};
+use super::{Caller, Guards, Resources, create_raw, elapsed_ms};
 use crate::cli::Runtime;
 use crate::network::{FilterProxy, Policy};
 use crate::output::{
@@ -18,7 +20,9 @@ use crate::output::{
     REFRESH_PERIOD, SandboxKind, Signal, Start, Translated,
 };
 use crate::process_tree;
-use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Failure, Launch, detail_tail};
+use crate::runtime::{
+    Adapter, DETAIL_MAX_CHARS, Failure, Invocation, Launch, PrivateDir, detail_tail,
+};
 use crate::sandbox::wrapper_failure;
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
@@ -32,62 +36,33 @@ pub struct Exit {
 }
 
 pub(super) fn execute(
-    mut caller: Caller,
-    ready: Ready,
-    launch: Launch,
-    plan: Vec<String>,
-    tempdir: TempDir,
-    mut proxy: Option<FilterProxy>,
+    caller: &mut Caller,
+    resources: Resources,
+    guards: &mut Guards,
     started: Instant,
-) -> u8 {
-    let Ready {
+) -> Result<u8, String> {
+    let Resources {
         invocation,
-        mut adapter,
+        adapter,
+        launch,
+        plan,
         raw,
-        ..
-    } = ready;
+    } = resources;
     let debug = invocation.args.debug;
     let (sender, receiver) = mpsc::channel();
-    if let Some(proxy) = proxy.as_mut() {
-        let policy = Policy {
-            mode: invocation.args.network,
-            rules: invocation.allow_hosts.clone(),
-            service_hosts: launch.service_hosts.clone(),
-        };
-        let reporter = sender.clone();
-        let notes = proxy.serve_session(policy, &invocation.session.env, move |network| {
-            let _ = reporter.send(Message::Network(network));
-        });
-        if debug {
-            for note in notes {
-                caller.print_error_line(&format!("[debug] {note}"));
-            }
-        }
+    if let Some(proxy) = guards.proxy.as_mut() {
+        serve_proxy(caller, proxy, &invocation, &launch, sender.clone());
     }
-    let raw = match raw {
-        Some(raw) => Some(raw),
-        None if debug => {
-            let path = tempdir.path().join("raw.jsonl");
-            match create_raw(&path) {
-                Ok(file) => Some((path, file)),
-                Err(detail) => return reject(&mut caller, invocation.format, &detail, started),
-            }
-        }
-        None => None,
-    };
+    let raw = open_raw(raw, &invocation.tempdir, debug)?;
     if debug {
-        for line in &plan {
-            caller.print_error_line(&format!("[debug] {line}"));
-        }
-        caller.print_error_line(&format!("[debug] tempdir: {}", tempdir.path().display()));
-        if let Some(home) = &invocation.codex_home {
-            caller.print_error_line(&format!("[debug] codex home: {}", home.display()));
-        }
-        if let Some((path, _)) = &raw {
-            caller.print_error_line(&format!("[debug] raw: {}", path.display()));
-        }
+        print_debug_plan(
+            caller,
+            &plan,
+            &invocation.tempdir,
+            &launch.private_dirs,
+            raw.as_ref().map(|(path, _)| path.as_path()),
+        );
     }
-    let mut raw = raw.map(|(_, file)| file);
     let color = caller.var("NO_COLOR").is_none_or(|value| value.is_empty());
     let mut output = Output::select(
         invocation.format,
@@ -98,6 +73,119 @@ pub(super) fn execute(
     );
     let rich_stderr = output.is_rich() && caller.stderr_is_terminal;
 
+    let hold = caller.signals.hold();
+    let child = match spawn_runtime(&invocation, &launch, &invocation.tempdir) {
+        Ok(child) => child,
+        Err(detail) => {
+            caller.signals.finishing();
+            let end = Event::now(Body::End(End::early(EndStatus::Failed, detail, started)));
+            caller.emit(&mut output, &end);
+            if let Some(tempdir) = guards.tempdir.take() {
+                finish_tempdir(tempdir, debug);
+            }
+            return Ok(EndStatus::Failed.exit_code());
+        }
+    };
+    caller.signals.running(
+        child.id() as i32,
+        invocation.args.timeout.map(Duration::from_secs),
+        launch.signal_wrapped_child,
+    );
+    drop(hold);
+
+    let refresh = output.is_rich();
+    let mut relay = Relay::new(
+        caller,
+        output,
+        adapter,
+        raw.map(|(_, file)| file),
+        debug,
+        rich_stderr,
+    );
+    relay.begin(start_event(&invocation, &launch), &invocation.prompt);
+    let wrapped = launch.wrapped;
+    let tail = spawn_pumps(child, launch.stdin, caller, sender, refresh, rich_stderr);
+
+    let exit_code = supervise(&receiver, &mut relay);
+    drop(receiver);
+    guards.proxy = None;
+
+    let tail = tail.lock().map(|tail| tail.clone()).unwrap_or_default();
+    let stderr_tail = stderr_tail(&String::from_utf8_lossy(&tail));
+    let exit = Exit {
+        code: exit_code,
+        signal: caller.signals.first_signal(),
+        timed_out: caller.signals.timed_out(),
+    };
+    let status = relay.finish(&exit, wrapped, &stderr_tail, started);
+    if let Some(tempdir) = guards.tempdir.take() {
+        finish_tempdir(tempdir, debug);
+    }
+    Ok(status.exit_code())
+}
+
+fn serve_proxy(
+    caller: &Caller,
+    proxy: &mut FilterProxy,
+    invocation: &Invocation,
+    launch: &Launch,
+    sender: Sender<Message>,
+) {
+    let policy = Policy {
+        mode: invocation.args.network,
+        rules: invocation.allow_hosts.clone(),
+        service_hosts: launch.service_hosts.clone(),
+    };
+    let notes = proxy.serve_session(policy, &invocation.session.env, move |network| {
+        let _ = sender.send(Message::Network(network));
+    });
+    if invocation.args.debug {
+        for note in notes {
+            caller.print_error_line(&format!("[debug] {note}"));
+        }
+    }
+}
+
+fn open_raw(
+    raw: Option<(PathBuf, File)>,
+    tempdir: &Path,
+    debug: bool,
+) -> Result<Option<(PathBuf, File)>, String> {
+    match raw {
+        Some(raw) => Ok(Some(raw)),
+        None if debug => {
+            let path = tempdir.join("raw.jsonl");
+            let file = create_raw(&path)?;
+            Ok(Some((path, file)))
+        }
+        None => Ok(None),
+    }
+}
+
+fn print_debug_plan(
+    caller: &Caller,
+    plan: &[String],
+    tempdir: &Path,
+    private_dirs: &[PrivateDir],
+    raw: Option<&Path>,
+) {
+    for line in plan {
+        caller.print_error_line(&format!("[debug] {line}"));
+    }
+    caller.print_error_line(&format!("[debug] tempdir: {}", tempdir.display()));
+    for dir in private_dirs {
+        caller.print_error_line(&format!("[debug] {}: {}", dir.label, dir.path.display()));
+    }
+    if let Some(path) = raw {
+        caller.print_error_line(&format!("[debug] raw: {}", path.display()));
+    }
+}
+
+fn spawn_runtime(
+    invocation: &Invocation,
+    launch: &Launch,
+    tempdir: &Path,
+) -> Result<Child, String> {
     let (program, program_args) = launch
         .argv
         .split_first()
@@ -114,31 +202,15 @@ pub(super) fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for key in TEMP_ENV_VARS {
-        command.env(key, tempdir.path());
+        command.env(key, tempdir);
     }
-    let hold = caller.signals.hold();
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            caller.signals.finishing();
-            let end = Event::now(Body::End(End::early(
-                EndStatus::Failed,
-                format!("failed to start {program}: {error}"),
-                started,
-            )));
-            caller.emit(&mut output, &end);
-            finish_tempdir(tempdir, debug);
-            return EndStatus::Failed.exit_code();
-        }
-    };
-    caller.signals.running(
-        child.id() as i32,
-        invocation.args.timeout.map(Duration::from_secs),
-        launch.signal_wrapped_child,
-    );
-    drop(hold);
+    command
+        .spawn()
+        .map_err(|error| format!("failed to start {program}: {error}"))
+}
 
-    let start = Event::now(Body::Start(Start {
+fn start_event(invocation: &Invocation, launch: &Launch) -> Event {
+    Event::now(Body::Start(Start {
         runtime: invocation.runtime,
         sandbox: invocation.sandbox.kind(),
         network: NetworkInfo {
@@ -155,24 +227,27 @@ pub(super) fn execute(
             .cloned()
             .collect(),
         env: invocation.session.set.clone(),
-    }));
-    caller.emit(&mut output, &start);
-    let mut aggregator = Aggregator::new(adapter.echoes_prompt());
-    for event in aggregator.begin(&invocation.prompt) {
-        caller.emit(&mut output, &event);
-    }
+    }))
+}
 
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let input = launch.stdin;
+fn spawn_pumps(
+    mut child: Child,
+    stdin: Vec<u8>,
+    caller: &Caller,
+    sender: Sender<Message>,
+    refresh: bool,
+    relay_stderr: bool,
+) -> Arc<Mutex<Vec<u8>>> {
+    let mut child_stdin = child.stdin.take().expect("stdin is piped");
     thread::spawn(move || {
-        let _ = stdin.write_all(&input);
+        let _ = child_stdin.write_all(&stdin);
     });
     let stderr = child.stderr.take().expect("stderr is piped");
     let sink = Arc::clone(&caller.stderr);
     let tail = Arc::new(Mutex::new(Vec::new()));
     let tail_writer = Arc::clone(&tail);
     let stderr_sender = sender.clone();
-    let relay = rich_stderr.then(|| sender.clone());
+    let relay = relay_stderr.then(|| sender.clone());
     thread::spawn(move || {
         forward_stderr(stderr, sink, relay, &tail_writer);
         let _ = stderr_sender.send(Message::StderrEnd);
@@ -180,7 +255,7 @@ pub(super) fn execute(
     let stdout = child.stdout.take().expect("stdout is piped");
     let stdout_sender = sender.clone();
     thread::spawn(move || read_lines(stdout, &stdout_sender));
-    if output.is_rich() {
+    if refresh {
         let refresh_sender = sender.clone();
         thread::spawn(move || {
             while refresh_sender.send(Message::Refresh).is_ok() {
@@ -190,72 +265,113 @@ pub(super) fn execute(
     }
     let exit_signals = caller.signals.clone();
     thread::spawn(move || wait_child(child, &exit_signals, &sender));
+    tail
+}
 
-    let exit_code = supervise(&caller, &receiver, |input| {
-        let Input::Line(content) = input else {
-            match input {
-                Input::Network(network) => {
-                    caller.emit(&mut output, &Event::now(Body::Network(network)));
-                }
-                Input::Stderr(bytes) => {
-                    caller.with_stdout(|stdout| output.stderr(stdout, bytes));
-                }
-                _ => caller.with_stdout(|stdout| output.refresh(stdout)),
-            }
-            return false;
-        };
-        if let Some(file) = raw.as_mut() {
-            let mut bytes = Vec::with_capacity(content.len() + 1);
-            bytes.extend_from_slice(content);
-            bytes.push(b'\n');
-            let _ = file.write_all(&bytes);
+struct Relay<'a> {
+    caller: &'a Caller,
+    output: Output,
+    aggregator: Aggregator,
+    adapter: Box<dyn Adapter>,
+    raw: Option<File>,
+    debug: bool,
+    rich_stderr: bool,
+}
+
+impl<'a> Relay<'a> {
+    fn new(
+        caller: &'a Caller,
+        output: Output,
+        adapter: Box<dyn Adapter>,
+        raw: Option<File>,
+        debug: bool,
+        rich_stderr: bool,
+    ) -> Relay<'a> {
+        Relay {
+            caller,
+            output,
+            aggregator: Aggregator::new(adapter.echoes_prompt()),
+            adapter,
+            raw,
+            debug,
+            rich_stderr,
         }
-        let translated = translate_line(content, adapter.as_mut(), &mut aggregator);
-        if output.is_rich() {
-            output.set_open_tools(aggregator.open_tools());
+    }
+
+    fn begin(&mut self, start: Event, prompt: &str) {
+        self.caller.emit(&mut self.output, &start);
+        for event in self.aggregator.begin(prompt) {
+            self.caller.emit(&mut self.output, &event);
         }
-        for event in translated.events {
-            caller.emit(&mut output, &event);
+    }
+
+    fn line(&mut self, content: &[u8]) {
+        if let Some(file) = self.raw.as_mut() {
+            let _ = file.write_all(content);
+            let _ = file.write_all(b"\n");
         }
-        if debug {
-            for line in translated.debug {
+        let translated = translate_line(content, self.adapter.as_mut(), &mut self.aggregator);
+        if self.output.is_rich() {
+            self.output.set_open_tools(self.aggregator.open_tools());
+        }
+        for event in &translated.events {
+            self.caller.emit(&mut self.output, event);
+        }
+        if self.debug {
+            for line in &translated.debug {
                 let line = format!("[debug] {line}\n");
-                if rich_stderr {
-                    caller.with_stdout(|stdout| output.stderr(stdout, line.as_bytes()));
+                if self.rich_stderr {
+                    self.caller
+                        .with_stdout(|stdout| self.output.stderr(stdout, line.as_bytes()));
                 } else {
-                    caller.print_error_line(line.trim_end());
+                    self.caller.print_error_line(line.trim_end());
                 }
             }
         }
-        translated.terminate
-    });
-    drop(receiver);
-    drop(proxy);
+        if translated.terminate {
+            self.caller.signals.kill_group();
+        }
+    }
 
-    let tail = tail.lock().map(|tail| tail.clone()).unwrap_or_default();
-    let stderr_tail = stderr_tail(&String::from_utf8_lossy(&tail));
-    let exit = Exit {
-        code: exit_code,
-        signal: caller.signals.first_signal(),
-        timed_out: caller.signals.timed_out(),
-    };
-    if output.is_rich() {
-        output.set_open_tools(OpenTools::default());
+    fn stderr(&mut self, bytes: &[u8]) {
+        self.caller
+            .with_stdout(|stdout| self.output.stderr(stdout, bytes));
     }
-    let (events, status) = conclude(
-        aggregator,
-        adapter.as_mut(),
-        launch.wrapped,
-        &exit,
-        &stderr_tail,
-        started,
-    );
-    for event in &events {
-        caller.emit(&mut output, event);
+
+    fn network(&mut self, network: Network) {
+        self.caller
+            .emit(&mut self.output, &Event::now(Body::Network(network)));
     }
-    drop(raw);
-    finish_tempdir(tempdir, debug);
-    status.exit_code()
+
+    fn refresh(&mut self) {
+        self.caller
+            .with_stdout(|stdout| self.output.refresh(stdout));
+    }
+
+    fn finish(
+        mut self,
+        exit: &Exit,
+        wrapped: SandboxKind,
+        stderr_tail: &str,
+        started: Instant,
+    ) -> EndStatus {
+        if self.output.is_rich() {
+            self.output.set_open_tools(OpenTools::default());
+        }
+        let (events, status) = conclude(
+            self.aggregator,
+            self.adapter.as_mut(),
+            wrapped,
+            exit,
+            stderr_tail,
+            started,
+        );
+        for event in &events {
+            self.caller.emit(&mut self.output, event);
+        }
+        drop(self.raw);
+        status
+    }
 }
 
 enum Message {
@@ -268,18 +384,7 @@ enum Message {
     Exited(ExitStatus),
 }
 
-enum Input<'a> {
-    Line(&'a [u8]),
-    Stderr(&'a [u8]),
-    Refresh,
-    Network(Network),
-}
-
-fn supervise(
-    caller: &Caller,
-    receiver: &Receiver<Message>,
-    mut handle: impl FnMut(Input) -> bool,
-) -> Option<i32> {
+fn supervise(receiver: &Receiver<Message>, relay: &mut Relay) -> Option<i32> {
     let mut exit_code = None;
     let mut exited = false;
     let mut stdout_ended = false;
@@ -298,19 +403,11 @@ fn supervise(
         match message {
             Some(Message::Line(line)) => {
                 let content = line.strip_suffix(b"\n").unwrap_or(&line);
-                if handle(Input::Line(content)) {
-                    caller.signals.kill_group();
-                }
+                relay.line(content);
             }
-            Some(Message::Stderr(bytes)) => {
-                handle(Input::Stderr(&bytes));
-            }
-            Some(Message::Refresh) => {
-                handle(Input::Refresh);
-            }
-            Some(Message::Network(network)) => {
-                handle(Input::Network(network));
-            }
+            Some(Message::Stderr(bytes)) => relay.stderr(&bytes),
+            Some(Message::Refresh) => relay.refresh(),
+            Some(Message::Network(network)) => relay.network(network),
             Some(Message::StdoutEnd) => stdout_ended = true,
             Some(Message::StderrEnd) => stderr_ended = true,
             Some(Message::Exited(status)) => {
@@ -337,7 +434,10 @@ fn read_lines(stdout: impl Read, sender: &Sender<Message>) {
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
-        if sender.send(Message::Line(line.clone())).is_err() {
+        if sender
+            .send(Message::Line(std::mem::take(&mut line)))
+            .is_err()
+        {
             return;
         }
     }
@@ -457,14 +557,18 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::cli::RunArgs;
     use crate::output::Record;
-    use crate::runtime::Invocation;
 
     struct Reported(Option<Failure>);
 
     impl Adapter for Reported {
         fn runtime(&self) -> Runtime {
             Runtime::Pi
+        }
+
+        fn check_args(&self, _: &RunArgs) -> Result<(), String> {
+            Ok(())
         }
 
         fn launch(&mut self, _: &Path, _: &Invocation) -> Result<Launch, String> {

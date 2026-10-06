@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, detail_head};
-use crate::cli::NetworkMode;
-use crate::cli::Runtime;
+use super::{Adapter, Failure, Invocation, Launch, detail_head, reject_max_turns};
+use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
 use crate::output::{Record, SandboxKind, TokenCounts};
@@ -147,6 +146,14 @@ impl Adapter for Pi {
         Runtime::Pi
     }
 
+    fn check_args(&self, args: &RunArgs) -> Result<(), String> {
+        reject_max_turns(args)?;
+        if let Some(model) = &args.model {
+            parse_model(model)?;
+        }
+        Ok(())
+    }
+
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
         self.model_option = invocation.args.model.clone();
         self.expected = match &invocation.args.model {
@@ -208,6 +215,7 @@ impl Adapter for Pi {
             signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts,
             wrapped: wrapped.kind,
+            private_dirs: Vec::new(),
         })
     }
 
@@ -497,7 +505,6 @@ mod tests {
                 session,
                 allow_hosts: Vec::new(),
                 proxy: None,
-                codex_home: None,
             }
         }
 
@@ -1141,6 +1148,22 @@ mod tests {
             detail,
             "--model for pi must be provider/model, got 'deepseek-flash'"
         );
+    }
+
+    #[test]
+    fn check_args_rejects_max_turns_before_the_model_format() {
+        let setup = Setup::new();
+        let check =
+            |extra: &[&str]| Pi::new().check_args(&setup.invocation(&[], false, extra).args);
+        let max_turns = Err("--max-turns is only supported by claude-code".to_string());
+        assert_eq!(check(&["--max-turns", "3"]), max_turns);
+        assert_eq!(check(&["--max-turns", "3", "--model", "bad"]), max_turns);
+        assert_eq!(
+            check(&["--model", "bad"]),
+            Err("--model for pi must be provider/model, got 'bad'".to_string())
+        );
+        assert_eq!(check(&["--model", "deepseek/deepseek-flash"]), Ok(()));
+        assert_eq!(check(&[]), Ok(()));
     }
 
     fn adapter_with_model(setup: &Setup, model: Option<&str>) -> Pi {

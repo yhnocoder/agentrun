@@ -61,8 +61,6 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
         session: Session::assemble(runtime, &[], &[], &[], &[]),
         allow_hosts: Vec::new(),
         proxy: None,
-        codex_home: (runtime == Runtime::Codex)
-            .then(|| PathBuf::from("/tmp/agentrun-replay-codex")),
     }
 }
 
@@ -83,6 +81,10 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
             let runtime = adapter.runtime();
             let mut invocation = invocation(runtime, &meta.cwd, prompt, true);
             invocation.tempdir = tempdir.path().to_path_buf();
+            invocation.args.dry_run = true;
+            if runtime == Runtime::Codex {
+                invocation.session.codex_auth = Some("{}".into());
+            }
             let launch = adapter
                 .launch(Path::new(runtime.executable()), &invocation)
                 .unwrap();

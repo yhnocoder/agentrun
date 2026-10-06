@@ -416,7 +416,7 @@ impl Doctor {
                     Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
-                if line_sender.send(line.clone()).is_err() {
+                if line_sender.send(std::mem::take(&mut line)).is_err() {
                     break;
                 }
             }
@@ -620,7 +620,6 @@ impl Doctor {
             session: target.session.clone(),
             allow_hosts: Vec::new(),
             proxy: None,
-            codex_home: None,
         };
         let launch = Pi::new().launch(executable, &invocation)?;
         let finished = self.execute(

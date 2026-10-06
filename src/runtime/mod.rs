@@ -20,6 +20,7 @@ pub const DETAIL_MAX_CHARS: usize = 500;
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
+    fn check_args(&self, args: &RunArgs) -> Result<(), String>;
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String>;
     fn echoes_prompt(&self) -> bool;
     fn translate(&mut self, line: &Value) -> Vec<Record>;
@@ -51,6 +52,13 @@ impl Failure {
     }
 }
 
+pub fn reject_max_turns(args: &RunArgs) -> Result<(), String> {
+    match args.max_turns {
+        Some(_) => Err("--max-turns is only supported by claude-code".to_string()),
+        None => Ok(()),
+    }
+}
+
 pub fn detail_head(text: &str) -> String {
     text.chars().take(DETAIL_MAX_CHARS).collect()
 }
@@ -71,7 +79,12 @@ pub struct Invocation {
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
     pub proxy: Option<ProxyEndpoint>,
-    pub codex_home: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateDir {
+    pub label: &'static str,
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +95,7 @@ pub struct Launch {
     pub signal_wrapped_child: bool,
     pub service_hosts: Vec<String>,
     pub wrapped: SandboxKind,
+    pub private_dirs: Vec<PrivateDir>,
 }
 
 #[cfg(test)]
