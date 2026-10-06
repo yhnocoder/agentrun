@@ -4,10 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
-#[cfg(target_os = "linux")]
-pub const RECORDS_DESCENDANTS: bool = false;
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub const RECORDS_DESCENDANTS: bool = true;
+#[cfg(not(target_os = "macos"))]
+pub const RECORDS_DESCENDANTS: bool = false;
 const REAP_WAIT: Duration = Duration::from_millis(200);
 const REAP_POLL: Duration = Duration::from_millis(5);
 const KILL_PASSES: usize = 3;
@@ -17,12 +17,44 @@ pub const PROC_ROOT: &str = "/proc";
 pub struct Process {
     pub pid: i32,
     pub started: String,
+    pub pgid: i32,
 }
 
 struct Entry {
     pid: i32,
     parent: i32,
+    pgid: i32,
     started: String,
+}
+
+#[derive(Default)]
+pub struct Recorded {
+    processes: Vec<Process>,
+    groups: BTreeSet<i32>,
+}
+
+impl Recorded {
+    pub fn refresh(&mut self, table: &ProcessTable, main: i32) -> Vec<i32> {
+        self.processes
+            .retain(|process| table.still_running(process));
+        let mut roots = vec![main];
+        roots.extend(self.processes.iter().map(|process| process.pid));
+        let mut new = Vec::new();
+        for found in table.descendants(&roots) {
+            if found.pgid != main {
+                self.groups.insert(found.pgid);
+            }
+            if !self.processes.contains(&found) {
+                new.push(found.pid);
+                self.processes.push(found);
+            }
+        }
+        new
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.processes.is_empty() && self.groups.is_empty()
+    }
 }
 
 pub struct ProcessTable {
@@ -76,9 +108,15 @@ impl ProcessTable {
     }
 
     pub fn still_running(&self, process: &Process) -> bool {
+        self.find(process.pid)
+            .is_some_and(|entry| entry.started == process.started)
+    }
+
+    fn find(&self, pid: i32) -> Option<&Entry> {
         self.entries
-            .binary_search_by_key(&process.pid, |entry| entry.pid)
-            .is_ok_and(|index| self.entries[index].started == process.started)
+            .binary_search_by_key(&pid, |entry| entry.pid)
+            .ok()
+            .map(|index| &self.entries[index])
     }
 }
 
@@ -87,6 +125,7 @@ impl Entry {
         Process {
             pid: self.pid,
             started: self.started.clone(),
+            pgid: self.pgid,
         }
     }
 }
@@ -106,6 +145,85 @@ fn claims_orphans() -> bool {
 
 #[cfg(not(target_os = "linux"))]
 pub fn claim_orphans() {}
+
+pub struct ForkWatcher {
+    #[cfg(target_os = "macos")]
+    queue: libc::c_int,
+}
+
+#[cfg(target_os = "macos")]
+impl ForkWatcher {
+    pub fn start(main: i32) -> Option<ForkWatcher> {
+        let queue = unsafe { libc::kqueue() };
+        if queue < 0 {
+            return None;
+        }
+        let watcher = ForkWatcher { queue };
+        watcher.track(main);
+        Some(watcher)
+    }
+
+    pub fn track(&self, pid: i32) {
+        let change = libc::kevent {
+            ident: pid as libc::uintptr_t,
+            filter: libc::EVFILT_PROC,
+            flags: libc::EV_ADD | libc::EV_CLEAR,
+            fflags: libc::NOTE_FORK | libc::NOTE_EXIT,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        unsafe {
+            libc::kevent(
+                self.queue,
+                &change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            );
+        }
+    }
+
+    pub fn wait(&self, timeout: Duration) {
+        let mut events: [libc::kevent; 16] = unsafe { std::mem::zeroed() };
+        let timeout = libc::timespec {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_nsec: timeout.subsec_nanos() as libc::c_long,
+        };
+        unsafe {
+            libc::kevent(
+                self.queue,
+                std::ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                events.len() as libc::c_int,
+                &timeout,
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ForkWatcher {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.queue);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl ForkWatcher {
+    pub fn start(_main: i32) -> Option<ForkWatcher> {
+        None
+    }
+
+    pub fn track(&self, _pid: i32) {}
+
+    pub fn wait(&self, timeout: Duration) {
+        thread::sleep(timeout);
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn list_pids() -> Vec<libc::pid_t> {
@@ -137,6 +255,7 @@ fn bsd_info(pid: libc::pid_t) -> Option<Entry> {
     Some(Entry {
         pid,
         parent: info.pbi_ppid as i32,
+        pgid: info.pbi_pgid as i32,
         started: format!("{}.{:06}", info.pbi_start_tvsec, info.pbi_start_tvusec),
     })
 }
@@ -146,15 +265,12 @@ fn claims_orphans() -> bool {
     false
 }
 
-pub fn record_descendants(main: i32) -> Vec<Process> {
-    ProcessTable::snapshot().descendants(&[main])
-}
-
-pub fn kill_tree(parents: &[i32], recorded: &[Process]) {
+pub fn kill_tree(parents: &[i32], recorded: &Recorded) {
     let own = std::process::id() as i32;
     for _ in 0..KILL_PASSES {
         let table = ProcessTable::snapshot();
         let mut targets: BTreeSet<Process> = recorded
+            .processes
             .iter()
             .filter(|process| table.still_running(process))
             .cloned()
@@ -167,10 +283,21 @@ pub fn kill_tree(parents: &[i32], recorded: &[Process]) {
         targets.extend(table.descendants(&roots));
         targets.retain(|process| process.pid != own && !parents.contains(&process.pid));
         let killed: Vec<i32> = targets
-            .into_iter()
+            .iter()
             .map(|process| process.pid)
             .filter(|pid| unsafe { libc::kill(*pid, libc::SIGKILL) } == 0)
             .collect();
+        for pgid in &recorded.groups {
+            let leader_is_ours = match table.find(*pgid) {
+                None => true,
+                Some(leader) => targets.iter().any(|process| process.pid == leader.pid),
+            };
+            if leader_is_ours && !parents.contains(pgid) && *pgid != own {
+                unsafe {
+                    libc::killpg(*pgid, libc::SIGKILL);
+                }
+            }
+        }
         if killed.is_empty() {
             return;
         }
@@ -220,6 +347,7 @@ fn read_stat(proc_root: &Path, pid: i32) -> Option<Entry> {
     Some(Entry {
         pid,
         parent: fields.get(1)?.parse().ok()?,
+        pgid: fields.get(2)?.parse().ok()?,
         started: fields.get(19)?.to_string(),
     })
 }
@@ -311,6 +439,33 @@ mod tests {
         assert_eq!(table.descendants(&[300]), Vec::<Process>::new());
         assert_eq!(pids(&table.descendants(&[100, 200])), vec![300]);
         assert_eq!(table.descendants(&[8]), Vec::<Process>::new());
+    }
+
+    #[test]
+    fn recorded_processes_accumulate_groups_and_drop_exited_ones() {
+        let root = tempfile::tempdir().unwrap();
+        write_proc(root.path(), 100, 1, None);
+        write_proc(root.path(), 200, 100, None);
+        write_proc(root.path(), 300, 200, None);
+        let mut recorded = Recorded::default();
+        assert!(recorded.is_empty());
+        let new = recorded.refresh(&ProcessTable::read_proc(root.path()), 100);
+        assert_eq!(new, vec![200, 300]);
+        assert_eq!(
+            recorded.groups.iter().copied().collect::<Vec<_>>(),
+            vec![200, 300]
+        );
+        std::fs::remove_dir_all(root.path().join("200")).unwrap();
+        write_proc_state(root.path(), 300, 1, "S", 100, None);
+        write_proc(root.path(), 400, 300, None);
+        let new = recorded.refresh(&ProcessTable::read_proc(root.path()), 100);
+        assert_eq!(new, vec![400]);
+        assert_eq!(pids(&recorded.processes), vec![300, 400]);
+        assert_eq!(
+            recorded.groups.iter().copied().collect::<Vec<_>>(),
+            vec![200, 300, 400]
+        );
+        assert!(!recorded.is_empty());
     }
 
     #[test]

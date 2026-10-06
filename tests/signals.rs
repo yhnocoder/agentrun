@@ -6,6 +6,7 @@ mod support;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,13 +23,15 @@ use tempfile::TempDir;
 
 const FAKE_AGENTRUN: &str = "AGENTRUN_SIGNALS_TEST_FAKE_AGENTRUN";
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
-const DETACHED_SLEEPER: &str = "AGENTRUN_SIGNALS_TEST_DETACHED_SLEEPER";
+const ROLE: &str = "AGENTRUN_SIGNALS_TEST_ROLE";
+const ROLE_PIDFILE: &str = "AGENTRUN_SIGNALS_TEST_PIDFILE";
 const READY: &str = r#"{"record":"text","parent":null,"text":"ready"}"#;
 const GOT_SIGNAL: &str = r#"{\"record\":\"text\",\"parent\":null,\"text\":\"got signal\"}"#;
 
 fn main() {
-    if let Some(pidfile) = std::env::var_os(DETACHED_SLEEPER) {
-        detached_sleeper(&PathBuf::from(pidfile));
+    if let Some(role) = std::env::var_os(ROLE) {
+        let pidfile = PathBuf::from(std::env::var_os(ROLE_PIDFILE).unwrap());
+        play_role(role.to_str().unwrap(), &pidfile);
     }
     if std::env::var_os(FAKE_AGENTRUN).is_some() {
         std::process::exit(fake_agentrun().into());
@@ -53,6 +56,10 @@ fn main() {
         (
             "detached_process_in_sandbox_is_killed_after_exit",
             detached_process_in_sandbox_is_killed_after_exit,
+        ),
+        (
+            "orphan_in_a_new_process_group_is_killed_after_exit",
+            orphan_in_a_new_process_group_is_killed_after_exit,
         ),
         (
             "sigint_is_forwarded_to_the_runtime",
@@ -103,10 +110,39 @@ fn main() {
     harness::run_tests(tests);
 }
 
-fn detached_sleeper(pidfile: &Path) -> ! {
-    unsafe {
-        libc::setsid();
+fn play_role(role: &str, pidfile: &Path) -> ! {
+    match role {
+        "detached" => {
+            unsafe {
+                libc::setsid();
+            }
+            sleeper(pidfile);
+        }
+        "sleeper" => sleeper(pidfile),
+        "shell" => {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .env(ROLE, "command")
+                .process_group(0)
+                .status()
+                .unwrap();
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        "command" => {
+            Command::new(std::env::current_exe().unwrap())
+                .env(ROLE, "sleeper")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            thread::sleep(Duration::from_millis(20));
+            std::process::exit(0);
+        }
+        other => panic!("unknown role {other}"),
     }
+}
+
+fn sleeper(pidfile: &Path) -> ! {
     std::fs::write(pidfile, std::process::id().to_string()).unwrap();
     thread::sleep(Duration::from_secs(30));
     std::process::exit(0);
@@ -339,9 +375,13 @@ fn wait_until_gone(pid: i32) -> bool {
 }
 
 fn spawn_detached_sleeper(pidfile: &str) -> String {
+    spawn_role("detached", pidfile)
+}
+
+fn spawn_role(role: &str, pidfile: &str) -> String {
     let exe = std::env::current_exe().unwrap();
     format!(
-        "{DETACHED_SLEEPER}=\"{pidfile}\" \"{}\" </dev/null >/dev/null 2>&1 &\nwhile [ ! -s \"{pidfile}\" ]; do sleep 0.05; done\n",
+        "{ROLE}={role} {ROLE_PIDFILE}=\"{pidfile}\" \"{}\" </dev/null >/dev/null 2>&1 &\nwhile [ ! -s \"{pidfile}\" ]; do sleep 0.05; done\n",
         exe.display()
     )
 }
@@ -399,6 +439,17 @@ fn detached_process_is_killed_after_timeout() {
         .finish(&env);
     assert_eq!(outcome.code, 3);
     assert_eq!(outcome.end()["status"], "timeout");
+    assert_sleeper_gone(&env.root.path().join("pid"));
+}
+
+fn orphan_in_a_new_process_group_is_killed_after_exit() {
+    let env = Env::new(&format!(
+        "{}sleep 2\nexit 0\n",
+        spawn_role("shell", "$PIDFILE")
+    ));
+    let outcome = env.start(&[], true, Stdio::null()).finish(&env);
+    assert_eq!(outcome.code, 0);
+    assert_eq!(outcome.end()["status"], "finished");
     assert_sleeper_gone(&env.root.path().join("pid"));
 }
 

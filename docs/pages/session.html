@@ -117,7 +117,7 @@ GREETING='hello world'</code></pre>
   <li>运行时启动在新的进程组里，终端的 Ctrl-C 只发给 agentrun，由 agentrun 转发。pi 被包裹时，包裹命令是进程组的首进程，退出码透传 pi 的退出码。</li>
   <li>提示词写入标准输入后关闭（claude-code 写成一行 JSON 消息，见<a href="run.html#claude-code">运行</a>页的 claude-code 一节；pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
   <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再按进程树清理进程组之外的后代进程（见下一条），然后最多等 1 秒读完剩余的输出，输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 waitpid 判断主进程退出，不用标准输出的 EOF 判断。</li>
-  <li>按进程树清理：pi 的 bash 工具和沙箱外的 claude-code 用 setsid 启动命令，命令在新会话里，不在进程组内，进程组的 SIGKILL 发不到。Linux 上 agentrun 启动时用 <code>prctl(PR_SET_CHILD_SUBREAPER)</code> 把自己设为 child subreaper，运行时退出后留下的孤儿进程改挂到 agentrun 下，不挂到 1 号进程；主进程退出后，agentrun 读一遍 <code>/proc/&lt;进程号&gt;/stat</code> 里的父进程号，以主进程和自己为根找出全部后代，逐个 SIGKILL，最多等 200 毫秒回收它们，再查一遍进程树，至多三轮。运行期间不做任何事。macOS 没有 subreaper，孤儿进程挂到 launchd，退出后找不回来，所以 agentrun 在运行期间每 1 秒用 libproc（<code>proc_listallpids</code> 与 <code>proc_pidinfo</code>，不启动 <code>ps</code>）记录一次主进程的全部后代，转发信号、超时和适配器要求终止之前再记录一次；记录的内容是进程号加启动时间，进程号被回收并分给无关进程时启动时间对不上，就不再当作本次运行的进程。主进程退出后，以仍在运行的记录进程和主进程为根找出后代，连同这些记录进程一起清理，清理方式与 Linux 相同。启动前检查期间收到信号时，检查进程及其后代也按同样的方法清理。</li>
+  <li>按进程树清理：pi 的 bash 工具和沙箱外的 claude-code 用 setsid 启动命令，命令在新会话里，不在进程组内，进程组的 SIGKILL 发不到。Linux 上 agentrun 启动时用 <code>prctl(PR_SET_CHILD_SUBREAPER)</code> 把自己设为 child subreaper，运行时退出后留下的孤儿进程改挂到 agentrun 下，不挂到 1 号进程；主进程退出后，agentrun 读一遍 <code>/proc/&lt;进程号&gt;/stat</code> 里的父进程号，以主进程和自己为根找出全部后代，逐个 SIGKILL，最多等 200 毫秒回收它们，再查一遍进程树，至多三轮。运行期间不做任何事。macOS 没有 subreaper，孤儿进程挂到 launchd，退出后找不回来，而且命令常常启动后台进程后立刻退出（例如 node 的 <code>spawn</code> 加 <code>unref</code>），后台进程在几毫秒内就成了孤儿，所以 agentrun 用 kqueue 的 <code>EVFILT_PROC</code> 加 <code>NOTE_FORK</code> 监视主进程和它的每一个后代：任何一个被监视的进程 fork 时，agentrun 立刻用 libproc（<code>proc_listallpids</code> 与 <code>proc_pidinfo</code>，不启动 <code>ps</code>）读一遍进程表，把新出现的后代记下来并加入监视，另外每 1 秒也读一遍兜底。记录的内容是进程号、启动时间和进程组号：进程号被回收并分给无关进程时启动时间对不上，就不再当作本次运行的进程；进程组号在后台进程换了父进程之后也不变，XNU 不会把仍被某个进程组占用的号分给新进程。主进程退出后，以仍在运行的记录进程和主进程为根找出后代，连同这些记录进程一起清理，再向记录过的每个进程组发 SIGKILL，组长进程还在但不是记录的进程时跳过这个组。启动前检查期间收到信号时，检查进程及其后代也按同样的方法清理。</li>
   <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
   <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>
   <li>pi 被 <code>bwrap</code> 包裹时，第一个信号（转发的 SIGINT 或 SIGTERM，以及超时的 SIGTERM）只发给 bwrap 的子进程 pi，不发给进程组：agentrun 读 <code>/proc/&lt;bwrap 进程号&gt;/task/&lt;bwrap 进程号&gt;/children</code> 找到它，读不到时扫描 <code>/proc/*/stat</code> 找父进程是 bwrap 的进程；都找不到时仍向进程组发信号。之后的 SIGKILL 仍发给整个进程组。理由：bwrap 0.9.0 不转发 SIGTERM，向进程组发信号时 bwrap 自己退出，<code>--die-with-parent</code> 随即 SIGKILL 被包裹的 pi，pi 没有宽限期，正在改写的 <code>auth.json</code> 可能写坏（云端实测）。pi 自己的子进程收不到第一个信号，由最后的 SIGKILL 清理。</li>
@@ -128,7 +128,7 @@ GREETING='hello world'</code></pre>
 <figcaption>任何结束方式最后都向整个进程组发 SIGKILL，再按进程树清理离开了进程组的进程，运行时启动的后台命令不会留下。</figcaption>
 </figure>
 <p>是否被中断只看 agentrun 自己收到的信号与自己的计时，不看运行时的退出码与事件。理由：实测 claude-code 收到 SIGINT 后以退出码 0 结束，SIGTERM 后以 143 结束且没有 result；pi 收到 SIGINT 后以 130 结束，最后没有 <code>message_end</code>；codex 收到 SIGTERM 后在 macOS 上以 143 结束，在 Linux 上以 0 结束。</p>
-<p>已知限制：macOS 上主进程自然退出前 1 秒内启动的进程可能清理不到。</p>
+<p>已知限制：macOS 上一个进程在 fork 之后、agentrun 读到进程表之前（约 1 毫秒）就退出时，它刚启动的子进程记录不到；子进程还在同一个进程组里时仍会被清理。</p>
 </main>
 </body>
 </html>

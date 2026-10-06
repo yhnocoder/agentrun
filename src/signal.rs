@@ -11,7 +11,8 @@ use crate::cli::{Format, SandboxMode};
 use crate::event::{Body, End, EndStatus, Event};
 use crate::output::Output;
 use crate::process_tree::{
-    self, PROC_ROOT, Process, RECORDS_DESCENDANTS, SNAPSHOT_PERIOD, wrapped_child,
+    self, ForkWatcher, PROC_ROOT, ProcessTable, RECORDS_DESCENDANTS, Recorded, SNAPSHOT_PERIOD,
+    wrapped_child,
 };
 use crate::usage::Usage;
 
@@ -85,7 +86,7 @@ impl Doctoring {
             kill_group(pid, libc::SIGKILL);
             kill_process(pid, libc::SIGKILL);
         }
-        process_tree::kill_tree(self.check_pid.as_slice(), &[]);
+        process_tree::kill_tree(self.check_pid.as_slice(), &Recorded::default());
         if let (Some(tempdir), false) = (&self.tempdir, self.keep_tempdir) {
             let _ = std::fs::remove_dir_all(tempdir);
         }
@@ -108,21 +109,13 @@ struct Running {
     signal_wrapped_child: bool,
     terminating: bool,
     deadline: Option<Instant>,
-    descendants: Vec<Process>,
-    recorded_at: Instant,
+    recorded: Recorded,
 }
 
 impl Running {
     fn record(&mut self) {
         if RECORDS_DESCENDANTS {
-            self.store(Instant::now(), process_tree::record_descendants(self.pgid));
-        }
-    }
-
-    fn store(&mut self, recorded_at: Instant, descendants: Vec<Process>) {
-        if recorded_at >= self.recorded_at {
-            self.descendants = descendants;
-            self.recorded_at = recorded_at;
+            self.recorded.refresh(&ProcessTable::snapshot(), self.pgid);
         }
     }
 
@@ -250,14 +243,13 @@ impl Signals {
             signal_wrapped_child,
             terminating: false,
             deadline: timeout.map(|timeout| Instant::now() + timeout),
-            descendants: Vec::new(),
-            recorded_at: Instant::now(),
+            recorded: Recorded::default(),
         });
         let watcher = Arc::clone(&self.shared);
         thread::spawn(move || watcher.watch());
         if RECORDS_DESCENDANTS {
             let recorder = Arc::clone(&self.shared);
-            thread::spawn(move || recorder.record());
+            thread::spawn(move || recorder.record(pgid));
         }
     }
 
@@ -271,7 +263,7 @@ impl Signals {
         let mut state = self.shared.lock();
         if let Phase::Running(running) = &state.phase {
             kill_group(running.pgid, libc::SIGKILL);
-            process_tree::kill_tree(&[running.pgid], &running.descendants);
+            process_tree::kill_tree(&[running.pgid], &running.recorded);
         }
         state.phase = Phase::Finishing;
         self.shared.changed.notify_all();
@@ -344,14 +336,19 @@ impl Shared {
         }
     }
 
-    fn record(&self) {
-        while let Some(pgid) = self.running_pgid() {
-            let recorded_at = Instant::now();
-            let descendants = process_tree::record_descendants(pgid);
-            if let Phase::Running(running) = &mut self.lock().phase {
-                running.store(recorded_at, descendants);
+    fn record(&self, main: i32) {
+        let Some(watcher) = ForkWatcher::start(main) else {
+            return;
+        };
+        while self.running_pgid().is_some() {
+            watcher.wait(SNAPSHOT_PERIOD);
+            let table = ProcessTable::snapshot();
+            let Phase::Running(running) = &mut self.lock().phase else {
+                return;
+            };
+            for pid in running.recorded.refresh(&table, main) {
+                watcher.track(pid);
             }
-            thread::sleep(SNAPSHOT_PERIOD);
         }
     }
 
@@ -368,7 +365,7 @@ impl Preparation {
         if let Some(pid) = self.check_pid {
             kill_process(pid, libc::SIGKILL);
         }
-        process_tree::kill_tree(self.check_pid.as_slice(), &[]);
+        process_tree::kill_tree(self.check_pid.as_slice(), &Recorded::default());
         let status = EndStatus::Interrupted(signal);
         let end = Event::now(Body::End(End {
             status,
