@@ -25,8 +25,8 @@ use crate::pi::{self, Model, Pi};
 use crate::process_tree;
 use crate::run::{Caller, Invocation, create_tempdir, shell_quote};
 use crate::sandbox::{
-    self, BWRAP_PREFIX, CANNOT_START_HINT, ProxyForward, Sandbox, UNAVAILABLE_PREFIX, wrap_pi,
-    wrap_seatbelt, write_seatbelt_profile,
+    self, BWRAP_PREFIX, CANNOT_START_HINT, PiState, ProxyForward, Sandbox, UNAVAILABLE_PREFIX,
+    wrap_pi, wrap_seatbelt, write_seatbelt_profile,
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::signal::Signal;
@@ -610,10 +610,6 @@ impl Doctor {
             .join(pi::SETTINGS_FILE)
     }
 
-    fn pi_login_file(&self, target: &Target) -> Option<PathBuf> {
-        pi::login_file(pi::user_state_dir(&target.session, &self.cwd).as_deref())
-    }
-
     fn pi_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
         let (expected, source) = self.pi_expected_model(target)?;
         let tempdir = self.tempdir.join(PI_LOGIN_DIR);
@@ -761,9 +757,12 @@ impl Doctor {
         network: NetworkMode,
         port: Option<&str>,
     ) -> Result<Wrap, String> {
-        let login = (target.runtime == Runtime::Pi)
-            .then(|| self.pi_login_file(target))
-            .flatten();
+        let state = match target.runtime {
+            Runtime::Pi => pi::user_state_dir(&target.session, &self.cwd)
+                .map(|dir| pi::prepare_state(&dir))
+                .transpose()?,
+            _ => None,
+        };
         match sandbox.kind {
             SandboxKind::Bubblewrap => {
                 let bwrap = sandbox
@@ -785,12 +784,12 @@ impl Doctor {
                     bwrap,
                     work: dirs.work.clone(),
                     tmp: dirs.tmp.clone(),
-                    login,
+                    state,
                     forward,
                 })
             }
             SandboxKind::Seatbelt => {
-                write_seatbelt_profile(&dirs.work, &dirs.tmp, login.as_deref(), port).map_err(
+                write_seatbelt_profile(&dirs.work, &dirs.tmp, state.as_ref(), port).map_err(
                     |error| {
                         format!(
                             "cannot write the sandbox profile in {}: {error}",
@@ -1106,17 +1105,9 @@ fn unknown_model_warning(finished: &Finished) -> Option<&str> {
 }
 
 fn remove_login_links(tempdir: &Path) {
-    let links = [
-        tempdir.join(CODEX_HOME_DIR).join(codex::LOGIN_FILE),
-        tempdir
-            .join(PI_LOGIN_DIR)
-            .join(pi::PRIVATE_STATE_DIR)
-            .join(pi::LOGIN_FILE),
-    ];
-    for link in links {
-        if std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink()) {
-            let _ = std::fs::remove_file(&link);
-        }
+    let link = tempdir.join(CODEX_HOME_DIR).join(codex::LOGIN_FILE);
+    if std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink()) {
+        let _ = std::fs::remove_file(&link);
     }
 }
 
@@ -1169,7 +1160,7 @@ enum Wrap {
         bwrap: PathBuf,
         work: PathBuf,
         tmp: PathBuf,
-        login: Option<PathBuf>,
+        state: Option<PiState>,
         forward: Option<Forward>,
     },
     Seatbelt {
@@ -1195,7 +1186,7 @@ impl Wrap {
                 bwrap,
                 work,
                 tmp,
-                login,
+                state,
                 forward,
             } => {
                 let forward = forward.as_ref().map(|forward| ProxyForward {
@@ -1203,7 +1194,7 @@ impl Wrap {
                     port: &forward.port,
                     socket: &forward.socket,
                 });
-                wrap_pi(bwrap, work, tmp, login.as_deref(), forward.as_ref(), inner)
+                wrap_pi(bwrap, work, tmp, state.as_ref(), forward.as_ref(), inner)
             }
             Wrap::Seatbelt { tmp } => wrap_seatbelt(tmp, inner),
             Wrap::Codex { prefix } => {

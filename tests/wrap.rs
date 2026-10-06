@@ -10,7 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use agentrun::event::SandboxKind;
-use agentrun::sandbox::{ProxyForward, wrap_pi, wrapper_failure};
+use agentrun::pi::state;
+use agentrun::sandbox::{PiState, ProxyForward, wrap_pi, wrapper_failure};
 use tempfile::TempDir;
 
 struct Wrapped {
@@ -57,6 +58,9 @@ impl Wrapped {
         for dir in [wrapped.cwd(), wrapped.tempdir(), wrapped.home()] {
             std::fs::create_dir(dir).unwrap();
         }
+        std::fs::create_dir_all(wrapped.state_dir()).unwrap();
+        std::fs::write(wrapped.state_dir().join("auth.json"), "{}").unwrap();
+        std::fs::write(wrapped.state_dir().join("settings.json"), "{}").unwrap();
         Some(wrapped)
     }
 
@@ -76,8 +80,8 @@ impl Wrapped {
         self.home().join(".pi/agent")
     }
 
-    fn login_file(&self) -> PathBuf {
-        self.state_dir().join("auth.json")
+    fn real_state_dir(&self) -> PathBuf {
+        std::fs::canonicalize(self.state_dir()).unwrap()
     }
 
     fn script(&self, body: &str) -> PathBuf {
@@ -97,8 +101,7 @@ impl Wrapped {
         args: &[&str],
         forward: Option<&ProxyForward>,
     ) -> Command {
-        std::fs::create_dir_all(self.state_dir()).unwrap();
-        std::fs::write(self.login_file(), "{}").unwrap();
+        let state = state(&self.state_dir()).unwrap();
         let script = self.script(body);
         let mut argv = vec![script.to_string_lossy().into_owned()];
         argv.extend(args.iter().map(|arg| arg.to_string()));
@@ -106,7 +109,7 @@ impl Wrapped {
             &self.bwrap,
             &self.cwd(),
             &self.tempdir(),
-            Some(&self.login_file()),
+            Some(&state),
             forward,
             &argv,
         );
@@ -132,7 +135,7 @@ fn stdout(output: &Output) -> String {
 }
 
 #[test]
-fn writes_only_cwd_tempdir_and_login_file() {
+fn writes_only_cwd_tempdir_and_the_writable_state_entries() {
     let Some(wrapped) = Wrapped::new() else {
         return;
     };
@@ -141,13 +144,15 @@ fn writes_only_cwd_tempdir_and_login_file() {
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     ));
+    let state_dir = wrapped.real_state_dir();
     let output = wrapped.run(
         "for f in \"$@\"; do if echo probe > \"$f\" 2>/dev/null; then echo \"written: $f\"; else echo \"blocked: $f\"; fi; done\n",
         &[
             wrapped.cwd().join("inside.txt").to_str().unwrap(),
             wrapped.tempdir().join("temp.txt").to_str().unwrap(),
-            wrapped.login_file().to_str().unwrap(),
-            wrapped.state_dir().join("state.txt").to_str().unwrap(),
+            state_dir.join("auth.json").to_str().unwrap(),
+            state_dir.join("models-store.json").to_str().unwrap(),
+            state_dir.join("settings.json").to_str().unwrap(),
             wrapped.home().join("outside.txt").to_str().unwrap(),
             other_tmp.to_str().unwrap(),
         ],
@@ -162,18 +167,62 @@ fn writes_only_cwd_tempdir_and_login_file() {
     assert_eq!(
         lines,
         [
-            "written", "written", "written", "blocked", "blocked", "blocked"
+            "written", "written", "written", "written", "blocked", "blocked", "blocked"
         ]
     );
     assert!(wrapped.cwd().join("inside.txt").exists());
     assert!(wrapped.tempdir().join("temp.txt").exists());
     assert_eq!(
-        std::fs::read_to_string(wrapped.login_file()).unwrap(),
+        std::fs::read_to_string(state_dir.join("auth.json")).unwrap(),
         "probe\n"
     );
-    assert!(!wrapped.state_dir().join("state.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("models-store.json")).unwrap(),
+        "probe\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("settings.json")).unwrap(),
+        "{}"
+    );
     assert!(!wrapped.home().join("outside.txt").exists());
     assert!(!other_tmp.exists());
+}
+
+#[test]
+fn lock_directories_can_be_created_and_removed_in_the_state_dir() {
+    let Some(wrapped) = Wrapped::new() else {
+        return;
+    };
+    let state_dir = wrapped.real_state_dir();
+    let output = wrapped.run(
+        "for d in \"$@\"; do if mkdir \"$d\" 2>/dev/null; then echo \"created: $d\"; rmdir \"$d\" && echo \"removed: $d\"; else echo \"blocked: $d\"; fi; done\n",
+        &[
+            state_dir.join("auth.json.lock").to_str().unwrap(),
+            state_dir.join("models-store.json.lock").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = stdout(&output);
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|line| line.split(':').next().unwrap())
+        .collect();
+    assert_eq!(lines, ["created", "removed", "created", "removed"]);
+    assert!(!state_dir.join("auth.json.lock").exists());
+}
+
+#[test]
+fn new_entries_in_the_state_dir_are_a_remaining_risk() {
+    let Some(wrapped) = Wrapped::new() else {
+        return;
+    };
+    let state_dir = wrapped.real_state_dir();
+    let output = wrapped.run(
+        "mkdir \"$1\" && echo created\n",
+        &[state_dir.join("extensions").to_str().unwrap()],
+    );
+    assert_eq!(stdout(&output).trim(), "created", "{output:?}");
+    assert!(state_dir.join("extensions").is_dir());
 }
 
 #[test]
@@ -286,7 +335,11 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
     let Some(wrapped) = Wrapped::new() else {
         return;
     };
-    let missing = wrapped.root.path().join("missing");
+    let missing = PiState {
+        dir: wrapped.root.path().join("missing"),
+        login_target: None,
+        readonly: Vec::new(),
+    };
     let argv = vec!["/bin/true".to_string()];
     let bad = wrap_pi(
         &wrapped.bwrap,

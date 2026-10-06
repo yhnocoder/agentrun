@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
 use crate::event::SandboxKind;
+use crate::pi::WRITABLE_STATE_ENTRIES;
 use crate::process_tree;
 use crate::session::Session;
 use crate::signal::Signals;
@@ -338,11 +339,18 @@ pub struct ProxyForward<'a> {
     pub socket: &'a Path,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PiState {
+    pub dir: PathBuf,
+    pub login_target: Option<PathBuf>,
+    pub readonly: Vec<PathBuf>,
+}
+
 pub fn wrap_pi(
     bwrap: &Path,
     cwd: &Path,
     tempdir: &Path,
-    login_file: Option<&Path>,
+    state: Option<&PiState>,
     forward: Option<&ProxyForward>,
     argv: &[String],
 ) -> Vec<String> {
@@ -353,15 +361,21 @@ pub fn wrap_pi(
         "/".to_string(),
         "/".to_string(),
     ];
-    let mut bind = |path: &Path| {
-        wrapped.push("--bind".to_string());
+    let mut mount = |option: &str, path: &Path| {
+        wrapped.push(option.to_string());
         wrapped.push(text(path));
         wrapped.push(text(path));
     };
-    bind(cwd);
-    bind(tempdir);
-    if let Some(login_file) = login_file {
-        bind(login_file);
+    mount("--bind", cwd);
+    mount("--bind", tempdir);
+    if let Some(state) = state {
+        mount("--bind", &state.dir);
+        for entry in &state.readonly {
+            mount("--ro-bind", entry);
+        }
+        if let Some(login_target) = &state.login_target {
+            mount("--bind", login_target);
+        }
     }
     wrapped.extend(
         [
@@ -392,7 +406,7 @@ pub fn wrap_pi(
 pub fn seatbelt_profile(
     cwd: &Path,
     tempdir: &Path,
-    login_file: Option<&Path>,
+    state: Option<&PiState>,
     port: Option<&str>,
 ) -> String {
     let quoted = |path: &Path| {
@@ -403,8 +417,13 @@ pub fn seatbelt_profile(
         String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
     profile.push_str(&format!("  (subpath {})\n", quoted(cwd)));
     profile.push_str(&format!("  (subpath {})\n", quoted(tempdir)));
-    if let Some(login_file) = login_file {
-        profile.push_str(&format!("  (literal {})\n", quoted(login_file)));
+    if let Some(state) = state {
+        for name in WRITABLE_STATE_ENTRIES {
+            profile.push_str(&format!("  (literal {})\n", quoted(&state.dir.join(name))));
+        }
+        if let Some(login_target) = &state.login_target {
+            profile.push_str(&format!("  (literal {})\n", quoted(login_target)));
+        }
     }
     profile.push_str(concat!(
         "  (literal \"/dev/null\")\n",
@@ -425,13 +444,13 @@ pub fn seatbelt_profile(
 pub fn write_seatbelt_profile(
     cwd: &Path,
     tempdir: &Path,
-    login_file: Option<&Path>,
+    state: Option<&PiState>,
     port: Option<&str>,
 ) -> std::io::Result<()> {
     let profile = seatbelt_profile(
         &std::fs::canonicalize(cwd)?,
         &std::fs::canonicalize(tempdir)?,
-        login_file,
+        state,
         port,
     );
     OpenOptions::new()
@@ -601,12 +620,25 @@ mod tests {
         assert_eq!(codex.description, "codex");
     }
 
+    fn state(dir: &str, login_target: Option<&str>, readonly: &[&str]) -> PiState {
+        PiState {
+            dir: PathBuf::from(dir),
+            login_target: login_target.map(PathBuf::from),
+            readonly: readonly.iter().map(PathBuf::from).collect(),
+        }
+    }
+
     #[test]
     fn seatbelt_profile_allows_writes_to_the_given_paths_and_the_proxy_port() {
+        let state = state(
+            "/Users/me/.pi/agent",
+            Some("/Users/me/secrets/pi-auth.json"),
+            &["/Users/me/.pi/agent/settings.json"],
+        );
         let profile = seatbelt_profile(
             Path::new("/private/var/work"),
             Path::new("/private/tmp/agentrun-x"),
-            Some(Path::new("/Users/me/.pi/agent/auth.json")),
+            Some(&state),
             Some("41234"),
         );
         assert_eq!(
@@ -619,6 +651,10 @@ mod tests {
                 "  (subpath \"/private/var/work\")\n",
                 "  (subpath \"/private/tmp/agentrun-x\")\n",
                 "  (literal \"/Users/me/.pi/agent/auth.json\")\n",
+                "  (literal \"/Users/me/.pi/agent/auth.json.lock\")\n",
+                "  (literal \"/Users/me/.pi/agent/models-store.json\")\n",
+                "  (literal \"/Users/me/.pi/agent/models-store.json.lock\")\n",
+                "  (literal \"/Users/me/secrets/pi-auth.json\")\n",
                 "  (literal \"/dev/null\")\n",
                 "  (literal \"/dev/zero\")\n",
                 "  (literal \"/dev/tty\")\n",
@@ -631,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn seatbelt_profile_without_login_file_or_port_and_with_quotes_in_paths() {
+    fn seatbelt_profile_without_state_or_port_and_with_quotes_in_paths() {
         let profile = seatbelt_profile(Path::new("/work/a\"b"), Path::new("/tmp/c\\d"), None, None);
         assert!(
             profile.contains("  (subpath \"/work/a\\\"b\")\n  (subpath \"/tmp/c\\\\d\")\n  (literal \"/dev/null\")\n"),
@@ -639,6 +675,18 @@ mod tests {
         );
         assert!(!profile.contains("auth.json"), "{profile}");
         assert!(profile.ends_with("(deny network*)\n"), "{profile}");
+    }
+
+    #[test]
+    fn seatbelt_profile_with_a_plain_login_file_lists_only_the_four_entries() {
+        let state = state("/Users/me/.pi/agent", None, &["/Users/me/.pi/agent/bin"]);
+        let profile = seatbelt_profile(Path::new("/work"), Path::new("/tmp/s"), Some(&state), None);
+        assert_eq!(
+            profile.matches("(literal \"/Users/me/").count(),
+            4,
+            "{profile}"
+        );
+        assert!(!profile.contains("/bin"), "{profile}");
     }
 
     #[test]
@@ -792,18 +840,26 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_argv_binds_cwd_tempdir_and_the_login_file_when_given() {
+    fn wrapped_argv_binds_cwd_tempdir_and_the_state_dir_in_order() {
         let argv = strings(&["/usr/bin/pi", "-p", "hi"]);
-        let with_login = wrap_pi(
+        let state = state(
+            "/nonexistent/home/.pi/agent",
+            Some("/nonexistent/secrets/pi-auth.json"),
+            &[
+                "/nonexistent/home/.pi/agent/bin",
+                "/nonexistent/home/.pi/agent/settings.json",
+            ],
+        );
+        let with_state = wrap_pi(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
-            Some(Path::new("/nonexistent/home/.pi/agent/auth.json")),
+            Some(&state),
             None,
             &argv,
         );
         assert_eq!(
-            with_login,
+            with_state,
             strings(&[
                 "/usr/bin/bwrap",
                 "--ro-bind",
@@ -816,8 +872,17 @@ mod tests {
                 "/nonexistent/tmp/agentrun-x",
                 "/nonexistent/tmp/agentrun-x",
                 "--bind",
-                "/nonexistent/home/.pi/agent/auth.json",
-                "/nonexistent/home/.pi/agent/auth.json",
+                "/nonexistent/home/.pi/agent",
+                "/nonexistent/home/.pi/agent",
+                "--ro-bind",
+                "/nonexistent/home/.pi/agent/bin",
+                "/nonexistent/home/.pi/agent/bin",
+                "--ro-bind",
+                "/nonexistent/home/.pi/agent/settings.json",
+                "/nonexistent/home/.pi/agent/settings.json",
+                "--bind",
+                "/nonexistent/secrets/pi-auth.json",
+                "/nonexistent/secrets/pi-auth.json",
                 "--dev",
                 "/dev",
                 "--proc",
@@ -830,7 +895,7 @@ mod tests {
                 "hi",
             ])
         );
-        let without_login = wrap_pi(
+        let without_state = wrap_pi(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
@@ -839,10 +904,10 @@ mod tests {
             &argv,
         );
         assert_eq!(
-            without_login.iter().filter(|arg| *arg == "--bind").count(),
+            without_state.iter().filter(|arg| *arg == "--bind").count(),
             2
         );
-        assert_eq!(without_login.len(), with_login.len() - 3);
+        assert_eq!(without_state.len(), with_state.len() - 12);
     }
 
     #[test]

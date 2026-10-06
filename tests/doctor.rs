@@ -606,10 +606,11 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
         .filter(|line| line.starts_with("[debug] pi sandbox command: "))
         .collect();
     assert_eq!(pi_sandbox_commands.len(), 2, "{debug}");
+    let state_dir = std::fs::canonicalize(env.home().join(".pi/agent")).unwrap();
     assert!(
         pi_sandbox_commands[0].contains(&format!(
-            "--bind {0} {0} --dev /dev",
-            env.home().join(".pi/agent/auth.json").display()
+            "--bind {0} {0} --ro-bind {0}/settings.json {0}/settings.json --dev /dev",
+            state_dir.display()
         )),
         "{debug}"
     );

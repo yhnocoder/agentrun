@@ -107,7 +107,7 @@ agentrun variables: (none)</div>
   <li>凭据写入失败；codex 的登录文件不存在。</li>
   <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
   <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>。</li>
-  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的私有状态目录或 Seatbelt 配置文件写不出、codex 的私有目录创建失败。</li>
+  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的状态目录创建失败或 Seatbelt 配置文件写不出、codex 的私有目录创建失败。</li>
 </ul>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 
@@ -279,13 +279,15 @@ agentrun variables: (none)</div>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
   <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>。Linux：
 <pre><code class="language-bash">bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt;
-  --bind &lt;pi 登录文件&gt; &lt;pi 登录文件&gt; --dev /dev --proc /proc
-  --die-with-parent --unshare-net --
+  --bind &lt;pi 状态目录&gt; &lt;pi 状态目录&gt;
+  --ro-bind &lt;状态目录里已有的条目&gt; &lt;同一路径&gt;...
+  --bind &lt;auth.json 的链接目标&gt; &lt;同一路径&gt;
+  --dev /dev --proc /proc --die-with-parent --unshare-net --
   /bin/sh -c '"$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2&gt;/dev/null &amp; shift 2; exec "$@"'
   &lt;socat&gt; &lt;代理端口&gt; &lt;临时目录&gt;/proxy.sock
   &lt;pi 的命令&gt;</code></pre>
-  macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb &lt;pi 的命令&gt;</code>。用户没有 pi 登录文件时不绑定它。Linux 的 <code>sh</code> 先在后台启动 <code>socat</code>，把沙箱里 <code>127.0.0.1</code> 上与过滤代理相同的端口号转发到会话临时目录里的 Unix socket，再用 <code>exec</code> 换成 pi，进程组与退出码不变；pi 退出后进程组收到 SIGKILL，socat 一起结束。socat 的标准错误指向 <code>/dev/null</code>：沙箱里的进程中途关闭连接时 socat 会打印一行 read 错误，这些行会混进 pi 的标准错误输出；转发本身不会启动失败，因为命名空间里只有回环接口，socket 文件在启动 pi 之前已经存在。</li>
-  <li>环境里 <code>PI_CODING_AGENT_DIR</code> 指向私有状态目录，见<a href="session.html#runtime-home">私有配置目录</a>。</li>
+  macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb &lt;pi 的命令&gt;</code>。状态目录的三组参数见<a href="isolation.html">沙箱与网络</a>：<code>--ro-bind</code> 对目录里除四个可写条目之外的每个已有条目各一组，<code>auth.json</code> 不是符号链接时没有最后一组 <code>--bind</code>；算不出状态目录（<code>PI_CODING_AGENT_DIR</code> 与 <code>HOME</code> 都没有）时这三组都没有，<code>--dry-run</code> 下目录不存在时也没有。Linux 的 <code>sh</code> 先在后台启动 <code>socat</code>，把沙箱里 <code>127.0.0.1</code> 上与过滤代理相同的端口号转发到会话临时目录里的 Unix socket，再用 <code>exec</code> 换成 pi，进程组与退出码不变；pi 退出后进程组收到 SIGKILL，socat 一起结束。socat 的标准错误指向 <code>/dev/null</code>：沙箱里的进程中途关闭连接时 socat 会打印一行 read 错误，这些行会混进 pi 的标准错误输出；转发本身不会启动失败，因为命名空间里只有回环接口，socket 文件在启动 pi 之前已经存在。</li>
+  <li>环境里不另设变量。pi 按 <code>PI_CODING_AGENT_DIR</code>、未设时 <code>~/.pi/agent</code> 使用用户的状态目录，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>
 
 <h3>模型检查</h3>
@@ -347,7 +349,7 @@ agentrun variables: (none)</div>
   [-m ID] [-c model_reasoning_effort="LEVEL"]
   &lt;-- 之后的调用方参数&gt; -</code></pre>
 <ul>
-  <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#runtime-home">私有配置目录</a>；它不出现在 argv、<code>start.env</code> 与 <code>set:</code> 行里。最后的 <code>-</code> 表示从标准输入读提示词，提示词原文写入标准输入后关闭。</li>
+  <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#codex-home">私有配置目录</a>；它不出现在 argv、<code>start.env</code> 与 <code>set:</code> 行里。最后的 <code>-</code> 表示从标准输入读提示词，提示词原文写入标准输入后关闭。</li>
   <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
 </ul>
 <table>

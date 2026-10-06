@@ -90,7 +90,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>jsonl 格式不加额外的行，由 <code>start</code> 事件的 <code>sandbox</code> 与 <code>network.enforced</code> 字段记录。理由：<code>relax</code> 不打断运行，但事后能查出这次运行没有隔离。</p>
 
 <h2>三个运行时怎么关进沙箱</h2>
-<p>三者在沙箱里都只能写工作目录（<code>--cwd</code>）与会话临时目录（见<a href="session.html#tmpdir">会话临时目录</a>），pi 另外能写用户的 pi 登录文件。读不受限制。</p>
+<p>三者在沙箱里都只能写工作目录（<code>--cwd</code>）与会话临时目录（见<a href="session.html#tmpdir">会话临时目录</a>），pi 另外能写用户 pi 状态目录里的四个条目。读不受限制。</p>
 <table>
   <thead>
     <tr><th>运行时</th><th>沙箱打开时</th><th>沙箱没有运行时</th></tr>
@@ -98,13 +98,17 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <tbody>
     <tr><td>claude-code</td><td>用 claude-code 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加 <code>socat</code>），由 <code>--settings</code> 打开。只作用于 Bash 命令：命令只能写两个目录、不能联网，沙箱里的命令自动放行，不允许沙箱外执行命令。Edit 与 Write 不经过沙箱，改用权限模式 <code>dontAsk</code> 加按路径放行的规则，只放行写两个目录</td><td>权限模式 <code>auto</code>，每条 Bash 命令由 claude-code 的分类器判断</td></tr>
     <tr><td>codex</td><td>codex 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加一个 seccomp 网络过滤），用一个自定义权限配置：整个文件系统可读，工作目录与会话临时目录可写，<code>/tmp</code> 与 <code>$TMPDIR</code> 不可写，网络关闭</td><td>内置权限配置 <code>:danger-full-access</code></td></tr>
-    <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。另外只放行用户 pi 登录文件 <code>auth.json</code> 这一个文件。网络见下一节</td><td>不包裹</td></tr>
+    <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。另外放行用户 pi 状态目录里的四个条目：<code>auth.json</code>、<code>auth.json.lock</code>、<code>models-store.json</code>、<code>models-store.json.lock</code>，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。网络见下一节</td><td>不包裹</td></tr>
   </tbody>
 </table>
-<p>macOS 上 pi 的 Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、用户的 pi 登录文件（没有时不写）与 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。</p>
+<p>pi 状态目录的放行按平台实现，输入都是 <code>src/sandbox.rs</code> 的 <code>PiState</code>：</p>
+<ul>
+  <li>Linux：<code>bwrap</code> 把整个状态目录 <code>--bind</code> 为可写，再把目录里已有的其他条目（跟随符号链接后是目录或普通文件的）逐个 <code>--ro-bind</code> 只读覆盖；<code>auth.json</code> 是指向别处的符号链接时，最后再 <code>--bind</code> 链接目标。bwrap 不能只绑定一个还不存在的文件，而 pi 要在目录里新建锁目录，所以整目录可写。剩余风险：沙箱里的 agent 能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载它；已有的条目不能改写。</li>
+  <li>macOS：Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、状态目录里这四个条目的字面路径（<code>literal</code>，不存在的也写，pi 自己创建）、<code>auth.json</code> 是符号链接时的链接目标，以及 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。状态目录里的其他条目不能新建也不能改写。</li>
+</ul>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
-  <li>pi 只放行登录文件，不放行整个状态目录：pi 刷新令牌时原地改写 <code>auth.json</code>，锁目录建在私有状态目录里，所以一个文件就够；状态目录里有 pi 的启动脚本与扩展，不能让沙箱里的 agent 改写，见<a href="session.html#runtime-home">私有配置目录</a>。Linux 上用 <code>--bind</code> 单独绑定这个文件；用户没有登录文件时不放行。</li>
+  <li>pi 只放行四个条目，不放行整个状态目录：状态目录里有 pi 的启动脚本、<code>bin/</code> 与扩展，沙箱里的 agent 能改写它们时，用户下次在沙箱外运行 pi 就会执行 agent 写进去的代码。放行的四个条目是 pi 刷新令牌与读写模型缓存时必须写的文件与锁目录，锁必须建在用户目录里才能与用户自己的 pi 互斥，理由见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
   <li>codex 用 <code>default_permissions</code> 选择自定义权限配置，不传 <code>--sandbox</code>。理由：传了 <code>--sandbox</code> 时权限配置不生效；显式选择内置的 <code>:workspace</code> 时 codex 忽略 <code>sandbox_workspace_write</code> 的各项，<code>/tmp</code> 与 <code>$TMPDIR</code> 仍可写（codex 0.159.2 实测与源码）。</li>
   <li>pi 的包裹不加 <code>--unshare-pid</code>，让 agentrun 能在宿主的 <code>/proc</code> 里找到 bwrap 的子进程 pi 并直接给它发信号；不加 <code>--new-session</code>，让进程组的 SIGKILL 能清理沙箱里的全部进程，见<a href="session.html#signals">进程组与信号</a>。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
   <li>macOS 上 Seatbelt 按真实路径匹配，<code>/tmp</code> 与 <code>/var</code> 指向 <code>/private</code>，所以可写路径先解析符号链接再写进配置。</li>
@@ -194,8 +198,8 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
   <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，不保存会话，每次传一个新生成的会话 id。</li>
-  <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#runtime-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
-  <li>pi：使用私有状态目录，只带入登录文件、自定义模型与默认模型设置；不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。</li>
+  <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#codex-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
+  <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>
 <p>账号由登录方式决定。会话环境按运行时删除会改变登录方式的变量，容器里的凭据由环境变量写入登录文件，见<a href="session.html">会话环境</a>。</p>
 
@@ -207,7 +211,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <tbody>
     <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）；Linux 上这个目录在会话临时目录之内，没有这项风险（本机 Linux 与云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置；<code>--network custom</code> 下 WebFetch 能读放行列表以外的主机（均为云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）。<code>--network full</code> 下命令直接联网，不经过滤代理，没有私有地址检查，<code>169.254.169.254</code> 这类地址可以访问（用户定）</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
-    <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户的 pi 登录文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
+    <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>
 </table>
 <p>过滤代理本身的剩余风险：</p>

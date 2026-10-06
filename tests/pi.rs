@@ -218,29 +218,24 @@ fn fake_pi_run_without_sandbox() {
 
 const REPORTING_PI: &str = r#"#!/bin/sh
 {
-  echo "dir=$PI_CODING_AGENT_DIR"
+  echo "dir=${PI_CODING_AGENT_DIR-unset}"
   echo "tmpdir=$TMPDIR"
-  echo "auth=$(readlink "$PI_CODING_AGENT_DIR/auth.json")"
-  echo "fd=$(readlink "$PI_CODING_AGENT_DIR/bin/fd")"
-  echo "settings=$(cat "$PI_CODING_AGENT_DIR/settings.json")"
-  echo "entries=$(ls -A "$PI_CODING_AGENT_DIR" | sort | tr '\n' ' ')"
-  echo "bin=$(ls -A "$PI_CODING_AGENT_DIR/bin" | sort | tr '\n' ' ')"
+  echo "entries=$(ls -A "$HOME/.pi/agent" | sort | tr '\n' ' ')"
+  echo "tmpentries=$(ls -A "$TMPDIR" | sort | tr '\n' ' ')"
 } > "$PWD/state.txt"
 echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}'
 "#;
 
 #[test]
-fn private_state_dir_links_user_files_and_is_removed_afterwards() {
+fn pi_uses_the_user_state_dir_which_stays_unchanged() {
     let env = Env::new(REPORTING_PI);
     let auth = env.write_user_file(
         "auth.json",
         "{\"deepseek\":{\"type\":\"api_key\",\"key\":\"k\"}}",
     );
     let fd = env.write_user_file("bin/fd", "#!/bin/sh\necho fd\n");
-    env.write_user_file(
-        "settings.json",
-        "{\"defaultProvider\":\"deepseek\",\"defaultModel\":\"deepseek-flash\",\"packages\":[\"x\"],\"theme\":\"dark\"}",
-    );
+    let settings_text = "{\"defaultProvider\":\"deepseek\",\"defaultModel\":\"deepseek-flash\",\"packages\":[\"x\"],\"theme\":\"dark\"}";
+    let settings = env.write_user_file("settings.json", settings_text);
     let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
@@ -251,35 +246,37 @@ fn private_state_dir_links_user_files_and_is_removed_afterwards() {
             .unwrap_or_else(|| panic!("{name} in {report}"))
             .to_string()
     };
-    let dir = PathBuf::from(field("dir"));
-    assert_eq!(dir.file_name().unwrap(), "pi-agent");
-    assert_eq!(dir.parent().unwrap(), PathBuf::from(field("tmpdir")));
-    assert_eq!(dir.parent().unwrap().parent().unwrap(), env.tmp());
-    assert_eq!(
-        PathBuf::from(field("auth")),
-        std::fs::canonicalize(&auth).unwrap()
-    );
-    assert_eq!(
-        PathBuf::from(field("fd")),
-        std::fs::canonicalize(&fd).unwrap()
-    );
-    let settings: Value = serde_json::from_str(&field("settings")).unwrap();
-    assert_eq!(
-        settings,
-        json!({"defaultProvider": "deepseek", "defaultModel": "deepseek-flash"})
-    );
+    assert_eq!(field("dir"), "unset");
+    assert_eq!(PathBuf::from(field("tmpdir")).parent().unwrap(), env.tmp());
     assert_eq!(field("entries"), "auth.json bin settings.json ");
-    assert_eq!(field("bin"), "fd ");
-    assert!(!dir.exists());
-    assert!(env.leftover_tempdirs().is_empty());
+    assert_eq!(field("tmpentries"), "");
     assert_eq!(
         std::fs::read_to_string(&auth).unwrap(),
         "{\"deepseek\":{\"type\":\"api_key\",\"key\":\"k\"}}"
     );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), settings_text);
     assert!(fd.exists());
+    let names: Vec<String> = std::fs::read_dir(env.user_state())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 3);
+    assert!(env.leftover_tempdirs().is_empty());
     let end = events(&output).pop().unwrap();
     assert_eq!(end["status"], "finished");
     assert_eq!(end["result"], "ok");
+}
+
+#[test]
+fn missing_user_state_dir_is_created_before_pi_starts() {
+    let env = Env::new(REPORTING_PI);
+    let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
+    assert!(report.contains("\nentries=\n"), "{report}");
+    let mode = |path: &PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&env.home().join(".pi")), 0o700);
+    assert_eq!(mode(&env.user_state()), 0o700);
 }
 
 #[test]

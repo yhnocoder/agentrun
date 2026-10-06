@@ -32,7 +32,7 @@
   <tbody>
     <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>parse_env_args</code>、<code>read_env_file</code>、<code>resolve_path_dirs</code>、<code>find_executable</code>、<code>is_executable</code>、<code>is_variable_name</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
     <tr><td><code>src/run.rs</code></td><td><code>create_tempdir</code>、<code>execute</code>（启动进程组、转发信号、读输出）、<code>supervise</code></td><td>会话临时目录、进程、信号与超时</td></tr>
-    <tr><td><code>src/pi.rs</code>、<code>src/codex.rs</code></td><td>pi：<code>user_state_dir</code>、<code>login_file</code>、<code>prepare_state_dir</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 与 codex 的私有配置目录、多个运行同时进行</td></tr>
+    <tr><td><code>src/pi.rs</code>、<code>src/codex.rs</code>、<code>src/sandbox.rs</code></td><td>pi：<code>user_state_dir</code>、<code>prepare_state</code>、<code>state</code>、<code>WRITABLE_STATE_ENTRIES</code>，<code>PiState</code> 在 <code>src/sandbox.rs</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 的状态目录与 codex 的私有配置目录、多个运行同时进行</td></tr>
     <tr><td><code>src/credential.rs</code></td><td><code>write_session_credential</code>、<code>write_credential</code>、<code>CredentialReport</code>、<code>CredentialStatus</code></td><td>凭据</td></tr>
     <tr><td><code>src/process_tree.rs</code></td><td><code>ProcessTable</code>、<code>claim_orphans</code>、<code>ForkWatcher</code>、<code>Recorded</code>、<code>wait_for_exit</code>、<code>kill_group_members</code>、<code>kill_tree</code>、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
     <tr><td><code>src/signal.rs</code></td><td><code>Signals</code>（<code>install</code>、按阶段切换的 <code>prepare</code>、<code>checking</code>、<code>doctoring</code>、<code>running</code>、<code>finishing</code>、<code>exited</code>、<code>kill_group</code>）、<code>Signal</code>（含退出码）、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
@@ -48,7 +48,7 @@
   <li>按给出的顺序加载 <code>--env-file</code>。</li>
   <li>按给出的顺序应用 <code>--env</code>。</li>
   <li>读取 <code>AGENTRUN_</code> 开头的变量（<code>AGENTRUN_SANDBOX</code> 与两个凭据变量），然后从会话环境删除所有 <code>AGENTRUN_</code> 变量。</li>
-  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；pi 与 codex 的 <code>PI_CODING_AGENT_DIR</code> 与 <code>CODEX_HOME</code> 指向<a href="#runtime-home">私有配置目录</a>；网络经过滤代理时设置代理变量；claude-code 的沙箱运行时设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>，理由见<a href="isolation.html#network">网络</a>。</li>
+  <li>设置 PATH、<code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code>；codex 的 <code>CODEX_HOME</code> 指向<a href="#codex-home">私有配置目录</a>；网络经过滤代理时设置代理变量；claude-code 的沙箱运行时设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>，理由见<a href="isolation.html#network">网络</a>。</li>
 </ol>
 <table>
   <thead>
@@ -90,26 +90,28 @@ GREETING='hello world'</code></pre>
 <h2 id="tmpdir">会话临时目录</h2>
 <p>工具在 <code>$TMPDIR</code>（未设或为空时为 <code>/tmp</code>）下创建 <code>agentrun-&lt;随机后缀&gt;</code>，权限 0700。会话的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向它，沙箱把它加入可写路径。正常结束、失败、超时与被中断时都删除它；给了 <code>--debug</code> 时保留，路径写到标准错误。claude-code 的沙箱把命令看到的 <code>TMPDIR</code> 改成名为 <code>claude-&lt;uid&gt;</code> 的目录：Linux 上它在会话临时目录之下（云端与本机 Linux 实测）；macOS 上它是 <code>/tmp/claude-&lt;uid&gt;</code>，由同一用户的所有 claude 会话共用（macOS 实测）。macOS 上的这个差异被接受，agentrun 不为此限制会话临时目录的位置。</p>
 <p>理由：工作目录里不出现临时文件；只开放这一个目录，不把整个 <code>/tmp</code> 设为可写，因为 <code>/tmp</code> 由整台机器共用，里面有其他程序的文件与 socket。</p>
-<p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>、pi 的私有状态目录 <code>pi-agent/</code>。</p>
+<p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>。</p>
 
-<h2 id="runtime-home">pi 与 codex 的私有配置目录</h2>
-<p>pi 与 codex 不直接使用用户的状态目录。每次运行新建一个私有目录（0700），与会话临时目录在同样的时机删除（正常结束、失败、超时、被中断，以及启动前收到信号），给了 <code>--debug</code> 时同样保留，codex 的目录另在标准错误写一行 <code>[debug] codex home: &lt;路径&gt;</code>。codex 的目录由运行框架在创建会话临时目录之后、启动 codex 之前创建，<code>--dry-run</code> 不创建。用户的登录文件以符号链接放进去，其他内容不带进来。</p>
+<h2 id="runtime-home">pi 的状态目录与 codex 的私有配置目录</h2>
+<h3 id="pi-state">pi 使用用户的状态目录</h3>
+<p>pi 直接使用用户的状态目录 <code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>。agentrun 不改这个变量，也不另建目录；pi 读到用户完整的 <code>settings.json</code>、<code>models.json</code>、<code>bin/</code> 与 <code>keybindings.json</code>。agentrun 按同一规则算出这个目录（<code>user_state_dir</code>），用于沙箱放行、读默认模型设置与写入 <code>AGENTRUN_PI_AUTH</code>。目录不存在时在启动前递归创建，新建的每一级权限 0700；创建失败按<a href="run.html#preflight">启动前检查</a>报错，<code>detail</code> 为 <code>cannot create the pi state directory &lt;路径&gt;: &lt;系统错误&gt;</code>。<code>--dry-run</code> 不创建目录。<code>PI_CODING_AGENT_DIR</code> 与 <code>HOME</code> 都没有时算不出目录，不创建也不放行。</p>
+<p>沙箱只放行目录里的四个条目可写：<code>auth.json</code>、<code>auth.json.lock</code>、<code>models-store.json</code>、<code>models-store.json.lock</code>，即 <code>src/pi.rs</code> 的 <code>WRITABLE_STATE_ENTRIES</code>。<code>state</code> 读一次目录，生成 <code>PiState</code>：<code>dir</code> 是目录的真实路径；<code>login_target</code> 是 <code>auth.json</code> 的真实路径，只在它是指向别处的符号链接时有值，这时链接目标也放行；<code>readonly</code> 是其余条目里跟随符号链接后是目录或普通文件的那些，按文件名排序，供 Linux 的沙箱只读覆盖。各平台怎样放行见<a href="isolation.html">沙箱与网络</a>。</p>
+<p>理由：pi 刷新 OAuth 令牌时在 <code>&lt;状态目录&gt;/auth.json.lock</code> 上加锁，加锁不跟随符号链接，所以锁必须建在用户的状态目录里，几次运行之间、运行与用户自己的 pi 之间才互斥。pi 启动时就在状态目录里创建 <code>auth.json</code>（内容为 <code>{}</code>）与 <code>models-store.json</code>，读 <code>models-store.json</code> 时建 <code>models-store.json.lock</code>（pi 1.0.4），所以这四个条目都要放行；用户没有 <code>auth.json</code> 时，运行后目录里会多出 pi 创建的这两个文件。</p>
+<h3 id="codex-home">codex 的私有配置目录</h3>
+<p>codex 不直接使用用户的 <code>CODEX_HOME</code>。每次运行由运行框架在创建会话临时目录之后、启动 codex 之前新建一个私有目录（0700），<code>--dry-run</code> 不创建。它与会话临时目录在同样的时机删除（正常结束、失败、超时、被中断，以及启动前收到信号），给了 <code>--debug</code> 时同样保留，并在标准错误写一行 <code>[debug] codex home: &lt;路径&gt;</code>。用户的登录文件以符号链接放进去，其他内容不带进来。</p>
 <table>
   <thead>
-    <tr><th>运行时</th><th>位置</th><th>内容</th></tr>
+    <tr><th>位置</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td>pi</td><td>会话临时目录下的 <code>pi-agent/</code>，<code>PI_CODING_AGENT_DIR</code> 指向它</td><td><code>auth.json</code> 与 <code>models.json</code>：指向用户状态目录（<code>$PI_CODING_AGENT_DIR</code>，未设时为 <code>~/.pi/agent</code>）里同名文件的符号链接，用户没有该文件时不建。<code>bin/fd</code> 与 <code>bin/rg</code>：指向用户状态目录 <code>bin/</code> 里同名文件的符号链接，用户没有该文件时不建。<code>settings.json</code>：只含用户设置里的 <code>defaultProvider</code> 与 <code>defaultModel</code></td></tr>
-    <tr><td>codex</td><td>与会话临时目录同级的 <code>agentrun-&lt;同一后缀&gt;-codex/</code>，<code>CODEX_HOME</code> 指向它</td><td><code>auth.json</code>：指向用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）的符号链接。codex 运行中在这里写它自己的数据库与缓存</td></tr>
+    <tr><td>与会话临时目录同级的 <code>agentrun-&lt;同一后缀&gt;-codex/</code>，<code>CODEX_HOME</code> 指向它</td><td><code>auth.json</code>：指向用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）的符号链接。codex 运行中在这里写它自己的数据库与缓存</td></tr>
   </tbody>
 </table>
-<p>用户状态目录与用户登录文件的位置按应用 <code>--env-file</code> 与 <code>--env</code> 之后的会话环境计算。调用方给出的 <code>PI_CODING_AGENT_DIR</code> 与 <code>CODEX_HOME</code> 只决定从哪里带入文件，组装环境的最后一步把这两个变量改为指向私有目录。</p>
+<p>用户登录文件的位置按应用 <code>--env-file</code> 与 <code>--env</code> 之后的会话环境计算。调用方给出的 <code>CODEX_HOME</code> 只决定从哪里带入登录文件，组装环境的最后一步把这个变量改为指向私有目录。</p>
 <p>几个容易被改坏的决定：</p>
 <ul>
-  <li>pi 不用用户的状态目录：那里有 pi 的启动脚本、安装目录与扩展。沙箱里的 agent 能写这个目录时，用户下次在沙箱外运行 pi 就会执行 agent 写进去的代码。用私有目录后，沙箱只需放行用户的 <code>auth.json</code> 这一个文件。</li>
-  <li>pi 的 <code>bin/</code> 只链接 <code>fd</code> 与 <code>rg</code>：pi 的 find 与 grep 工具先在 <code>&lt;状态目录&gt;/bin</code> 里找这两个程序，再找 PATH，都没有时下载；<code>--offline</code> 下不下载，工具直接报错（pi 1.0.1 源码，云端复现）。pi 下载过的 fd 与 rg 在用户的 <code>bin/</code> 里，macOS 默认没有这两个程序。不链接整个 <code>bin/</code>，因为 pi 把这个目录加到命令的 PATH 前面，里面还有 pi 自己的启动脚本。</li>
   <li>codex 不用用户的 <code>CODEX_HOME</code>：只加 <code>--ignore-user-config</code> 与 <code>--ignore-rules</code> 时，codex 仍读取 <code>CODEX_HOME</code> 里的 <code>AGENTS.md</code>、<code>.env</code> 与技能目录（codex 0.159.2 实测与源码）。</li>
-  <li>登录文件用符号链接：两个运行时刷新 OAuth 令牌时都原地改写登录文件（pi 1.0.2 用 <code>writeFileSync</code>，codex 0.159.2 截断后重写，均为源码），新令牌经链接写回用户的文件。复制一份会让刷新后的令牌只留在私有目录里，服务商轮换刷新令牌后，用户原来的登录就失效了。运行时将来改为先写临时文件再重命名时，链接会被换成普通文件，这个做法随之失效。</li>
+  <li>登录文件用符号链接：codex 刷新 OAuth 令牌时原地改写登录文件（codex 0.159.2 截断后重写，源码），新令牌经链接写回用户的文件。复制一份会让刷新后的令牌只留在私有目录里，服务商轮换刷新令牌后，用户原来的登录就失效了。codex 将来改为先写临时文件再重命名时，链接会被换成普通文件，这个做法随之失效。</li>
   <li>codex 的目录不放在会话临时目录里：<code>CODEX_HOME</code> 在会话的 <code>TMPDIR</code> 之下时，codex 不创建它执行 <code>apply_patch</code> 等命令所需的别名（codex 0.159.2 源码）。</li>
 </ul>
 <p>几个运行（包括用户自己在沙箱外运行的 pi 或 codex）同时刷新同一个登录文件里的令牌时会发生什么，见<a href="#concurrent">多个运行同时进行</a>。</p>
@@ -157,15 +159,15 @@ GREETING='hello world'</code></pre>
 <p>同一个用户可以同时启动多个 agentrun，运行时可以相同也可以不同，<code>--cwd</code> 也可以相同。agentrun 不在运行之间加锁，也不限制同时运行的数量。</p>
 <p>每次运行各自独立的部分：</p>
 <ul>
-  <li>会话临时目录与 pi、codex 的私有配置目录：每次运行新建，名字带随机后缀，结束时只删除自己的。</li>
+  <li>会话临时目录与 codex 的私有配置目录：每次运行新建，名字带随机后缀，结束时只删除自己的。</li>
   <li>过滤代理：每次运行在自己的进程里启动一个代理，端口随机，Unix socket 在自己的会话临时目录里。沙箱里的进程只能连接本次运行的代理（Linux 上在独立的网络命名空间里，macOS 上 Seatbelt 只放行这一个端口），<code>network</code> 事件只含本次运行的请求。</li>
   <li>进程清理：只作用于本次运行的进程组和本次运行的进程树。Linux 上孤儿进程挂到最近的 subreaper 祖先，也就是启动它的那个 agentrun；macOS 上只清理本次运行记录过的进程。</li>
   <li>沙箱的启动前检查：每次运行各自执行一次，检查进程按本页的顺序清理。</li>
 </ul>
 <p>共用的部分：</p>
 <ul>
-  <li>登录文件：每次运行的私有目录里都是指向用户同一个登录文件的符号链接。容器里多次运行同时用 <code>AGENTRUN_CODEX_AUTH</code> 或 <code>AGENTRUN_PI_AUTH</code> 写入时，由目录锁保证登录文件与旁注一致，见<a href="#credentials">凭据</a>。</li>
-  <li>令牌刷新：pi 刷新前给登录文件加锁，锁目录按符号链接本身的路径建在每次运行的私有目录里，几次运行之间、运行与用户自己的 pi 之间互不排斥；codex 只有进程内的锁。两个运行时都在访问令牌离过期不到 5 分钟时刷新，刷新前重新读一次登录文件，文件已被别的进程更新就不再刷新。几次运行在令牌快过期时同时启动，会用同一个刷新令牌各刷新一次。服务商轮换刷新令牌时，后到的刷新通常被拒绝，这次运行不写登录文件：pi 的模型请求失败，报 <code>OAuth refresh failed for &lt;provider&gt;</code>；codex 收到 401 后重新读登录文件，先到的运行已写入新令牌时继续，否则以 <code>refresh token was already used. Please log out and sign in again.</code> 结束。两个运行时都原地改写文件，符号链接不会被换成普通文件（pi 1.0.4 与 codex 0.159.2 源码）。</li>
+  <li>登录文件：pi 的几个运行直接读写用户状态目录里的同一个 <code>auth.json</code>；codex 每次运行的私有目录里都是指向用户同一个登录文件的符号链接。容器里多次运行同时用 <code>AGENTRUN_CODEX_AUTH</code> 或 <code>AGENTRUN_PI_AUTH</code> 写入时，由目录锁保证登录文件与旁注一致，见<a href="#credentials">凭据</a>。</li>
+  <li>令牌刷新：两个运行时都在访问令牌离过期不到 5 分钟时刷新，刷新前重新读一次登录文件，文件已被别的进程更新就不再刷新。pi 刷新前在用户状态目录的 <code>auth.json.lock</code> 上加锁，几次运行之间、运行与用户自己的 pi 之间共用这一把锁，后拿到锁的运行重新读到新令牌后不再刷新。codex 只有进程内的锁，几次运行在令牌快过期时同时启动，会用同一个刷新令牌各刷新一次。服务商轮换刷新令牌时，后到的刷新通常被拒绝，这次运行不写登录文件：codex 收到 401 后重新读登录文件，先到的运行已写入新令牌时继续，否则以 <code>refresh token was already used. Please log out and sign in again.</code> 结束。两个运行时都原地改写文件，codex 的符号链接不会被换成普通文件（pi 1.0.4 与 codex 0.159.2 源码）。</li>
   <li>claude-code 的 <code>~/.claude.json</code>：agentrun 不隔离它，同时运行的 claude-code 都读写这个文件。</li>
   <li>macOS 上 claude-code 沙箱里命令的 <code>TMPDIR</code> 是 <code>/tmp/claude-&lt;uid&gt;</code>，同一用户的所有 claude 会话共用，见<a href="#tmpdir">会话临时目录</a>。</li>
   <li>相同的 <code>--cwd</code>：几个 agent 都能写这个目录，agentrun 不协调它们的写入，同一个文件被几个 agent 改写时，结果取决于写入的先后。</li>
