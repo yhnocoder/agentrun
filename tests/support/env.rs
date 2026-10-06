@@ -179,7 +179,7 @@ impl Env {
             signals: Signals::install(),
         };
         let code = run(caller, &move |_| {
-            Some(Box::new(FakeAdapter::new(echoes)) as Box<dyn Adapter>)
+            Box::new(FakeAdapter::new(echoes)) as Box<dyn Adapter>
         });
         let text =
             |bytes: &Arc<Mutex<Vec<u8>>>| String::from_utf8(bytes.lock().unwrap().clone()).unwrap();

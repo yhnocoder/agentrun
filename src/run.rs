@@ -42,7 +42,7 @@ const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
 const TEMPDIR_PREFIX: &str = "agentrun-";
 
-pub type AdapterLookup = dyn Fn(Runtime) -> Option<Box<dyn Adapter>>;
+pub type AdapterLookup = dyn Fn(Runtime) -> Box<dyn Adapter>;
 
 pub struct Caller {
     pub args: Vec<OsString>,
@@ -328,12 +328,7 @@ fn prepare(
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
-    let adapter = adapters(runtime).ok_or_else(|| {
-        format!(
-            "{} support is not implemented in this build",
-            runtime.name()
-        )
-    })?;
+    let adapter = adapters(runtime);
     let invocation = Invocation {
         runtime,
         args,

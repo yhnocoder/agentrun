@@ -20,11 +20,11 @@ pub trait Adapter {
     fn failure(&self, exit_code: Option<i32>, stderr_tail: &str) -> Option<String>;
 }
 
-pub fn builtin(runtime: Runtime) -> Option<Box<dyn Adapter>> {
+pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
     match runtime {
-        Runtime::ClaudeCode => Some(Box::new(ClaudeCode::new())),
-        Runtime::Pi => Some(Box::new(Pi::new())),
-        Runtime::Codex => Some(Box::new(Codex::new())),
+        Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
+        Runtime::Pi => Box::new(Pi::new()),
+        Runtime::Codex => Box::new(Codex::new()),
     }
 }
 
