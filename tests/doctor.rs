@@ -403,6 +403,21 @@ fn pi_login_compares_the_chosen_model() {
 }
 
 #[test]
+fn debug_keeps_no_pi_login_dir() {
+    let env = Env::new();
+    env.install("pi", PI_DEEPSEEK);
+    pi_settings(&env);
+    let output = run(&env, &["pi", "--sandbox", "off", "--debug"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(line_for(&stdout_lines(&output), "pi", "login").starts_with("[ok]"));
+    let kept = kept_dir(&stderr(&output));
+    assert!(kept.is_dir());
+    assert!(!kept.join("pi-login").exists());
+    std::fs::remove_dir_all(kept).unwrap();
+    assert!(env.leftovers().is_empty());
+}
+
+#[test]
 fn pi_login_times_out_when_pi_hangs() {
     let env = Env::new();
     env.install("pi", "#!/bin/sh\n/bin/sleep 30\n");
@@ -529,7 +544,6 @@ fn doctor_with_bwrap(env: &Env, system: &Path, args: &[&str]) -> Output {
     doctor(env, args).env("PATH", path).output().unwrap()
 }
 
-#[cfg(target_os = "linux")]
 fn kept_dir(debug: &str) -> PathBuf {
     PathBuf::from(
         debug

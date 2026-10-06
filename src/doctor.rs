@@ -46,7 +46,6 @@ const SANDBOX_SCRIPT: &str =
 const INSIDE_FILE: &str = "inside.txt";
 const OUTSIDE_FILE: &str = "outside.txt";
 const CODEX_HOME_DIR: &str = "codex-home";
-const PI_LOGIN_DIR: &str = "pi-login";
 const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
 const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
 const SERVICE_PORT: u16 = 443;
@@ -230,7 +229,7 @@ pub fn run(caller: Caller, args: DoctorArgs, timeout: Duration) -> u8 {
         write_json(&caller.stdout, &items);
     }
     if args.debug {
-        remove_login_links(tempdir.path());
+        remove_login_link(tempdir.path());
         caller.print_error_line(&format!("[debug] kept {}", tempdir.path().display()));
         let _ = tempdir.keep();
     }
@@ -612,9 +611,6 @@ impl Doctor {
 
     fn pi_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
         let (expected, source) = self.pi_expected_model(target)?;
-        let tempdir = self.tempdir.join(PI_LOGIN_DIR);
-        std::fs::create_dir(&tempdir)
-            .map_err(|error| format!("cannot create {}: {error}", tempdir.display()))?;
         let invocation = Invocation {
             runtime: Runtime::Pi,
             args: self.run_args(),
@@ -629,7 +625,7 @@ impl Doctor {
                 socat: None,
                 description: String::new(),
             },
-            tempdir,
+            tempdir: self.tempdir.clone(),
             session: target.session.clone(),
             allow_hosts: Vec::new(),
             proxy: None,
@@ -1104,7 +1100,7 @@ fn unknown_model_warning(finished: &Finished) -> Option<&str> {
     })
 }
 
-fn remove_login_links(tempdir: &Path) {
+fn remove_login_link(tempdir: &Path) {
     let link = tempdir.join(CODEX_HOME_DIR).join(codex::LOGIN_FILE);
     if std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink()) {
         let _ = std::fs::remove_file(&link);
