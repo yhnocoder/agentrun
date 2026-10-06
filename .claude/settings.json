@@ -14,7 +14,7 @@
       "Bash(cargo test:*)",
       "Bash(scripts/test.sh:*)",
       "Bash(uv run scripts/check_comment.py:*)",
-      "Bash(uv run scripts/check_design.py:*)"
+      "Bash(uv run scripts/check_docs.py:*)"
     ]
   }
 }

@@ -13,10 +13,14 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · 会话环境 · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · 会话环境 · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
 <h1>会话环境 <span class="tag">草稿</span></h1>
 <p class="lead">运行时进程启动时拿到什么：环境变量、PATH、临时目录与登录凭据；以及它怎么结束：进程组、信号与超时。目标是<mark>调用方能完整控制会话环境</mark>，同时调用方环境里残留的变量不会悄悄改变登录方式。</p>
 

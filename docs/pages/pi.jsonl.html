@@ -13,10 +13,14 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">返回索引</a></p>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
 <h1>pi 事件流 <span class="tag">字段参考</span></h1>
 <p class="lead">本文是 <code>pi -p --mode json</code> 输出的事件流的字段参考：每种事件何时出现、有哪些字段、字段的类型与含义、典型运行的顺序、错误与退出码。写给要为这条流写解析器的人，<mark>不依赖 agentrun 的其他文档</mark>。依据是 pi 1.0.1（npm 包 <code>@earendil-works/pi-coding-agent</code>）在 Linux 容器里的实测输出，以及随包安装的 <code>docs/json.md</code>、<code>docs/message-types.md</code>、<code>docs/session-format.md</code>、<code>docs/cli-integration.md</code> 与 <code>CHANGELOG.md</code>。字段表中标出了每一项的来源。</p>
 

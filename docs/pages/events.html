@@ -13,10 +13,14 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
 <h1>事件与输出 <span class="tag">草稿</span></h1>
 <p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
 

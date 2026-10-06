@@ -48,7 +48,7 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 - 实现过程中发现 Spec 有误，在 issue comment 中修正。
 - Task 之间会形成依赖链，也会发现之前的 Task 有错，这都是正常的，在新 Task 的 comment 中记录。
 - Implement 和 Test 的具体规则见 `.claude/agents/implementer.md`。普通任务使用 implementer 默认的 opus 模型；复杂任务在调用时指定 `model: fable`；更复杂的任务可以让多个 fable 和 opus subagent 协作。
-- Review 的依据是本文件和 `.claude/agents/implementer.md`。改动涉及 `docs/` 时，主 agent 要看 `scripts/check_design.py` 生成的截图。退回时指出未通过的条目。
+- Review 的依据是本文件和 `.claude/agents/implementer.md`。改动涉及 `docs/` 时，主 agent 要看 `scripts/check_docs.py` 生成的截图。退回时指出未通过的条目。
 
 ### 小任务
 
@@ -87,7 +87,7 @@ Design 使用 HTML 文档，主要由用户描述需求和预期，放在 `docs/
 - `docs/style.css` 是所有页面共用的样式。新文档参考 `pages/isolation.html` 的写法，保留 `<head>`（字体、MathJax、Prism 的引入），按需使用 style.css 中的组件。
 - 项目的设计文档放在 `docs/pages/`。
 - `docs/` 由 GitHub Pages 从 `main` 分支的 `/docs` 目录发布到 https://yhnocoder.github.io/agentrun/ ，合并到 `main` 后自动更新。`docs/` 下的所有文件都会公开，`docs/.nojekyll` 让 Pages 原样发布文件。
-- 改动 `docs/` 后运行 `uv run scripts/check_design.py`（默认用本机的 Chrome；在 Cloud Managed 容器里加 `--browser chromium`，用 playwright 自带的 Chromium），它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
+- 改动 `docs/` 后运行 `uv run scripts/check_docs.py`（默认用本机的 Chrome；在 Cloud Managed 容器里加 `--browser chromium`，用 playwright 自带的 Chromium），它对每个页面截取桌面、375px、深色三种截图，并报告控制台错误、资源加载失败、公式渲染错误、窄屏横向溢出和断开的相对链接。脚本只能发现机械性错误，布局是否符合设计仍然需要看截图。
 
 ### Intro Doc
 
