@@ -3,12 +3,12 @@ mod support;
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use agentrun::pi::Pi;
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
-use support::env::{Env, poll_until};
+use support::env::{Env, WAIT_LIMIT, poll_until};
 
 fn replay(name: &str) {
     support::assert_replay(&mut Pi::new(), "pi", name, "unused");
@@ -47,12 +47,6 @@ fn replay_cred_error() {
 #[test]
 fn replay_arg_error() {
     replay("arg-error");
-}
-
-fn with_pi(script: &str) -> Env {
-    let env = Env::new();
-    env.install("pi", script);
-    env
 }
 
 fn user_state(env: &Env) -> PathBuf {
@@ -101,7 +95,7 @@ LINES
 
 #[test]
 fn fake_pi_run_without_sandbox() {
-    let env = with_pi(FAKE_PI);
+    let env = Env::with("pi", FAKE_PI);
     let output = run(
         &env,
         &[
@@ -179,7 +173,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
 
 #[test]
 fn pi_uses_the_user_state_dir_which_stays_unchanged() {
-    let env = with_pi(REPORTING_PI);
+    let env = Env::with("pi", REPORTING_PI);
     let auth = write_user_file(
         &env,
         "auth.json",
@@ -221,7 +215,7 @@ fn pi_uses_the_user_state_dir_which_stays_unchanged() {
 
 #[test]
 fn missing_user_state_dir_is_created_before_pi_starts() {
-    let env = with_pi(REPORTING_PI);
+    let env = Env::with("pi", REPORTING_PI);
     let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
@@ -233,11 +227,14 @@ fn missing_user_state_dir_is_created_before_pi_starts() {
 
 #[test]
 fn model_mismatch_terminates_the_run() {
-    let env = with_pi(concat!(
-        "#!/bin/sh\n",
-        "echo '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[],\"provider\":\"amazon-bedrock\",\"model\":\"nova\",\"stopReason\":\"pending\"}}'\n",
-        "sleep 30\n",
-    ));
+    let env = Env::with(
+        "pi",
+        concat!(
+            "#!/bin/sh\n",
+            "echo '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[],\"provider\":\"amazon-bedrock\",\"model\":\"nova\",\"stopReason\":\"pending\"}}'\n",
+            "sleep 30\n",
+        ),
+    );
     let started = Instant::now();
     let output = run(
         &env,
@@ -268,7 +265,7 @@ fn model_mismatch_terminates_the_run() {
 
 #[test]
 fn model_without_provider_is_a_usage_error() {
-    let env = with_pi(FAKE_PI);
+    let env = Env::with("pi", FAKE_PI);
     let output = run(
         &env,
         &[
@@ -292,7 +289,7 @@ fn model_without_provider_is_a_usage_error() {
 
 #[test]
 fn exit_without_reply_fails() {
-    let env = with_pi("#!/bin/sh\nexit 0\n");
+    let env = Env::with("pi", "#!/bin/sh\nexit 0\n");
     let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let end = support::events(&output).pop().unwrap();
@@ -302,7 +299,7 @@ fn exit_without_reply_fails() {
 
 #[test]
 fn dry_run_creates_no_state_dir_and_lists_no_state_variable() {
-    let env = with_pi(FAKE_PI);
+    let env = Env::with("pi", FAKE_PI);
     write_user_file(&env, "auth.json", "{}");
     let output = run(
         &env,
@@ -342,7 +339,7 @@ fn sandboxed_pi_reaches_the_web_only_through_the_filter_proxy() {
         return;
     }
     let server = support::WebServer::start();
-    let env = with_pi(CURL_PI);
+    let env = Env::with("pi", CURL_PI);
     std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
     let model = ["--model", "deepseek/deepseek-flash", "--prompt", "fetch"];
 
@@ -418,7 +415,7 @@ fn sandboxed_pi_with_unknown_provider_needs_an_allowed_host() {
     if !support::sandbox_available() {
         return;
     }
-    let env = with_pi(CURL_PI);
+    let env = Env::with("pi", CURL_PI);
     write_user_file(&env, "settings.json", "{\"defaultProvider\":\"acme\"}");
     let output = run(&env, &["--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
@@ -442,16 +439,14 @@ fn run_ends_after_the_sandboxed_agent_removes_the_proxy_socket() {
     if !support::sandbox_available() {
         return;
     }
-    let env = with_pi(SOCKET_REMOVING_PI);
+    let env = Env::with("pi", SOCKET_REMOVING_PI);
     let mut child = command(
         &env,
         &["--model", "deepseek/deepseek-flash", "--prompt", "hi"],
     )
     .spawn()
     .unwrap();
-    if !poll_until(Duration::from_secs(10), || {
-        child.try_wait().unwrap().is_some()
-    }) {
+    if !poll_until(WAIT_LIMIT, || child.try_wait().unwrap().is_some()) {
         let _ = child.kill();
         panic!("agentrun did not end after the proxy socket was removed");
     }

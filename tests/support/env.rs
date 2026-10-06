@@ -73,6 +73,12 @@ impl Env {
         env
     }
 
+    pub fn with(name: &str, script: &str) -> Env {
+        let env = Env::new();
+        env.install(name, script);
+        env
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }
@@ -179,7 +185,7 @@ impl Env {
             signals: Signals::install(),
         };
         let code = run(caller, &move |_| {
-            Some(Box::new(FakeAdapter::new(echoes)) as Box<dyn Adapter>)
+            Box::new(FakeAdapter::new(echoes)) as Box<dyn Adapter>
         });
         let text =
             |bytes: &Arc<Mutex<Vec<u8>>>| String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
@@ -327,6 +333,15 @@ impl Agentrun {
             events: self.events(),
             stderr,
             elapsed,
+        }
+    }
+}
+
+impl Drop for Agentrun {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }

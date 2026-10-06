@@ -2,15 +2,14 @@ use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::adapter::{Adapter, Launch, Record};
+use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::event::SandboxKind;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{ProxyEndpoint, proxy_environment};
-use crate::run::Invocation;
 use crate::sandbox::{
     PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
     write_seatbelt_profile,
@@ -31,14 +30,13 @@ const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
 pub const LOGIN_FILE: &str = "auth.json";
 pub const SETTINGS_FILE: &str = "settings.json";
-pub const WRITABLE_STATE_ENTRIES: [&str; 5] = [
+const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "auth.json",
     "auth.json.lock",
     "models-store.json",
     "models-store.json.lock",
     "settings.json.lock",
 ];
-const SETTINGS_KEYS: [&str; 2] = ["defaultProvider", "defaultModel"];
 const FIXED_ARGS: [&str; 12] = [
     "-p",
     "--mode",
@@ -191,9 +189,9 @@ impl Adapter for Pi {
         if let Some(proxy) = &invocation.proxy {
             let provider = match &self.expected {
                 Some(model) => Some(model.provider.clone()),
-                None => user_dir
-                    .as_deref()
-                    .and_then(|dir| default_provider(&dir.join(SETTINGS_FILE))),
+                None => user_dir.as_deref().and_then(|dir| {
+                    settings_string(&dir.join(SETTINGS_FILE), DEFAULT_PROVIDER_KEY)
+                }),
             };
             match provider.as_deref().and_then(service_host) {
                 Some(host) => service_hosts.push(host.to_string()),
@@ -373,6 +371,10 @@ pub fn state(user_dir: &Path) -> std::io::Result<PiState> {
     }
     readonly.sort();
     Ok(PiState {
+        writable: WRITABLE_STATE_ENTRIES
+            .iter()
+            .map(|name| dir.join(name))
+            .collect(),
         dir,
         login_target,
         readonly,
@@ -380,11 +382,9 @@ pub fn state(user_dir: &Path) -> std::io::Result<PiState> {
 }
 
 pub fn default_model(settings: &Path) -> Option<Model> {
-    let settings = default_model_settings(settings);
-    let value = |key: &str| settings.get(key)?.as_str().map(str::to_string);
     Some(Model {
-        provider: value(DEFAULT_PROVIDER_KEY)?,
-        model: value(DEFAULT_MODEL_KEY)?,
+        provider: settings_string(settings, DEFAULT_PROVIDER_KEY)?,
+        model: settings_string(settings, DEFAULT_MODEL_KEY)?,
     })
 }
 
@@ -395,26 +395,10 @@ pub fn service_host(provider: &str) -> Option<&'static str> {
         .map(|(_, host)| *host)
 }
 
-fn default_provider(path: &Path) -> Option<String> {
-    default_model_settings(path)
-        .get(DEFAULT_PROVIDER_KEY)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-fn default_model_settings(path: &Path) -> Map<String, Value> {
-    let mut settings = Map::new();
-    let parsed = std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    if let Some(Value::Object(user)) = parsed {
-        for key in SETTINGS_KEYS {
-            if let Some(value) = user.get(key) {
-                settings.insert(key.to_string(), value.clone());
-            }
-        }
-    }
-    settings
+fn settings_string(settings: &Path, key: &str) -> Option<String> {
+    let bytes = std::fs::read(settings).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    value.get(key)?.as_str().map(str::to_string)
 }
 
 fn model_name(message: &Value) -> Option<String> {
@@ -725,6 +709,16 @@ mod tests {
         let state = state(&dir).unwrap();
         let real = setup.real_user_state();
         assert_eq!(state.dir, real);
+        assert_eq!(
+            state.writable,
+            [
+                real.join("auth.json"),
+                real.join("auth.json.lock"),
+                real.join("models-store.json"),
+                real.join("models-store.json.lock"),
+                real.join("settings.json.lock"),
+            ]
+        );
         assert_eq!(state.login_target, None);
         assert_eq!(
             state.readonly,
@@ -760,24 +754,25 @@ mod tests {
     }
 
     #[test]
-    fn default_model_settings_keep_only_the_two_keys() {
+    fn settings_string_reads_only_string_values() {
         let setup = Setup::new();
         for content in ["not json", "[1,2]", "\"text\"", ""] {
             let path = setup.write_user_file("settings.json", content);
-            assert_eq!(default_model_settings(&path), Map::new(), "{content}");
+            assert_eq!(settings_string(&path, "defaultProvider"), None, "{content}");
         }
         assert_eq!(
-            default_model_settings(&setup.user_state().join("missing.json")),
-            Map::new()
+            settings_string(&setup.user_state().join("missing.json"), "defaultProvider"),
+            None
         );
         let path = setup.write_user_file(
             "settings.json",
             "{\"defaultModel\": 3, \"defaultProvider\": \"deepseek\", \"theme\": \"dark\"}",
         );
         assert_eq!(
-            Value::Object(default_model_settings(&path)),
-            json!({"defaultModel": 3, "defaultProvider": "deepseek"})
+            settings_string(&path, "defaultProvider"),
+            Some("deepseek".to_string())
         );
+        assert_eq!(settings_string(&path, "defaultModel"), None);
     }
 
     #[test]
@@ -953,6 +948,10 @@ mod tests {
         let real_path = |path: &Path| std::fs::canonicalize(path).unwrap();
         let state = PiState {
             dir: setup.real_user_state(),
+            writable: WRITABLE_STATE_ENTRIES
+                .iter()
+                .map(|name| setup.real_user_state().join(name))
+                .collect(),
             login_target: Some(real_path(&real)),
             readonly: vec![setup.real_user_state().join("real-auth.json")],
         };

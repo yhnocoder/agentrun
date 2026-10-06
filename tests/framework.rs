@@ -7,14 +7,8 @@ use serde_json::{Value, json};
 use support::env::{Env, Outcome};
 use support::fake::FakeAdapter;
 
-fn with_claude(script: &str) -> Env {
-    let env = Env::new();
-    env.install("claude", script);
-    env
-}
-
 fn with_output(lines: &str) -> Env {
-    with_claude(&format!("#!/bin/sh\ncat <<'EOF'\n{lines}\nEOF\n"))
+    Env::with("claude", &format!("#!/bin/sh\ncat <<'EOF'\n{lines}\nEOF\n"))
 }
 
 fn run(env: &Env, extra: &[&str], echoes: bool) -> Outcome {
@@ -34,16 +28,19 @@ fn empty_usage() -> Value {
 
 #[test]
 fn normal_run_without_echo_outputs_prompt_after_start() {
-    let env = with_claude(concat!(
-        "#!/bin/sh\n",
-        "read -r line\n",
-        "printf '{\"record\":\"tool_start\",\"id\":\"t1\",\"parent\":null,\"name\":\"Bash\",\"summary\":\"Bash: ls\"}\\n'\n",
-        "printf '{\"record\":\"tool_end\",\"id\":\"t1\",\"denied\":true}\\n'\n",
-        "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"stdin=%s\"}\\n' \"$line\"\n",
-        "printf '{\"record\":\"usage\",\"parent\":null,\"model\":\"m1\",\"input_tokens\":10,\"output_tokens\":2,\"cache_read_tokens\":5,\"cache_write_tokens\":1}\\n'\n",
-        "printf '{\"record\":\"usage\",\"parent\":null,\"model\":null,\"input_tokens\":3,\"output_tokens\":4,\"cache_read_tokens\":null,\"cache_write_tokens\":null}\\n'\n",
-        "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"all done\"}\\n'\n",
-    ));
+    let env = Env::with(
+        "claude",
+        concat!(
+            "#!/bin/sh\n",
+            "read -r line\n",
+            "printf '{\"record\":\"tool_start\",\"id\":\"t1\",\"parent\":null,\"name\":\"Bash\",\"summary\":\"Bash: ls\"}\\n'\n",
+            "printf '{\"record\":\"tool_end\",\"id\":\"t1\",\"denied\":true}\\n'\n",
+            "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"stdin=%s\"}\\n' \"$line\"\n",
+            "printf '{\"record\":\"usage\",\"parent\":null,\"model\":\"m1\",\"input_tokens\":10,\"output_tokens\":2,\"cache_read_tokens\":5,\"cache_write_tokens\":1}\\n'\n",
+            "printf '{\"record\":\"usage\",\"parent\":null,\"model\":null,\"input_tokens\":3,\"output_tokens\":4,\"cache_read_tokens\":null,\"cache_write_tokens\":null}\\n'\n",
+            "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"all done\"}\\n'\n",
+        ),
+    );
     let outcome = run(&env, &["--model", "m1", "--", "--extra"], false);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let events = outcome.events();
@@ -83,16 +80,19 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
 
 #[test]
 fn normal_run_with_echo_uses_echo_result_and_run_usage() {
-    let env = with_claude(concat!(
-        "#!/bin/sh\n",
-        "read -r line\n",
-        "printf '{\"record\":\"prompt_echo\",\"text\":\"%s\"}\\n' \"$line\"\n",
-        "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"first\"}\\n'\n",
-        "printf '{\"record\":\"usage\",\"parent\":null,\"model\":\"m1\",\"input_tokens\":1,\"output_tokens\":1,\"cache_read_tokens\":0,\"cache_write_tokens\":0}\\n'\n",
-        "printf '{\"record\":\"result\",\"text\":\"final answer\"}\\n'\n",
-        "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"later\"}\\n'\n",
-        "printf '{\"record\":\"run_usage\",\"input_tokens\":7,\"output_tokens\":8,\"cache_read_tokens\":null,\"cache_write_tokens\":9,\"by_model\":{\"m1\":{\"input_tokens\":7,\"output_tokens\":8,\"cache_write_tokens\":9}}}\\n'\n",
-    ));
+    let env = Env::with(
+        "claude",
+        concat!(
+            "#!/bin/sh\n",
+            "read -r line\n",
+            "printf '{\"record\":\"prompt_echo\",\"text\":\"%s\"}\\n' \"$line\"\n",
+            "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"first\"}\\n'\n",
+            "printf '{\"record\":\"usage\",\"parent\":null,\"model\":\"m1\",\"input_tokens\":1,\"output_tokens\":1,\"cache_read_tokens\":0,\"cache_write_tokens\":0}\\n'\n",
+            "printf '{\"record\":\"result\",\"text\":\"final answer\"}\\n'\n",
+            "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"later\"}\\n'\n",
+            "printf '{\"record\":\"run_usage\",\"input_tokens\":7,\"output_tokens\":8,\"cache_read_tokens\":null,\"cache_write_tokens\":9,\"by_model\":{\"m1\":{\"input_tokens\":7,\"output_tokens\":8,\"cache_write_tokens\":9}}}\\n'\n",
+        ),
+    );
     let outcome = run(&env, &[], true);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let events = outcome.stripped();
@@ -273,9 +273,10 @@ fn raw_file_matches_runtime_stdout_and_skips_non_json() {
 #[test]
 fn nonzero_exit_fails_with_stderr_tail_and_forwards_stderr() {
     let noise = "a".repeat(100) + &"é".repeat(500);
-    let env = with_claude(&format!(
-        "#!/bin/sh\ncat >&2 <<'EOF'\n{noise}\nEOF\nexit 3\n"
-    ));
+    let env = Env::with(
+        "claude",
+        &format!("#!/bin/sh\ncat >&2 <<'EOF'\n{noise}\nEOF\nexit 3\n"),
+    );
     let outcome = run(&env, &[], false);
     assert_eq!(outcome.code, 1);
     assert_eq!(outcome.stderr, format!("{noise}\n"));
@@ -287,12 +288,15 @@ fn nonzero_exit_fails_with_stderr_tail_and_forwards_stderr() {
 
 #[test]
 fn adapter_failure_detail_comes_first() {
-    let env = with_claude(concat!(
-        "#!/bin/sh\n",
-        "printf '{\"record\":\"fail\",\"detail\":\"adapter says no\"}\\n'\n",
-        "echo 'stderr text' >&2\n",
-        "exit 1\n",
-    ));
+    let env = Env::with(
+        "claude",
+        concat!(
+            "#!/bin/sh\n",
+            "printf '{\"record\":\"fail\",\"detail\":\"adapter says no\"}\\n'\n",
+            "echo 'stderr text' >&2\n",
+            "exit 1\n",
+        ),
+    );
     let end = run(&env, &[], false).end();
     assert_eq!(end["status"], "failed");
     assert_eq!(end["detail"], "adapter says no");
@@ -309,18 +313,21 @@ fn adapter_failure_on_success_exit_also_fails() {
 
 #[test]
 fn failure_without_any_message_uses_fixed_sentence() {
-    let env = with_claude("#!/bin/sh\nexit 1\n");
+    let env = Env::with("claude", "#!/bin/sh\nexit 1\n");
     let end = run(&env, &[], false).end();
     assert_eq!(end["detail"], "claude-code failed without an error message");
 }
 
 #[test]
 fn child_sees_session_tempdir_which_is_removed_afterwards() {
-    let env = with_claude(concat!(
-        "#!/bin/sh\n",
-        "mode=$(ls -ld \"$TMPDIR\" | cut -c1-10)\n",
-        "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"%s|%s|%s|%s\"}\\n' \"$TMPDIR\" \"$TMP\" \"$TEMP\" \"$mode\"\n",
-    ));
+    let env = Env::with(
+        "claude",
+        concat!(
+            "#!/bin/sh\n",
+            "mode=$(ls -ld \"$TMPDIR\" | cut -c1-10)\n",
+            "printf '{\"record\":\"text\",\"parent\":null,\"text\":\"%s|%s|%s|%s\"}\\n' \"$TMPDIR\" \"$TMP\" \"$TEMP\" \"$mode\"\n",
+        ),
+    );
     let outcome = run(&env, &[], false);
     let text = outcome.events()[2]["text"].as_str().unwrap().to_string();
     let parts: Vec<&str> = text.split('|').collect();
@@ -371,7 +378,7 @@ fn debug_keeps_tempdir_and_writes_raw_jsonl() {
 
 #[test]
 fn executable_that_cannot_start_gives_single_failed_end() {
-    let env = with_claude("#!/nonexistent/interpreter\n");
+    let env = Env::with("claude", "#!/nonexistent/interpreter\n");
     let outcome = run(&env, &[], false);
     assert_eq!(outcome.code, 1);
     let events = outcome.events();
@@ -392,7 +399,7 @@ fn executable_that_cannot_start_gives_single_failed_end() {
 
 #[test]
 fn dry_run_prints_quoted_command_and_path() {
-    let env = with_claude("#!/bin/sh\ntouch \"$0.ran\"\n");
+    let env = Env::with("claude", "#!/bin/sh\ntouch \"$0.ran\"\n");
     let outcome = run(
         &env,
         &["--dry-run", "--", "--flag", "it's", "two words"],

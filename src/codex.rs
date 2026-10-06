@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Launch, Record};
+use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
-use crate::run::Invocation;
 use crate::session::Session;
 use crate::usage::TokenCounts;
 
@@ -70,6 +69,7 @@ const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
 const BWRAP_PREFIX: &str = "bwrap: ";
 const DETAIL_MAX_CHARS: usize = 500;
 
+#[derive(Default)]
 pub struct Codex {
     cwd: PathBuf,
     model: Option<String>,
@@ -80,23 +80,9 @@ pub struct Codex {
     last_error: Option<String>,
 }
 
-impl Default for Codex {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Codex {
     pub fn new() -> Codex {
-        Codex {
-            cwd: PathBuf::new(),
-            model: None,
-            sandboxed: false,
-            sandbox_failure: None,
-            turn_completed: false,
-            turn_failed: None,
-            last_error: None,
-        }
+        Codex::default()
     }
 
     fn item_completed(&mut self, item: &Value) -> Vec<Record> {

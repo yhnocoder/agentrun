@@ -7,14 +7,8 @@ use std::path::Path;
 use serde_json::json;
 use support::env::Env;
 
-fn with_claude(script: &str) -> Env {
-    let env = Env::new();
-    env.install("claude", script);
-    env
-}
-
 fn with_output(lines: &str) -> Env {
-    with_claude(&format!("#!/bin/sh\ncat <<'EOF'\n{lines}\nEOF\n"))
+    Env::with("claude", &format!("#!/bin/sh\ncat <<'EOF'\n{lines}\nEOF\n"))
 }
 
 fn read_env_dump(path: &Path) -> BTreeMap<String, String> {
@@ -30,7 +24,10 @@ fn read_env_dump(path: &Path) -> BTreeMap<String, String> {
 fn child_environment_follows_assembly_rules() {
     let root = tempfile::tempdir().unwrap();
     let dump = root.path().join("env.txt");
-    let env = with_claude(&format!("#!/bin/sh\n/usr/bin/env > '{}'\n", dump.display()));
+    let env = Env::with(
+        "claude",
+        &format!("#!/bin/sh\n/usr/bin/env > '{}'\n", dump.display()),
+    );
     let env_file = env.root().join("session.env");
     std::fs::write(
         &env_file,
@@ -95,7 +92,7 @@ fn child_environment_follows_assembly_rules() {
 #[test]
 fn pi_credential_is_written_and_never_printed() {
     let secret = "pi-credential-value-7f3a9c";
-    let env = with_claude("#!/bin/sh\nexit 0\n");
+    let env = Env::with("claude", "#!/bin/sh\nexit 0\n");
     env.install(
         "pi",
         "#!/bin/sh\n/usr/bin/env\n/usr/bin/env >&2\nprintf '{\"record\":\"text\",\"parent\":null,\"text\":\"done\"}\\n'\n",
@@ -136,7 +133,7 @@ fn pi_credential_is_written_and_never_printed() {
 
 #[test]
 fn dry_run_lists_variable_names_and_skips_credentials() {
-    let env = with_claude("#!/bin/sh\nexit 0\n");
+    let env = Env::with("claude", "#!/bin/sh\nexit 0\n");
     env.install("pi", "#!/bin/sh\ntouch \"$0.ran\"\n");
     let home = env.home();
     let home_str = home.to_string_lossy().into_owned();
@@ -203,7 +200,7 @@ fn debug_lists_removed_variables_for_claude_code() {
 
 #[test]
 fn credential_write_failure_is_rejected_before_tempdir() {
-    let env = with_claude("#!/bin/sh\nexit 0\n");
+    let env = Env::with("claude", "#!/bin/sh\nexit 0\n");
     env.install("pi", "#!/bin/sh\ntouch \"$0.ran\"\n");
     let blocker = env.root().join("blocker");
     std::fs::write(&blocker, "").unwrap();

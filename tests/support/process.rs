@@ -93,7 +93,7 @@ fn fake_agentrun() -> u8 {
         signals,
     };
     run(caller, &|_| {
-        Some(Box::new(FakeAdapter::new(false)) as Box<dyn Adapter>)
+        Box::new(FakeAdapter::new(false)) as Box<dyn Adapter>
     })
 }
 

@@ -1,14 +1,16 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::claudecode::ClaudeCode;
-use crate::cli::Runtime;
+use crate::cli::{Format, RunArgs, Runtime};
 use crate::codex::Codex;
 use crate::event::SubagentStatus;
+use crate::network::{HostRule, ProxyEndpoint};
 use crate::pi::Pi;
-use crate::run::Invocation;
+use crate::sandbox::Sandbox;
+use crate::session::Session;
 use crate::usage::{TokenCounts, Usage};
 
 pub trait Adapter {
@@ -20,12 +22,26 @@ pub trait Adapter {
     fn failure(&self, exit_code: Option<i32>, stderr_tail: &str) -> Option<String>;
 }
 
-pub fn builtin(runtime: Runtime) -> Option<Box<dyn Adapter>> {
+pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
     match runtime {
-        Runtime::ClaudeCode => Some(Box::new(ClaudeCode::new())),
-        Runtime::Pi => Some(Box::new(Pi::new())),
-        Runtime::Codex => Some(Box::new(Codex::new())),
+        Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
+        Runtime::Pi => Box::new(Pi::new()),
+        Runtime::Codex => Box::new(Codex::new()),
     }
+}
+
+pub struct Invocation {
+    pub runtime: Runtime,
+    pub args: RunArgs,
+    pub cwd: PathBuf,
+    pub prompt: String,
+    pub format: Format,
+    pub sandbox: Sandbox,
+    pub tempdir: PathBuf,
+    pub session: Session,
+    pub allow_hosts: Vec<HostRule>,
+    pub proxy: Option<ProxyEndpoint>,
+    pub codex_home: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

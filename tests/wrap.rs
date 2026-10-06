@@ -316,6 +316,7 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
     };
     let missing = PiState {
         dir: wrapped.root.path().join("missing"),
+        writable: Vec::new(),
         login_target: None,
         readonly: Vec::new(),
     };

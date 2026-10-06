@@ -15,7 +15,7 @@ use clap::error::ErrorKind as ClapErrorKind;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use crate::adapter::{Adapter, Launch, Record};
+use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::aggregate::Aggregator;
 use crate::cli::{
     Cli, Format, Parsed, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
@@ -24,15 +24,15 @@ use crate::cli::{
 use crate::codex;
 use crate::credential::write_session_credential;
 use crate::doctor;
-use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Start};
-use crate::network::{self, FilterProxy, HostRule, Policy, ProxyEndpoint, Upstream};
+use crate::event::{Body, End, EndStatus, Event, Network, NetworkInfo, Signal, Start};
+use crate::network::{self, FilterProxy, Policy, ProxyEndpoint, Upstream};
 use crate::output::Output;
 use crate::pi;
 use crate::process_tree;
 use crate::rich::{OpenTool, REFRESH_PERIOD, Rich, terminal_size};
-use crate::sandbox::{self, Sandbox};
+use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
-use crate::signal::{SharedWriter, Signal, Signals};
+use crate::signal::{SharedWriter, Signals};
 use crate::usage::Usage;
 
 const STDERR_TAIL_CHARS: usize = 500;
@@ -42,7 +42,7 @@ const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
 const TEMPDIR_PREFIX: &str = "agentrun-";
 
-pub type AdapterLookup = dyn Fn(Runtime) -> Option<Box<dyn Adapter>>;
+pub type AdapterLookup = dyn Fn(Runtime) -> Box<dyn Adapter>;
 
 pub struct Caller {
     pub args: Vec<OsString>,
@@ -96,20 +96,6 @@ pub struct Exit {
     pub code: Option<i32>,
     pub signal: Option<Signal>,
     pub timed_out: bool,
-}
-
-pub struct Invocation {
-    pub runtime: Runtime,
-    pub args: RunArgs,
-    pub cwd: PathBuf,
-    pub prompt: String,
-    pub format: Format,
-    pub sandbox: Sandbox,
-    pub tempdir: PathBuf,
-    pub session: Session,
-    pub allow_hosts: Vec<HostRule>,
-    pub proxy: Option<ProxyEndpoint>,
-    pub codex_home: Option<PathBuf>,
 }
 
 struct Ready {
@@ -328,12 +314,7 @@ fn prepare(
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
-    let adapter = adapters(runtime).ok_or_else(|| {
-        format!(
-            "{} support is not implemented in this build",
-            runtime.name()
-        )
-    })?;
+    let adapter = adapters(runtime);
     let invocation = Invocation {
         runtime,
         args,

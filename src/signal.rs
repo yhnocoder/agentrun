@@ -8,7 +8,7 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator;
 
 use crate::cli::{Format, SandboxMode};
-use crate::event::{Body, End, EndStatus, Event};
+use crate::event::{Body, End, EndStatus, Event, Signal};
 use crate::output::Output;
 use crate::process_tree::{
     self, ForkWatcher, PROC_ROOT, ProcessTable, RECORDS_DESCENDANTS, Recorded, SNAPSHOT_PERIOD,
@@ -20,12 +20,6 @@ pub const GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 pub type SharedWriter = Arc<Mutex<dyn Write + Send>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Signal {
-    Interrupt,
-    Terminate,
-}
-
 impl Signal {
     fn from_number(number: i32) -> Option<Signal> {
         match number {
@@ -35,17 +29,10 @@ impl Signal {
         }
     }
 
-    pub fn number(self) -> i32 {
+    fn number(self) -> i32 {
         match self {
             Signal::Interrupt => SIGINT,
             Signal::Terminate => SIGTERM,
-        }
-    }
-
-    pub fn exit_code(self) -> u8 {
-        match self {
-            Signal::Interrupt => 130,
-            Signal::Terminate => 143,
         }
     }
 }
@@ -239,12 +226,6 @@ impl Signals {
             report,
         });
         Ok(())
-    }
-
-    pub fn format(&self, format: Format) {
-        if let Phase::Preparing(preparation) = &mut self.shared.lock().phase {
-            preparation.format = format;
-        }
     }
 
     pub fn checking(&self, pid: Option<i32>) {

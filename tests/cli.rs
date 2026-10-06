@@ -10,9 +10,7 @@ use serde_json::Value;
 use support::env::Env;
 
 fn with_fake(name: &str) -> Env {
-    let env = Env::new();
-    env.install(name, "#!/bin/sh\nexit 0\n");
-    env
+    Env::with(name, "#!/bin/sh\nexit 0\n")
 }
 
 fn command(env: &Env, args: &[&str]) -> Command {

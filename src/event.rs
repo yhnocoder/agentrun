@@ -5,7 +5,6 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use crate::cli::{NetworkMode, Runtime};
-use crate::signal::Signal;
 use crate::usage::{TokenCounts, Usage};
 
 pub const SCHEMA: u8 = 1;
@@ -193,6 +192,21 @@ impl NetworkReason {
         match self {
             NetworkReason::NotAllowed => "not_allowed",
             NetworkReason::PrivateAddress => "private_address",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    Interrupt,
+    Terminate,
+}
+
+impl Signal {
+    pub fn exit_code(self) -> u8 {
+        match self {
+            Signal::Interrupt => 130,
+            Signal::Terminate => 143,
         }
     }
 }

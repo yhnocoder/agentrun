@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::cli::SandboxMode;
 use crate::event::{Body, Event};
-use crate::output::{TextFormatter, first_line, subagent_label};
+use crate::text::{TextFormatter, first_line, subagent_label};
 use crate::usage::{TokenCounts, tokens};
 
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);

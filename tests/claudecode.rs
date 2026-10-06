@@ -67,12 +67,6 @@ fn replay_prompt_multiline() {
     replay("prompt-multiline");
 }
 
-fn with_claude(script: &str) -> Env {
-    let env = Env::new();
-    env.install("claude", script);
-    env
-}
-
 fn run(env: &Env, args: &[&str], stdin: &str) -> Output {
     let work = env.work();
     let mut child = env
@@ -104,7 +98,7 @@ LINES
 
 #[test]
 fn fake_claude_run_without_sandbox() {
-    let env = with_claude(FAKE_CLAUDE);
+    let env = Env::with("claude", FAKE_CLAUDE);
     let output = run(
         &env,
         &["--sandbox", "off", "--model", "sonnet", "--", "--extra"],
@@ -175,7 +169,7 @@ fn fake_claude_run_without_sandbox() {
 
 #[test]
 fn no_subagents_removes_task_and_reports_when_it_comes_back() {
-    let env = with_claude(FAKE_CLAUDE);
+    let env = Env::with("claude", FAKE_CLAUDE);
     let output = run(
         &env,
         &[
@@ -209,7 +203,7 @@ fn no_subagents_removes_task_and_reports_when_it_comes_back() {
 
 #[test]
 fn exit_without_result_fails() {
-    let env = with_claude("#!/bin/sh\nexit 0\n");
+    let env = Env::with("claude", "#!/bin/sh\nexit 0\n");
     let output = run(&env, &["--sandbox", "off", "--prompt", "hi"], "");
     assert_eq!(output.status.code(), Some(1));
     let end = support::events(&output).pop().unwrap();
@@ -225,7 +219,7 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
     if !support::sandbox_available() {
         return;
     }
-    let env = with_claude(FAKE_CLAUDE);
+    let env = Env::with("claude", FAKE_CLAUDE);
     let output = run(&env, &["--dry-run", "--prompt", "hi"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -286,7 +280,7 @@ fn sandboxed_claude_with_full_network_gets_the_proxy_ports() {
         return;
     }
     let server = support::WebServer::start();
-    let env = with_claude(CURL_CLAUDE);
+    let env = Env::with("claude", CURL_CLAUDE);
     std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
     let output = run(&env, &["--network", "full", "--prompt", "fetch"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -330,7 +324,7 @@ fn sandboxed_claude_with_custom_network_reaches_the_listed_host() {
         return;
     }
     let server = support::WebServer::start();
-    let env = with_claude(CURL_CLAUDE);
+    let env = Env::with("claude", CURL_CLAUDE);
     std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
     let port_rule = format!("127.0.0.1:{}", server.port);
     let output = run(
@@ -383,7 +377,7 @@ fn sandboxed_claude_with_network_none_gets_no_proxy() {
     if !support::sandbox_available() {
         return;
     }
-    let env = with_claude(CURL_CLAUDE);
+    let env = Env::with("claude", CURL_CLAUDE);
     let output = run(&env, &["--prompt", "fetch"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let none = support::events(&output);
@@ -410,7 +404,7 @@ fn sandboxed_claude_with_network_none_gets_no_proxy() {
 
 #[test]
 fn unsandboxed_claude_with_full_network_gets_no_settings() {
-    let env = with_claude(CURL_CLAUDE);
+    let env = Env::with("claude", CURL_CLAUDE);
     let output = run(
         &env,
         &["--sandbox", "off", "--network", "full", "--prompt", "fetch"],

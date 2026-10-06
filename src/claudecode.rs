@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Launch, Record};
+use crate::adapter::{Adapter, Invocation, Launch, Record};
 use crate::cli::{NetworkMode, Runtime};
 use crate::event::SubagentStatus;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
-use crate::run::Invocation;
 use crate::usage::{TokenCounts, Usage};
 
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
@@ -30,6 +29,7 @@ const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
 const RANDOM_SOURCE: &str = "/dev/urandom";
 
+#[derive(Default)]
 pub struct ClaudeCode {
     cwd: PathBuf,
     no_subagents: bool,
@@ -92,23 +92,9 @@ struct NetworkSettings {
     socks_proxy_port: Option<Value>,
 }
 
-impl Default for ClaudeCode {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ClaudeCode {
     pub fn new() -> ClaudeCode {
-        ClaudeCode {
-            cwd: PathBuf::new(),
-            no_subagents: false,
-            prompt_echoed: false,
-            subagents: HashSet::new(),
-            denied: HashSet::new(),
-            pending_usages: Vec::new(),
-            last_result: None,
-        }
+        ClaudeCode::default()
     }
 
     fn translate_assistant(&mut self, line: &Value) -> Vec<Record> {

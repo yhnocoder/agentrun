@@ -12,24 +12,23 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, Invocation};
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::codex;
 use crate::credential::write_session_credential;
-use crate::event::{Network, NetworkReason, SandboxKind};
+use crate::event::{Network, NetworkReason, SandboxKind, Signal};
 use crate::network::{
     FilterProxy, HostRule, Policy, ProxyAddress, SOCKET_FILE, Upstream, check_usage,
     proxy_environment,
 };
 use crate::pi::{self, Model, Pi};
 use crate::process_tree;
-use crate::run::{Caller, Invocation, create_tempdir, shell_quote};
+use crate::run::{Caller, create_tempdir, shell_quote};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, PiState, ProxyForward, Sandbox, UNAVAILABLE_PREFIX,
     wrap_pi, wrap_seatbelt, write_seatbelt_profile,
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
-use crate::signal::Signal;
 
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub const USAGE_EXIT_CODE: u8 = 2;
@@ -46,7 +45,6 @@ const SANDBOX_SCRIPT: &str =
 const INSIDE_FILE: &str = "inside.txt";
 const OUTSIDE_FILE: &str = "outside.txt";
 const CODEX_HOME_DIR: &str = "codex-home";
-const PI_LOGIN_DIR: &str = "pi-login";
 const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
 const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
 const SERVICE_PORT: u16 = 443;
@@ -230,7 +228,7 @@ pub fn run(caller: Caller, args: DoctorArgs, timeout: Duration) -> u8 {
         write_json(&caller.stdout, &items);
     }
     if args.debug {
-        remove_login_links(tempdir.path());
+        remove_login_link(tempdir.path());
         caller.print_error_line(&format!("[debug] kept {}", tempdir.path().display()));
         let _ = tempdir.keep();
     }
@@ -612,9 +610,6 @@ impl Doctor {
 
     fn pi_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
         let (expected, source) = self.pi_expected_model(target)?;
-        let tempdir = self.tempdir.join(PI_LOGIN_DIR);
-        std::fs::create_dir(&tempdir)
-            .map_err(|error| format!("cannot create {}: {error}", tempdir.display()))?;
         let invocation = Invocation {
             runtime: Runtime::Pi,
             args: self.run_args(),
@@ -629,7 +624,7 @@ impl Doctor {
                 socat: None,
                 description: String::new(),
             },
-            tempdir,
+            tempdir: self.tempdir.clone(),
             session: target.session.clone(),
             allow_hosts: Vec::new(),
             proxy: None,
@@ -784,7 +779,7 @@ impl Doctor {
                     bwrap,
                     work: dirs.work.clone(),
                     tmp: dirs.tmp.clone(),
-                    state,
+                    state: state.map(Box::new),
                     forward,
                 })
             }
@@ -1104,7 +1099,7 @@ fn unknown_model_warning(finished: &Finished) -> Option<&str> {
     })
 }
 
-fn remove_login_links(tempdir: &Path) {
+fn remove_login_link(tempdir: &Path) {
     let link = tempdir.join(CODEX_HOME_DIR).join(codex::LOGIN_FILE);
     if std::fs::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_symlink()) {
         let _ = std::fs::remove_file(&link);
@@ -1160,7 +1155,7 @@ enum Wrap {
         bwrap: PathBuf,
         work: PathBuf,
         tmp: PathBuf,
-        state: Option<PiState>,
+        state: Option<Box<PiState>>,
         forward: Option<Forward>,
     },
     Seatbelt {
@@ -1194,7 +1189,7 @@ impl Wrap {
                     port: &forward.port,
                     socket: &forward.socket,
                 });
-                wrap_pi(bwrap, work, tmp, state.as_ref(), forward.as_ref(), inner)
+                wrap_pi(bwrap, work, tmp, state.as_deref(), forward.as_ref(), inner)
             }
             Wrap::Seatbelt { tmp } => wrap_seatbelt(tmp, inner),
             Wrap::Codex { prefix } => {
