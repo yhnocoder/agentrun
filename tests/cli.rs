@@ -856,3 +856,10 @@ fn help_and_version_print_to_stdout() {
             .contains("--max-turns")
     );
 }
+
+#[test]
+fn help_starts_with_package_description() {
+    let output = Env::new().run(&["--help"]);
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(help.lines().next(), Some(env!("CARGO_PKG_DESCRIPTION")));
+}
