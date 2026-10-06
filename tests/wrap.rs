@@ -199,6 +199,7 @@ fn lock_directories_can_be_created_and_removed_in_the_state_dir() {
         &[
             state_dir.join("auth.json.lock").to_str().unwrap(),
             state_dir.join("models-store.json.lock").to_str().unwrap(),
+            state_dir.join("settings.json.lock").to_str().unwrap(),
         ],
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -207,7 +208,10 @@ fn lock_directories_can_be_created_and_removed_in_the_state_dir() {
         .lines()
         .map(|line| line.split(':').next().unwrap())
         .collect();
-    assert_eq!(lines, ["created", "removed", "created", "removed"]);
+    assert_eq!(
+        lines,
+        ["created", "removed", "created", "removed", "created", "removed"]
+    );
     assert!(!state_dir.join("auth.json.lock").exists());
 }
 

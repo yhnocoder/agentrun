@@ -142,6 +142,7 @@ fn lock_directories_can_be_created_but_other_new_entries_cannot() {
         &[
             state_dir.join("auth.json.lock").to_str().unwrap(),
             state_dir.join("models-store.json.lock").to_str().unwrap(),
+            state_dir.join("settings.json.lock").to_str().unwrap(),
             state_dir.join("extensions").to_str().unwrap(),
         ],
         None,
@@ -149,7 +150,9 @@ fn lock_directories_can_be_created_but_other_new_entries_cannot() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(
         outcomes(&output),
-        ["created", "removed", "created", "removed", "blocked"]
+        [
+            "created", "removed", "created", "removed", "created", "removed", "blocked"
+        ]
     );
     assert!(!state_dir.join("auth.json.lock").exists());
     assert!(!state_dir.join("extensions").exists());

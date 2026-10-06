@@ -654,6 +654,7 @@ mod tests {
                 "  (literal \"/Users/me/.pi/agent/auth.json.lock\")\n",
                 "  (literal \"/Users/me/.pi/agent/models-store.json\")\n",
                 "  (literal \"/Users/me/.pi/agent/models-store.json.lock\")\n",
+                "  (literal \"/Users/me/.pi/agent/settings.json.lock\")\n",
                 "  (literal \"/Users/me/secrets/pi-auth.json\")\n",
                 "  (literal \"/dev/null\")\n",
                 "  (literal \"/dev/zero\")\n",
@@ -678,12 +679,12 @@ mod tests {
     }
 
     #[test]
-    fn seatbelt_profile_with_a_plain_login_file_lists_only_the_four_entries() {
+    fn seatbelt_profile_with_a_plain_login_file_lists_only_the_five_entries() {
         let state = state("/Users/me/.pi/agent", None, &["/Users/me/.pi/agent/bin"]);
         let profile = seatbelt_profile(Path::new("/work"), Path::new("/tmp/s"), Some(&state), None);
         assert_eq!(
             profile.matches("(literal \"/Users/me/").count(),
-            4,
+            5,
             "{profile}"
         );
         assert!(!profile.contains("/bin"), "{profile}");

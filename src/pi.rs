@@ -31,11 +31,12 @@ const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
 pub const LOGIN_FILE: &str = "auth.json";
 pub const SETTINGS_FILE: &str = "settings.json";
-pub const WRITABLE_STATE_ENTRIES: [&str; 4] = [
+pub const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "auth.json",
     "auth.json.lock",
     "models-store.json",
     "models-store.json.lock",
+    "settings.json.lock",
 ];
 const SETTINGS_KEYS: [&str; 2] = ["defaultProvider", "defaultModel"];
 const FIXED_ARGS: [&str; 12] = [
@@ -709,6 +710,7 @@ mod tests {
             "auth.json.lock",
             "models-store.json",
             "models-store.json.lock",
+            "settings.json.lock",
             "settings.json",
             "models.json",
             "bin/fd",
