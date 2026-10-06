@@ -13,12 +13,31 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · 会话环境 · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
-<h1>会话环境 <span class="tag">草稿</span></h1>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · 会话环境 · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
+<h1>会话环境</h1>
 <p class="lead">运行时进程启动时拿到什么：环境变量、PATH、临时目录与登录凭据；以及它怎么结束：进程组、信号与超时。目标是<mark>调用方能完整控制会话环境</mark>，同时调用方环境里残留的变量不会悄悄改变登录方式。</p>
+
+<h2 id="code">代码位置</h2>
+<table>
+  <thead>
+    <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>parse_env_args</code>、<code>read_env_file</code>、<code>resolve_path_dirs</code>、<code>find_executable</code>、<code>is_executable</code>、<code>is_variable_name</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
+    <tr><td><code>src/run.rs</code></td><td><code>create_tempdir</code>、<code>execute</code>（启动进程组、转发信号、读输出）、<code>supervise</code></td><td>会话临时目录、进程、信号与超时</td></tr>
+    <tr><td><code>src/pi.rs</code>、<code>src/codex.rs</code></td><td>pi：<code>user_state_dir</code>、<code>login_file</code>、<code>prepare_state_dir</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 与 codex 的私有配置目录</td></tr>
+    <tr><td><code>src/credential.rs</code></td><td><code>write_session_credential</code>、<code>write_credential</code>、<code>CredentialReport</code>、<code>CredentialStatus</code></td><td>凭据</td></tr>
+    <tr><td><code>src/signal.rs</code></td><td><code>Signals</code>（<code>install</code>、按阶段切换的 <code>prepare</code>、<code>checking</code>、<code>doctoring</code>、<code>running</code>、<code>finishing</code>、<code>exited</code>、<code>kill_group</code>）、<code>Signal</code>（含退出码）、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
+  </tbody>
+</table>
+<p><code>Signals</code> 在进程启动时安装一次，之后按运行所处的阶段决定收到信号时的动作：启动前只记录，检查沙箱时终止检查进程，运行中转发给进程组。理由：信号可能在任何时刻到达，每个阶段的清理动作不同，由同一个对象记录阶段，处理函数里只读它。</p>
 
 <h2 id="env">环境变量</h2>
 <p>会话的环境变量按以下顺序组装，后一步覆盖前一步：</p>
@@ -40,6 +59,7 @@
     <tr><td>pi</td><td>不删除</td><td>pi 从环境变量或 <code>auth.json</code> 读取服务商 key</td></tr>
   </tbody>
 </table>
+<p>表里没有的变量原样进入会话。claude-code 读取的其他 <code>CLAUDE_</code> 变量（例如 Cloud Managed 容器里设置的 <code>CLAUDE_CODE_INCLUDE_PARTIAL_MESSAGES</code>，它让 claude-code 多输出 <code>stream_event</code>，这些事件只写入 <code>--raw</code>）不删除，因为 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 这样的登录变量也在这个前缀之下。</p>
 <p>删除只作用于从调用方环境继承来的变量，<code>--env</code> 与 <code>--env-file</code> 显式给出的变量不受影响。理由：删除规则防的是调用方没有意识到的残留变量；显式给出的变量是调用方的意图，例如用 <code>--env ANTHROPIC_BASE_URL=...</code> 接入兼容 Anthropic 接口的其他服务。这时登录方式由调用方负责，和 <code>--</code> 透传一样。</p>
 <p><code>AGENTRUN_</code> 变量从会话环境删除的理由：凭据变量里是登录文件的完整内容，留在会话环境里，agent 运行 <code>env</code> 就能读到。<code>AGENTRUN_</code> 变量可以来自 <code>--env</code> 与 <code>--env-file</code>，所以在第 5 步才读取。</p>
 

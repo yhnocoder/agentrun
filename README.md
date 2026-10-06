@@ -69,7 +69,7 @@ sudo dnf install -y bubblewrap socat
 
 Ubuntu 23.10 and later do not allow ordinary programs to create user namespaces by default, so `bwrap` fails to start until it has its own AppArmor profile. The steps are in [Sandbox and network](https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor).
 
-Install and log in to the runtimes following their own documentation. agentrun finds them in `PATH` and uses the existing login. In a container without the user's login files, pass the login through environment variables, as described in the [user guide](https://yhnocoder.github.io/agentrun/pages/guide.html).
+Install and log in to the runtimes following their own documentation. agentrun finds them in `PATH` and uses the existing login. In a container without the user's login files, pass the login through environment variables, as described in the [user guide](https://yhnocoder.github.io/agentrun/pages/guide.html#containers).
 
 ## Quick start
 

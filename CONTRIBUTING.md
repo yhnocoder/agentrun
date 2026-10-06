@@ -52,11 +52,11 @@ The complete rules are in [CLAUDE.md](https://github.com/yhnocoder/agentrun/blob
 ## Workflow
 
 1. Every change starts from a GitHub issue. For a larger feature, the issue body holds the spec, and the spec is agreed on before implementation starts.
-2. The design is in `docs/`, starting from `docs/index.html`, and is published at https://yhnocoder.github.io/agentrun/. A change to user visible behavior updates the design in the same pull request.
+2. The documentation is in `docs/`, starting from `docs/index.html`, and is published at https://yhnocoder.github.io/agentrun/. It has user pages (quick start and user guide) and developer pages that describe how each module works. A pull request that changes user visible behavior, an interface or a constant updates the developer pages, and also the user pages when usage changes.
 3. After changing `docs/`, run the page check and look at the screenshots it writes. In a container without Chrome, add `--browser chromium`:
 
    ```sh
-   uv run scripts/check_design.py
+   uv run scripts/check_docs.py
    ```
 
    It takes desktop, narrow and dark screenshots of each page and reports console errors, failed resources, broken formulas, horizontal overflow and broken relative links.

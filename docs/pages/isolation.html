@@ -13,12 +13,30 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · 沙箱与网络 · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
-<h1>沙箱与网络 <span class="tag">草稿</span></h1>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · 沙箱与网络 · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
+<h1>沙箱与网络</h1>
 <p class="lead">agentrun 用沙箱限制 agent 能写的文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code> 与 <code>--network</code> 两个选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
+
+<h2 id="code">代码位置</h2>
+<table>
+  <thead>
+    <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/sandbox.rs</code></td><td><code>Sandbox</code>、<code>resolve_mode</code>、<code>check</code>（启动前检查，按操作系统调用 Linux 的 <code>bubblewrap::probe</code> 或 macOS 的 <code>probe</code>）、<code>wrap_pi</code>、<code>ProxyForward</code>、<code>seatbelt_profile</code>、<code>write_seatbelt_profile</code>、<code>wrap_seatbelt</code>、<code>wrapper_failure</code></td><td>沙箱模式、判断沙箱能不能用、pi 的包裹</td></tr>
+    <tr><td><code>src/network.rs</code></td><td><code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>、<code>Upstream</code>、<code>NoProxyRule</code>、<code>ProxyAddress</code>、<code>ProxyEndpoint</code>、<code>FilterProxy</code>（<code>bind</code>、<code>serve</code>）、<code>proxy_needed</code>、<code>proxy_environment</code>、<code>is_private</code></td><td>网络、过滤代理、不支持 IPv6</td></tr>
+    <tr><td><code>src/claudecode.rs</code>、<code>src/codex.rs</code>、<code>src/pi.rs</code></td><td>各自 <code>launch</code> 里生成的沙箱与网络参数：claude-code 的 <code>--settings</code> 与放行列表，codex 的 <code>network_settings</code> 与 <code>filesystem_setting</code>，pi 的 <code>SERVICE_HOSTS</code> 表与包裹调用</td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
+    <tr><td><code>src/doctor.rs</code></td><td><code>sandbox</code>、<code>sandbox_test</code>、<code>network</code>、<code>network_test</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
+  </tbody>
+</table>
+<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个线程；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
 <p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
@@ -114,7 +132,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>沙箱打开且需要按主机放行时，agentrun 在启动运行时之前在自己的进程里启动一个过滤代理，会话结束时关闭。代理运行在沙箱外，沙箱里的进程只能连到它。</p>
 <ul>
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
-  <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成的名字与 IPv4 字面量，其他字节的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
+  <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成、最长 253 个字节的名字与 IPv4 字面量，其他字节或更长的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
   <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
   <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB，连接目标最多等 10 秒。</li>
@@ -145,7 +163,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>claude-code 的沙箱运行时，三种取值下会话环境都设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>。理由：claude-code 在断网的网络命名空间里用 <code>socat</code> 把沙箱里的端口转发到它的代理 socket，没有指定地址族；内核没有 IPv6 时（Cloud Managed 容器），socat 1.8 选了 IPv6 而启动失败，claude-code 丢弃它的输出，沙箱里的命令连不上任何代理。这个变量让 socat 改用 IPv4 监听。</p>
 
 <h3>模型服务的主机</h3>
-<p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>：</p>
+<p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>。模型服务的主机只在 443 端口放行，并且跳过私有地址检查：</p>
 <table>
   <thead>
     <tr><th>pi 的服务商</th><th>放行的主机</th></tr>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>agentrun 设计</title>
+<title>agentrun 文档</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css">
 <link rel="stylesheet" href="style.css">
 <script defer src="math.js"></script>
@@ -13,29 +13,67 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="code.js"></script>
+<script defer src="markdown.js"></script>
 </head>
 <body>
 <main>
-<h1>agentrun 设计 <span class="tag">草稿</span></h1>
-<p class="lead">agentrun 是一个独立的 Rust 命令行工具，在 macOS、Linux、Cloud Managed 容器和 docker 容器里用<mark>同一种调用方式</mark>运行 claude-code、codex 和 pi。</p>
-<p>源代码在 <a href="https://github.com/yhnocoder/agentrun">GitHub 仓库</a>，安装方法与快速开始见 <a href="https://github.com/yhnocoder/agentrun/blob/main/README.md">README</a>。</p>
+<div class="page-head">
+<p class="nav">总览 · <a href="pages/quickstart.html">快速开始</a> · <a href="pages/guide.html">使用指南</a> · <a href="pages/session.html">会话环境</a> · <a href="pages/isolation.html">沙箱与网络</a> · <a href="pages/events.html">事件与输出</a> · <a href="pages/run.html">运行</a> · <a href="pages/testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
+<h1>agentrun</h1>
+<p class="lead">agentrun 用<mark>一条命令</mark>在沙箱里运行 claude-code、codex 和 pi，支持 macOS、Linux、Cloud Managed 容器和 docker 容器。</p>
 
 <h2>Motivation</h2>
-<p>具体分三点：</p>
-<ul>
-  <li>Safety：在每个环境能提供的范围内隔离 agent。限制它能写的文件和命令能否联网；不读取用户自己的运行时配置、插件、规则与会话记录；运行中不弹出确认。做法见<a href="pages/isolation.html">沙箱与网络</a>。</li>
-  <li>Unified Experience：同一条命令在四种环境里都能运行，三个运行时的输出统一成一种带版本号的事件流，成败由工具统一判定。见<a href="pages/events.html">事件与输出</a>。</li>
-  <li>Doctor：<code>agentrun doctor</code> 在启动前检查运行时能否使用，失败时说明原因和修正方法。</li>
-</ul>
-<p>由于是命令行工具，任何语言都能调用 agentrun，接口只有命令行参数、环境变量、标准输入输出与退出码。每个平台一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64，不支持 Windows。</p>
-<p>工具不做的事：</p>
-<ul>
-  <li>不决定用哪个模型做哪件事。调用方没给 <code>--model</code> 时不传模型参数，用运行时自己的默认配置。角色、模型路由与业务流程由调用方负责。</li>
-  <li>不直接调用模型 API，只启动 agent 运行时的命令行程序。</li>
-  <li>不做多轮交互，不做重试，不安装或升级运行时，也不安装沙箱需要的 <code>bwrap</code> 与 <code>socat</code>。</li>
+<p>在脚本或 CI 里让 claude-code、codex 或 pi 去改代码，每次都要处理同样的事：agent 能写哪些文件、能不能联网、会不会读到你自己的配置和账号；三个运行时的参数、输出格式和成败判定各不相同；同一段脚本换到 docker 或 Cloud Managed 容器里，可能因为缺少沙箱工具或登录而失败，报错也看不出原因。</p>
+<p>agentrun 把这些事放进一条命令。它在当前环境能提供的沙箱里启动运行时，把运行时的输出转换成同一种事件流，按统一的规则给出退出码；<code>agentrun doctor</code> 在启动前检查环境，失败时说明原因和改法。选哪个模型、失败后是否重试、怎么安装运行时，仍由调用方决定。</p>
+<figure>
+<svg class="diagram" viewBox="0 0 600 232" style="max-width:600px" role="img" aria-label="agentrun 在沙箱里启动运行时，把输出转换成统一的事件流与退出码"><defs><marker id="arr-mot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<rect x="10" y="80" width="104" height="56" rx="8"/><text x="62" y="113" text-anchor="middle">脚本或 CI</text>
+<path d="M114,108 L166,108" marker-end="url(#arr-mot)"/>
+<rect x="168" y="14" width="254" height="180" rx="10"/><text x="295" y="38" text-anchor="middle">agentrun</text>
+<rect x="182" y="52" width="226" height="94" rx="8" style="fill:none;stroke:var(--muted);stroke-dasharray:5 4"/>
+<text class="note" x="295" y="70" text-anchor="middle">沙箱：只写工作目录 · 网络经过滤代理</text>
+<rect x="188" y="88" width="88" height="34" rx="6"/><text x="232" y="110" text-anchor="middle">claude-code</text>
+<rect x="282" y="88" width="60" height="34" rx="6"/><text x="312" y="110" text-anchor="middle">codex</text>
+<rect x="348" y="88" width="54" height="34" rx="6"/><text x="375" y="110" text-anchor="middle">pi</text>
+<text class="note" x="295" y="138" text-anchor="middle">不读你的运行时配置</text>
+<text x="295" y="174" text-anchor="middle">doctor 检查环境 · 转换输出 · 判定成败</text>
+<path d="M422,108 L474,108" marker-end="url(#arr-mot)"/>
+<rect x="476" y="72" width="114" height="72" rx="8"/><text x="533" y="102" text-anchor="middle">同一种事件流</text><text x="533" y="124" text-anchor="middle">与退出码</text>
+<text class="note" x="300" y="222" text-anchor="middle">同一条命令在 macOS、Linux、Cloud Managed 容器和 docker 容器里运行</text>
+</svg>
+</figure>
+
+<h2 id="get-started">Get Started</h2>
+<p>给使用 agentrun 的人：怎么安装、怎么调用、出了问题怎么查。</p>
+<ul class="cards">
+  <li><a class="card" href="pages/quickstart.html">
+    <div class="pv">
+      <div class="pv-line pv-a pv-s1"><b>$</b> agentrun doctor claude-code</div>
+      <div class="pv-line pv-a pv-s2"><b>$</b> agentrun claude-code --prompt "..."</div>
+      <div class="pv-line pv-a pv-s3">[end] finished 9.9s</div>
+    </div>
+    <div class="card-body"><strong>快速开始</strong><span>安装 agentrun，检查环境，在沙箱里运行第一个任务，再把它放进脚本。</span>
+    <div class="card-tags"><i>install</i><i>first run</i></div></div>
+  </a></li>
+  <li><a class="card" href="pages/guide.html">
+    <div class="pv">
+      <div class="pv-line pv-cmd"><span class="pv-a">--network custom --allow-host pypi.org</span></div>
+      <div class="pv-line pv-a pv-s2">-e AGENTRUN_SANDBOX=off</div>
+      <div class="pv-line pv-a pv-s3">--timeout 600</div>
+    </div>
+    <div class="card-body"><strong>使用指南</strong><span>访问网络、传入密钥、限制时间、在 docker 里运行、在 CI 里判断成败、常见问题。</span>
+    <div class="card-tags"><i>guide</i><i>faq</i></div></div>
+  </a></li>
 </ul>
 
 <h2>Environment</h2>
+<p>开发者文档从这一节开始。下图是源代码里各模块的关系，每个页面开头的「代码位置」列出对应的源文件。</p>
+<figure>
+<svg class="diagram" viewBox="0 0 600 460" style="max-width:600px" role="img" aria-label="agentrun 的模块关系"><defs><marker id="arr-mod" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="215" y="10" width="170" height="44" rx="8"/><text x="300" y="37" text-anchor="middle">命令行 cli.rs</text><path d="M300,54 L300,88" marker-end="url(#arr-mod)"/><rect x="20" y="90" width="160" height="56" rx="8"/><text x="100" y="114" text-anchor="middle">会话环境</text><text x="100" y="132" text-anchor="middle">session.rs credential.rs</text><rect x="215" y="90" width="170" height="44" rx="8"/><text x="300" y="117" text-anchor="middle">运行框架 run.rs</text><rect x="420" y="90" width="160" height="44" rx="8"/><text x="500" y="117" text-anchor="middle">doctor.rs</text><path d="M215,112 L182,112" marker-end="url(#arr-mod)"/><path d="M385,112 L418,112" marker-end="url(#arr-mod)"/><rect x="20" y="190" width="160" height="56" rx="8"/><text x="100" y="214" text-anchor="middle">沙箱</text><text x="100" y="232" text-anchor="middle">sandbox.rs</text><rect x="215" y="190" width="170" height="44" rx="8"/><text x="300" y="217" text-anchor="middle">适配器接口 adapter.rs</text><rect x="420" y="190" width="160" height="56" rx="8"/><text x="500" y="214" text-anchor="middle">过滤代理</text><text x="500" y="232" text-anchor="middle">network.rs</text><path d="M300,134 L300,188" marker-end="url(#arr-mod)"/><path d="M240,134 C240,165 140,160 140,188" marker-end="url(#arr-mod)"/><path d="M360,134 C360,165 460,160 460,188" marker-end="url(#arr-mod)"/><path d="M500,134 L500,188" marker-end="url(#arr-mod)"/><path d="M100,146 L100,188" marker-end="url(#arr-mod)"/><rect x="20" y="290" width="160" height="44" rx="8"/><text x="100" y="317" text-anchor="middle">claudecode.rs</text><rect x="220" y="290" width="160" height="44" rx="8"/><text x="300" y="317" text-anchor="middle">codex.rs</text><rect x="420" y="290" width="160" height="44" rx="8"/><text x="500" y="317" text-anchor="middle">pi.rs</text><path d="M300,234 L300,288" marker-end="url(#arr-mod)"/><path d="M260,234 C260,265 100,260 100,288" marker-end="url(#arr-mod)"/><path d="M340,234 C340,265 500,260 500,288" marker-end="url(#arr-mod)"/><text class="note" x="310" y="266" text-anchor="start">launch / translate / failure</text><path d="M100,334 L100,378" marker-end="url(#arr-mod)"/><path d="M300,334 L300,378" marker-end="url(#arr-mod)"/><path d="M500,334 L500,378" marker-end="url(#arr-mod)"/><text class="note" x="310" y="360" text-anchor="start">Record</text><rect x="20" y="380" width="560" height="60" rx="8"/><text x="300" y="404" text-anchor="middle">事件输出</text><text x="300" y="424" text-anchor="middle">aggregate.rs → event.rs → output.rs / rich.rs，用量在 usage.rs</text></svg>
+<figcaption>模块关系。运行框架调用会话环境、沙箱与过滤代理做启动前检查，通过适配器接口启动运行时并翻译它的输出；doctor 复用沙箱与过滤代理做检查。</figcaption>
+</figure>
 <p>agent 在什么样的环境里运行：会话环境变量、临时目录、凭据与进程，沙箱与网络限制，以及在四种环境里怎么调用。</p>
 <ul class="cards">
   <li><a class="card" href="pages/session.html">
@@ -45,7 +83,7 @@
       <div class="pv-line pv-a pv-s3">--env-file prod.env</div>
     </div>
     <div class="card-body"><strong>会话环境</strong><span>环境变量、PATH、会话临时目录、凭据、进程组、信号与超时。</span>
-    <div class="card-tags"><i>env</i><i>process</i><i>草稿</i></div></div>
+    <div class="card-tags"><i>env</i><i>process</i></div></div>
   </a></li>
   <li><a class="card" href="pages/isolation.html">
     <div class="pv">
@@ -54,7 +92,7 @@
       <div class="pv-line pv-a pv-s3">--network none|full|custom</div>
     </div>
     <div class="card-body"><strong>沙箱与网络</strong><span>--sandbox on|relax|off、--network、三个运行时怎么关进沙箱、剩余风险。</span>
-    <div class="card-tags"><i>sandbox</i><i>network</i><i>草稿</i></div></div>
+    <div class="card-tags"><i>sandbox</i><i>network</i></div></div>
   </a></li>
 </ul>
 
@@ -67,7 +105,7 @@
   <tbody>
     <tr><td>本机 macOS</td><td>Seatbelt，系统自带</td><td>不用写 <code>--sandbox</code></td></tr>
     <tr><td>本机 Linux</td><td>bubblewrap（<code>bwrap</code>，claude-code 与 pi 另需 <code>socat</code>）；codex 用它自己的沙箱</td><td>不用写；没装 <code>bwrap</code> 时 agentrun 报错并给出安装命令</td></tr>
-    <tr><td>Cloud Managed 容器（Claude 云端、Codex 云端）</td><td>同本机 Linux，要求容器里装了 <code>bwrap</code> 与 <code>socat</code>，且能创建用户命名空间</td><td>不用写。Claude 云端已实测可用；Codex 云端待实测</td></tr>
+    <tr><td>Cloud Managed 容器（Claude 云端、Codex 云端）</td><td>同本机 Linux，要求容器里装了 <code>bwrap</code> 与 <code>socat</code>，且能创建用户命名空间</td><td>不用写。在 Claude 云端验证过；Codex 云端没有验证过</td></tr>
     <tr><td>docker 容器</td><td>默认的 docker 容器不能创建用户命名空间，沙箱无法启动</td><td>启动方写 <code>--sandbox off</code> 或设 <code>AGENTRUN_SANDBOX=off</code>，隔离边界是容器本身</td></tr>
   </tbody>
 </table>
@@ -83,7 +121,7 @@
       <div class="pv-line pv-a pv-s3">[end] finished</div>
     </div>
     <div class="card-body"><strong>事件与输出</strong><span>统一事件流、subagent 与用量、end.status、text 与 rich 格式。</span>
-    <div class="card-tags"><i>events</i><i>output</i><i>草稿</i></div></div>
+    <div class="card-tags"><i>events</i><i>output</i></div></div>
   </a></li>
   <li><a class="card" href="pages/claudecode.jsonl.html">
     <div class="pv">
@@ -115,36 +153,36 @@
       <div class="pv-line pv-a pv-s3"><b>$</b> agentrun codex</div>
     </div>
     <div class="card-body"><strong>运行：命令行与运行时</strong><span>命令行选项、启动前检查、doctor、退出码，以及 claude-code、pi、codex 的参数、输出映射与失败判定。</span>
-    <div class="card-tags"><i>claude-code</i><i>pi</i><i>codex</i><i>草稿</i></div></div>
+    <div class="card-tags"><i>claude-code</i><i>pi</i><i>codex</i></div></div>
   </a></li>
 </ul>
 
-<h2>TBD</h2>
-<p>还没有定的提案与还没有实测的假设，各带建议与验证方法。定下来或测完后移到对应页面。</p>
+<h2>Testing and Release</h2>
+<p>怎么测试 agentrun、四种环境的验收由谁执行、怎么发布。</p>
 <ul class="cards">
-  <li><a class="card" href="pages/pending.html">
+  <li><a class="card" href="pages/testing.html">
     <div class="pv">
-      <div class="pv-line pv-cmd"><span class="pv-a">待实测：codex on Linux</span></div>
-      <div class="pv-line pv-a pv-s2">待实测：fake-ip 网段</div>
-      <div class="pv-line pv-a pv-s3">→ 实测后移入正文</div>
+      <div class="pv-line pv-a pv-s1"><b>$</b> scripts/test.sh</div>
+      <div class="pv-line pv-a pv-s2"><b>$</b> uv run scripts/check_docs.py</div>
+      <div class="pv-line pv-a pv-s3">tests/fixtures/*.jsonl</div>
     </div>
-    <div class="card-body"><strong>待定与待实测</strong><span>还没定的提案与还没实测的假设，各带建议与验证方法。</span>
-    <div class="card-tags"><i>pending</i><i>草稿</i></div></div>
+    <div class="card-body"><strong>测试与发布</strong><span>本地检查、测试文件的分工、回放样本、验收脚本。</span>
+    <div class="card-tags"><i>test</i><i>release</i></div></div>
   </a></li>
 </ul>
 
-<h2>暂不做的功能</h2>
-<p>以下功能目前没有需求支撑，有需要时再加：</p>
+<h2>不支持的功能</h2>
+<p>以下功能目前没有需求支撑，agentrun 不提供，表中写了现在的替代做法：</p>
 <table>
   <thead>
     <tr><th>功能</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>--skill DIR</code></td><td>把技能目录复制到各运行时的技能位置（<code>.claude/skills/</code>、<code>.codex/skills/</code>、<code>.pi/skills/</code>）。不做时，调用方自己把技能文件放进工作目录，并在提示词里写出路径</td></tr>
-    <tr><td>配置文件</td><td>固定的追加目录与运行时可执行文件路径。不做时，追加目录用 <code>--path</code>，运行时从 PATH 查找</td></tr>
-    <tr><td><code>agentrun exec -- &lt;命令&gt;</code></td><td>用同样的会话环境、凭据与沙箱启动任意命令，只提供退出码与 <code>start</code>、<code>end</code> 事件。不做时，任意命令由调用方自己启动</td></tr>
+    <tr><td><code>--skill DIR</code></td><td>把技能目录复制到各运行时的技能位置（<code>.claude/skills/</code>、<code>.codex/skills/</code>、<code>.pi/skills/</code>）。替代做法：调用方自己把技能文件放进工作目录，并在提示词里写出路径</td></tr>
+    <tr><td>配置文件</td><td>固定的追加目录与运行时可执行文件路径。替代做法：追加目录用 <code>--path</code>，运行时从 PATH 查找</td></tr>
+    <tr><td><code>agentrun exec -- &lt;命令&gt;</code></td><td>用同样的会话环境、凭据与沙箱启动任意命令，只提供退出码与 <code>start</code>、<code>end</code> 事件。替代做法：任意命令由调用方自己启动</td></tr>
     <tr><td>额外的可写目录</td><td>在工作目录与会话临时目录之外再开放一个可写目录</td></tr>
-    <tr><td><code>--allow-host-file</code></td><td>从文件读主机列表。不做时，调用方需要长列表就在脚本里展开成多个 <code>--allow-host</code></td></tr>
+    <tr><td><code>--allow-host-file</code></td><td>从文件读主机列表。替代做法：调用方需要长列表就在脚本里展开成多个 <code>--allow-host</code></td></tr>
     <tr><td>按请求内容过滤网络</td><td>需要解密 HTTPS。过滤代理只按目标主机与端口判断</td></tr>
     <tr><td>命令与 Python 包的黑名单</td><td>运行时的权限规则只匹配命令文字，容易绕过；沙箱拒绝指定路径只在沙箱运行时生效</td></tr>
   </tbody>

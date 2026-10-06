@@ -13,12 +13,31 @@
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/line-highlight/prism-line-highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 <script defer src="../code.js"></script>
+<script defer src="../markdown.js"></script>
 </head>
 <body>
 <main>
-<p class="nav"><a href="../index.html">总览</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="pending.html">待定</a></p>
-<h1>事件与输出 <span class="tag">草稿</span></h1>
+<div class="page-head">
+<p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · 事件与输出 · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
+<button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
+</div>
+<h1>事件与输出</h1>
 <p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
+
+<h2 id="code">代码位置</h2>
+<table>
+  <thead>
+    <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>、<code>EndStatus</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
+    <tr><td><code>src/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
+    <tr><td><code>src/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tool</code>）、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
+    <tr><td><code>src/output.rs</code></td><td><code>Output</code>、<code>TextFormatter</code>、<code>subagent_label</code></td><td>text 格式、<code>[note]</code> 行</td></tr>
+    <tr><td><code>src/rich.rs</code></td><td><code>Rich</code>、<code>Panel</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
+  </tbody>
+</table>
+<p>适配器输出的是 <code>adapter::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，rich 另外通过 <code>open_tool</code> 读取还没有结束的调用来显示「正在执行的工具」。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
 
 <h2>统一事件流</h2>
 <p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
@@ -80,7 +99,7 @@ interface UsageEvent extends EventBase {
   output_tokens: number | null
   cache_read_tokens: number | null
   cache_write_tokens: number | null
-  context_tokens: number | null      // 前三项之和，即送进模型的全部上下文
+  context_tokens: number | null      // input_tokens、cache_read_tokens、cache_write_tokens 之和，即送进模型的全部上下文；三项有一项为 null 时为 null
 }
 
 // agent 启动一个 subagent 时输出
