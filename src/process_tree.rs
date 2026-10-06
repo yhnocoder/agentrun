@@ -265,6 +265,35 @@ fn claims_orphans() -> bool {
     false
 }
 
+pub fn wait_for_exit(pid: i32, block: bool) -> bool {
+    let mut options = libc::WEXITED | libc::WNOWAIT;
+    if !block {
+        options |= libc::WNOHANG;
+    }
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        if unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, options) } == 0 {
+            return info.si_signo == libc::SIGCHLD;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return true;
+        }
+    }
+}
+
+pub fn kill_group_members(pgid: i32) {
+    for _ in 0..KILL_PASSES {
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+        thread::sleep(REAP_POLL);
+        let table = ProcessTable::snapshot();
+        if !table.entries.iter().any(|entry| entry.pgid == pgid) {
+            return;
+        }
+    }
+}
+
 pub fn kill_tree(parents: &[i32], recorded: &Recorded) {
     let own = std::process::id() as i32;
     for _ in 0..KILL_PASSES {

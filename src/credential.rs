@@ -1,5 +1,6 @@
-use std::fs::{DirBuilder, OpenOptions};
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{ErrorKind, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -82,6 +83,9 @@ pub fn write_credential(path: &Path, value: &[u8]) -> std::io::Result<Credential
         .map(|byte| format!("{byte:02x}"))
         .chain(std::iter::once("\n".to_string()))
         .collect();
+    let dir = path.parent().unwrap_or(Path::new("."));
+    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    let _lock = lock_exclusively(dir)?;
     let sidecar = path.with_file_name(SIDECAR_FILE);
     if path.exists() && std::fs::read_to_string(&sidecar).is_ok_and(|recorded| recorded == digest) {
         return Ok(CredentialStatus::Unchanged);
@@ -91,9 +95,21 @@ pub fn write_credential(path: &Path, value: &[u8]) -> std::io::Result<Credential
     Ok(CredentialStatus::Written)
 }
 
+fn lock_exclusively(dir: &Path) -> std::io::Result<File> {
+    let handle = File::open(dir)?;
+    loop {
+        if unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(handle);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let (temp, mut file) = loop {
         let temp = dir.join(format!(".{name}.agentrun-{}", temp_suffix()));

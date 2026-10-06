@@ -6,36 +6,23 @@ mod support;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentrun::adapter::Adapter;
-use agentrun::process_tree;
-use agentrun::run::{Caller, run};
-use agentrun::signal::Signals;
 use serde_json::Value;
-use support::fake::FakeAdapter;
+use support::process::{
+    self, FAKE_AGENTRUN, describe, read_pid, spawn_lock, spawn_role, wait_until_gone,
+};
 use tempfile::TempDir;
 
-const FAKE_AGENTRUN: &str = "AGENTRUN_SIGNALS_TEST_FAKE_AGENTRUN";
-static SPAWN_LOCK: Mutex<()> = Mutex::new(());
-const ROLE: &str = "AGENTRUN_SIGNALS_TEST_ROLE";
-const ROLE_PIDFILE: &str = "AGENTRUN_SIGNALS_TEST_PIDFILE";
 const READY: &str = r#"{"record":"text","parent":null,"text":"ready"}"#;
 const GOT_SIGNAL: &str = r#"{\"record\":\"text\",\"parent\":null,\"text\":\"got signal\"}"#;
 
 fn main() {
-    if let Some(role) = std::env::var_os(ROLE) {
-        let pidfile = PathBuf::from(std::env::var_os(ROLE_PIDFILE).unwrap());
-        play_role(role.to_str().unwrap(), &pidfile);
-    }
-    if std::env::var_os(FAKE_AGENTRUN).is_some() {
-        std::process::exit(fake_agentrun().into());
-    }
+    process::take_over_if_spawned();
     let tests: Vec<(&str, fn())> = vec![
         (
             "background_process_is_killed_after_exit",
@@ -108,63 +95,6 @@ fn main() {
         ),
     ];
     harness::run_tests(tests);
-}
-
-fn play_role(role: &str, pidfile: &Path) -> ! {
-    match role {
-        "detached" => {
-            unsafe {
-                libc::setsid();
-            }
-            sleeper(pidfile);
-        }
-        "sleeper" => sleeper(pidfile),
-        "shell" => {
-            let status = Command::new(std::env::current_exe().unwrap())
-                .env(ROLE, "command")
-                .process_group(0)
-                .status()
-                .unwrap();
-            std::process::exit(status.code().unwrap_or(1));
-        }
-        "command" => {
-            Command::new(std::env::current_exe().unwrap())
-                .env(ROLE, "sleeper")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
-            thread::sleep(Duration::from_millis(20));
-            std::process::exit(0);
-        }
-        other => panic!("unknown role {other}"),
-    }
-}
-
-fn sleeper(pidfile: &Path) -> ! {
-    std::fs::write(pidfile, std::process::id().to_string()).unwrap();
-    thread::sleep(Duration::from_secs(30));
-    std::process::exit(0);
-}
-
-fn fake_agentrun() -> u8 {
-    process_tree::claim_orphans();
-    let signals = Signals::install();
-    let caller = Caller {
-        args: std::env::args_os().collect(),
-        env: std::env::vars_os().collect(),
-        stdin: Box::new(std::io::stdin()),
-        stdin_is_terminal: false,
-        stdout: Arc::new(Mutex::new(std::io::stdout())),
-        stdout_is_terminal: false,
-        stderr: Arc::new(Mutex::new(std::io::stderr())),
-        stderr_is_terminal: false,
-        signals,
-    };
-    run(caller, &|_| {
-        Some(Box::new(FakeAdapter::new(false)) as Box<dyn Adapter>)
-    })
 }
 
 struct Env {
@@ -339,59 +269,8 @@ fn sandbox_available() -> bool {
     support::sandbox_available()
 }
 
-fn spawn_lock() -> MutexGuard<'static, ()> {
-    SPAWN_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn ps(pid: i32, columns: &str) -> String {
-    let _guard = spawn_lock();
-    let output = Command::new("ps")
-        .args(["-o", columns, "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn process_is_gone(pid: i32) -> bool {
-    if unsafe { libc::kill(pid, 0) } != 0 {
-        return true;
-    }
-    let state = ps(pid, "stat=");
-    state.is_empty() || state.starts_with('Z')
-}
-
-fn describe(pid: i32) -> String {
-    ps(pid, "pid=,ppid=,stat=,args=")
-}
-
-fn wait_until_gone(pid: i32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !process_is_gone(pid) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    process_is_gone(pid)
-}
-
 fn spawn_detached_sleeper(pidfile: &str) -> String {
     spawn_role("detached", pidfile)
-}
-
-fn spawn_role(role: &str, pidfile: &str) -> String {
-    let exe = std::env::current_exe().unwrap();
-    format!(
-        "{ROLE}={role} {ROLE_PIDFILE}=\"{pidfile}\" \"{}\" </dev/null >/dev/null 2>&1 &\nwhile [ ! -s \"{pidfile}\" ]; do sleep 0.05; done\n",
-        exe.display()
-    )
-}
-
-fn read_pid(path: &Path) -> i32 {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
-    text.trim()
-        .parse()
-        .unwrap_or_else(|error| panic!("{} holds {text:?}: {error}", path.display()))
 }
 
 fn assert_sleeper_gone(pidfile: &Path) {
