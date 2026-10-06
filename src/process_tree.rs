@@ -286,11 +286,11 @@ pub fn kill_group_members(pgid: i32) {
         unsafe {
             libc::killpg(pgid, libc::SIGKILL);
         }
+        thread::sleep(REAP_POLL);
         let table = ProcessTable::snapshot();
         if !table.entries.iter().any(|entry| entry.pgid == pgid) {
             return;
         }
-        thread::sleep(REAP_POLL);
     }
 }
 
