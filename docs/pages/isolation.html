@@ -36,7 +36,7 @@
     <tr><td><code>src/doctor.rs</code></td><td><code>sandbox</code>、<code>sandbox_test</code>、<code>network</code>、<code>network_test</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
   </tbody>
 </table>
-<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个线程；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。</p>
+<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个处理线程，建立转发后再加一个复制下行数据的线程，线程数没有上限；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
 <p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
@@ -139,7 +139,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成、最长 253 个字节的名字与 IPv4 字面量，其他字节或更长的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
   <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
   <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
-  <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB，连接目标最多等 10 秒。</li>
+  <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB；连接目标时依次尝试解析出的每个地址，每个地址最多等 10 秒。</li>
   <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 与它们的小写形式指向代理，<code>NO_PROXY</code> 与 <code>no_proxy</code> 清空。小写也要设，因为 pi 先读小写的 <code>https_proxy</code>，调用方环境里原有的小写变量会让 pi 绕过过滤代理（pi 1.0.1 实测）。</li>
   <li>调用方环境里原有的代理变量改由过滤代理作为上游使用，所以 Cloud Managed 容器自带的出口代理仍然生效：<code>CONNECT</code> 与 SOCKS5 依次取 <code>https_proxy</code>、<code>HTTPS_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，普通 HTTP 依次取 <code>http_proxy</code>、<code>HTTP_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，第一个非空的值生效。只支持 <code>http://</code> 上游，地址里的用户名与密码转为 <code>Proxy-Authorization: Basic</code>；其他协议的值当作没有上游。调用方原有的 <code>no_proxy</code> 或 <code>NO_PROXY</code> 匹配的主机直接连接。目标主机解析失败时，有上游则交给上游连接，没有上游则按连接失败处理。代理变量的值可能带凭据，不出现在任何输出里。</li>
   <li>每个「主机、端口、放行或拒绝」组合第一次出现时输出一个 <code>network</code> 事件，见<a href="events.html#event-types">事件与输出</a>。</li>
@@ -228,7 +228,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>过滤代理本身的剩余风险：</p>
 <ul>
   <li>HTTPS 只按 <code>CONNECT</code> 的主机名与端口判定，TLS 里的 SNI 与 <code>Host</code> 不检查。放行的主机如果和别的站点共用 IP 并按 SNI 选站点，隧道里可以访问那些站点。</li>
-  <li>有上游代理时，私有地址只看本机的解析结果，上游会自己再解析一次；本机解析失败时不做检查，直接交给上游。</li>
+  <li>有上游代理时，私有地址只看本机的解析结果，上游会自己再解析一次；本机解析失败时不做检查，直接交给上游，主机只有 IPv6 地址时同样不做检查。理由：Cloud Managed 容器的本机 DNS 常常不可用，解析不出地址时拒绝会让 <code>full</code> 在那里几乎不能用。</li>
   <li>过滤代理在本机回环地址上监听 TCP 端口，会话期间同一台机器上的其他用户也能连这个端口，经它发出的请求会带上调用方的上游代理凭据。</li>
   <li><code>full</code> 下 claude-code 的 WebFetch 在 claude 进程里运行，不经过过滤代理，也就没有私有地址检查。</li>
 </ul>
