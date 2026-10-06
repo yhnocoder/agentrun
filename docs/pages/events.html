@@ -341,7 +341,7 @@ interface Usage extends TokenCounts {
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net denied 主机:端口 (原因)</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
-  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量与 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量与 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 里的每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
   <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
   <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
   <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
