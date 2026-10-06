@@ -24,7 +24,7 @@ const SERVICE_HOSTS: [(&str, &str); 5] = [
 ];
 const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
-const LOGIN_FILE: &str = "auth.json";
+pub(crate) const LOGIN_FILE: &str = "auth.json";
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "auth.json",

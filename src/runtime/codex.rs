@@ -11,10 +11,10 @@ use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::TokenCounts;
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
-use crate::session::Session;
+use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
-const HOME_SUBDIR: &str = ".codex";
+pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
 pub(crate) const LOGIN_FILE: &str = "auth.json";
 pub(crate) const SERVICE_HOSTS: [&str; 4] = [
@@ -269,10 +269,13 @@ impl Adapter for Codex {
     }
 }
 
+pub(crate) fn user_home(session: &Session, cwd: &Path) -> Option<PathBuf> {
+    session.runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
+}
+
 pub(crate) fn login_file(session: &Session, cwd: &Path) -> PathBuf {
-    session
-        .runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
-        .unwrap_or_else(|| PathBuf::from("$HOME").join(HOME_SUBDIR))
+    user_home(session, cwd)
+        .unwrap_or_else(|| home_placeholder(HOME_SUBDIR))
         .join(LOGIN_FILE)
 }
 
@@ -285,7 +288,7 @@ pub(crate) fn check_login(session: &Session, login: &Path) -> Result<(), String>
         Ok(())
     } else {
         Err(format!(
-            "codex login file {} not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH",
+            "codex login file {} not found. Run codex login, or pass its content in {CODEX_AUTH_VARIABLE}",
             login.display()
         ))
     }
@@ -925,6 +928,26 @@ mod tests {
             login_file(&session, Path::new("/work")),
             PathBuf::from("$HOME/.codex/auth.json")
         );
+    }
+
+    #[test]
+    fn user_home_prefers_codex_home_then_home() {
+        let env: Vec<(OsString, OsString)> = vec![
+            (OsString::from("HOME"), OsString::from("/home/u")),
+            (OsString::from("CODEX_HOME"), OsString::from("state")),
+        ];
+        let session = Session::assemble(Runtime::Codex, &env, &[], &[], &[]);
+        assert_eq!(
+            user_home(&session, Path::new("/work")),
+            Some(PathBuf::from("/work/state"))
+        );
+        let session = Session::assemble(Runtime::Codex, &env[..1], &[], &[], &[]);
+        assert_eq!(
+            user_home(&session, Path::new("/work")),
+            Some(PathBuf::from("/home/u/.codex"))
+        );
+        let session = Session::assemble(Runtime::Codex, &[], &[], &[], &[]);
+        assert_eq!(user_home(&session, Path::new("/work")), None);
     }
 
     #[test]

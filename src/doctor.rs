@@ -26,7 +26,9 @@ use crate::runtime::{Adapter, Invocation};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, Sandbox, UNAVAILABLE_PREFIX, Wrapped, Wrapper,
 };
-use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
+use crate::session::{
+    Session, find_executable, home_placeholder, parse_env_args, read_env_file, resolve_path_dirs,
+};
 
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const USAGE_EXIT_CODE: u8 = 2;
@@ -602,7 +604,7 @@ impl Doctor {
 
     fn pi_settings_file(&self, target: &Target) -> PathBuf {
         pi::user_state_dir(&target.session, &self.cwd)
-            .unwrap_or_else(|| PathBuf::from("$HOME").join(pi::STATE_HOME_SUBDIR))
+            .unwrap_or_else(|| home_placeholder(pi::STATE_HOME_SUBDIR))
             .join(pi::SETTINGS_FILE)
     }
 
