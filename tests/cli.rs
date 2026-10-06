@@ -216,6 +216,20 @@ fn prescan_applies_when_parsing_fails() {
 }
 
 #[test]
+fn terminal_stdin_without_prompt_is_rejected() {
+    let env = Env::new();
+    let (_master, slave) = support::open_pty(24, 80);
+    let output = command(&env, &["pi"])
+        .stdin(Stdio::from(slave))
+        .output()
+        .unwrap();
+    assert_eq!(
+        assert_rejected(&output),
+        "no prompt given: use --prompt, --prompt-file or pipe the prompt to standard input"
+    );
+}
+
+#[test]
 fn prompt_from_stdin_passes_prompt_checks() {
     let env = Env::new();
     let detail = assert_rejected(&run_with_stdin(&env, &["claude-code"], "fix the tests\n"));
