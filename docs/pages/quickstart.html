@@ -49,6 +49,7 @@ agentrun 0.1.0</div>
 sudo apt install bubblewrap socat
 # Fedora
 sudo dnf install bubblewrap socat</code></pre>
+<p>Ubuntu 23.10 及以后的版本默认不允许普通程序创建 user namespace，<code>bwrap</code> 要有自己的 AppArmor profile 才能启动，做法见<a href="isolation.html#apparmor">沙箱与网络</a>。下一步的 <code>agentrun doctor</code> 会告诉你是否需要这一步。</p>
 
 <h2 id="doctor">检查环境</h2>
 <p>运行 <code>agentrun doctor</code>，后面写上你要用的运行时：</p>
