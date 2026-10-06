@@ -3,7 +3,7 @@
 #[allow(dead_code)]
 mod support;
 
-use std::io::{BufRead, Read};
+use std::io::{BufRead, ErrorKind, Read};
 use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -232,24 +232,15 @@ fn no_network_inside_the_wrapper() {
     };
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let accepted = thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            if listener.accept().is_ok() {
-                return true;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        false
-    });
     let output = wrapped.run(
         "if socat -T 2 - \"TCP:127.0.0.1:$1\" </dev/null 2>/dev/null; then echo connected; else echo refused; fi\n",
         &[&port.to_string()],
     );
     assert_eq!(stdout(&output).trim(), "refused");
-    assert!(
-        !accepted.join().unwrap(),
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().map(|_| ()).map_err(|error| error.kind()),
+        Err(ErrorKind::WouldBlock),
         "the sandboxed script reached the listener"
     );
 }
@@ -315,7 +306,6 @@ fn sigterm_to_the_process_group_kills_the_wrapped_command_before_its_trap() {
         wait_until_gone(script_pid),
         "the wrapped script {script_pid} is still running"
     );
-    thread::sleep(Duration::from_millis(1500));
     assert!(!marker.exists(), "the trap of the wrapped script ran");
 }
 

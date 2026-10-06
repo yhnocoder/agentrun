@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use support::env::{Agentrun, Env, Finished};
+use support::env::{Agentrun, Env, Finished, wait_until};
 use support::process::{self, describe, read_pid, spawn_role, wait_until_gone};
 
 const READY: &str = r#"{"record":"text","parent":null,"text":"ready"}"#;
@@ -210,11 +210,14 @@ fn ignored_signal_leads_to_sigkill_after_grace() {
 }
 
 fn second_signal_kills_immediately() {
-    let env = with_claude(&format!("trap '' INT\necho '{READY}'\nsleep 30\n"));
+    let env = with_claude(&format!(
+        "trap ': > \"$PWD/got-int\"' INT\necho '{READY}'\nwhile :; do sleep 1 & wait $!; done\n"
+    ));
     let agentrun = start(&env, &[], true, Stdio::null());
     agentrun.wait_for_text("ready");
     agentrun.signal(libc::SIGINT);
-    thread::sleep(Duration::from_secs(1));
+    let got_int = env.work().join("got-int");
+    wait_until("the fake claude to run its INT trap", || got_int.exists());
     let sent = Instant::now();
     agentrun.signal(libc::SIGINT);
     let outcome = finish(agentrun, &env);
@@ -244,10 +247,15 @@ fn timeout_with_ignored_sigterm_kills_after_grace() {
 }
 
 fn signal_during_timeout_grace_kills_immediately() {
-    let env = with_claude(&format!("trap '' TERM\necho '{READY}'\nsleep 30\n"));
+    let env = with_claude(&format!(
+        "trap ': > \"$PWD/got-term\"' TERM\necho '{READY}'\nwhile :; do sleep 1 & wait $!; done\n"
+    ));
     let agentrun = start(&env, &["--timeout", "3"], true, Stdio::null());
     agentrun.wait_for_text("ready");
-    thread::sleep(Duration::from_secs(4));
+    let got_term = env.work().join("got-term");
+    wait_until("the timeout to send SIGTERM to the fake claude", || {
+        got_term.exists()
+    });
     let sent = Instant::now();
     agentrun.signal(libc::SIGINT);
     let outcome = finish(agentrun, &env);
@@ -289,7 +297,7 @@ fn signal_during_sandbox_check_kills_the_check() {
     env.install("socat", "#!/bin/sh\nexit 0\n");
     let agentrun = start(&env, &["--sandbox", "on"], true, Stdio::null());
     let pidfile = env.root().join("pid");
-    support::env::wait_until("the fake bwrap to write its pid", || {
+    wait_until("the fake bwrap to write its pid", || {
         std::fs::read_to_string(&pidfile).is_ok_and(|text| !text.trim().is_empty())
     });
     let pid = read_pid(&pidfile);
