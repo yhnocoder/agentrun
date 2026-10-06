@@ -4,6 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
+#[cfg(target_os = "linux")]
+pub const RECORDS_DESCENDANTS: bool = false;
+#[cfg(not(target_os = "linux"))]
+pub const RECORDS_DESCENDANTS: bool = true;
 const REAP_WAIT: Duration = Duration::from_millis(200);
 const REAP_POLL: Duration = Duration::from_millis(5);
 const KILL_PASSES: usize = 3;
@@ -31,17 +35,11 @@ impl ProcessTable {
         ProcessTable::read_proc(Path::new(PROC_ROOT))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub fn snapshot() -> ProcessTable {
-        let output = std::process::Command::new("ps")
-            .args(["-A", "-o", "pid=,ppid=,stat=,lstart="])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
-        let text = output
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-            .unwrap_or_default();
-        ProcessTable::parse_ps(&text)
+        let mut entries: Vec<Entry> = list_pids().into_iter().filter_map(bsd_info).collect();
+        entries.sort_unstable_by_key(|entry| entry.pid);
+        ProcessTable { entries }
     }
 
     pub fn read_proc(proc_root: &Path) -> ProcessTable {
@@ -53,26 +51,6 @@ impl ProcessTable {
                     .collect()
             })
             .unwrap_or_default();
-        entries.sort_unstable_by_key(|entry| entry.pid);
-        ProcessTable { entries }
-    }
-
-    pub fn parse_ps(text: &str) -> ProcessTable {
-        let mut entries: Vec<Entry> = text
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                let pid = fields.next()?.parse().ok()?;
-                let parent = fields.next()?.parse().ok()?;
-                let state = fields.next()?;
-                let started = fields.collect::<Vec<_>>().join(" ");
-                (!state.starts_with('Z')).then_some(Entry {
-                    pid,
-                    parent,
-                    started,
-                })
-            })
-            .collect();
         entries.sort_unstable_by_key(|entry| entry.pid);
         ProcessTable { entries }
     }
@@ -128,6 +106,40 @@ fn claims_orphans() -> bool {
 
 #[cfg(not(target_os = "linux"))]
 pub fn claim_orphans() {}
+
+#[cfg(target_os = "macos")]
+fn list_pids() -> Vec<libc::pid_t> {
+    let needed = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    let mut pids = vec![0 as libc::pid_t; needed.max(0) as usize + 64];
+    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+    pids.truncate(filled.clamp(0, pids.len() as libc::c_int) as usize);
+    pids.retain(|pid| *pid > 0);
+    pids
+}
+
+#[cfg(target_os = "macos")]
+fn bsd_info(pid: libc::pid_t) -> Option<Entry> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    if got != size || info.pbi_status == libc::SZOMB {
+        return None;
+    }
+    Some(Entry {
+        pid,
+        parent: info.pbi_ppid as i32,
+        started: format!("{}.{:06}", info.pbi_start_tvsec, info.pbi_start_tvusec),
+    })
+}
 
 #[cfg(not(target_os = "linux"))]
 fn claims_orphans() -> bool {
@@ -313,29 +325,5 @@ mod tests {
         assert!(!ProcessTable::read_proc(root.path()).still_running(&recorded[0]));
         std::fs::remove_dir_all(root.path().join("200")).unwrap();
         assert!(!ProcessTable::read_proc(root.path()).still_running(&recorded[0]));
-    }
-
-    #[test]
-    fn ps_output_is_parsed_without_zombies() {
-        let table = ProcessTable::parse_ps(
-            "    1     0 Ss   Mon Oct  6 03:00:01 2026\n  340     1 S    Mon Oct  6 03:10:01 2026\n  341   340 S+   Mon Oct  6 03:10:02 2026\n  342   340 Z    Mon Oct  6 03:10:03 2026\n garbage line\n  343   341 R    Mon Oct  6 03:10:04 2026\n",
-        );
-        assert_eq!(pids(&table.descendants(&[340])), vec![341, 343]);
-        assert_eq!(pids(&table.descendants(&[1])), vec![340, 341, 343]);
-        assert_eq!(
-            table.descendants(&[341])[0],
-            Process {
-                pid: 343,
-                started: "Mon Oct 6 03:10:04 2026".to_string()
-            }
-        );
-        assert!(!table.still_running(&Process {
-            pid: 343,
-            started: "Mon Oct 6 03:10:05 2026".to_string()
-        }));
-        assert_eq!(
-            ProcessTable::parse_ps("").descendants(&[1]),
-            Vec::<Process>::new()
-        );
     }
 }

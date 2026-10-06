@@ -10,7 +10,9 @@ use signal_hook::iterator;
 use crate::cli::{Format, SandboxMode};
 use crate::event::{Body, End, EndStatus, Event};
 use crate::output::Output;
-use crate::process_tree::{self, PROC_ROOT, Process, SNAPSHOT_PERIOD, wrapped_child};
+use crate::process_tree::{
+    self, PROC_ROOT, Process, RECORDS_DESCENDANTS, SNAPSHOT_PERIOD, wrapped_child,
+};
 use crate::usage::Usage;
 
 pub const GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -112,7 +114,9 @@ struct Running {
 
 impl Running {
     fn record(&mut self) {
-        self.store(Instant::now(), process_tree::record_descendants(self.pgid));
+        if RECORDS_DESCENDANTS {
+            self.store(Instant::now(), process_tree::record_descendants(self.pgid));
+        }
     }
 
     fn store(&mut self, recorded_at: Instant, descendants: Vec<Process>) {
@@ -251,8 +255,10 @@ impl Signals {
         });
         let watcher = Arc::clone(&self.shared);
         thread::spawn(move || watcher.watch());
-        let recorder = Arc::clone(&self.shared);
-        thread::spawn(move || recorder.record());
+        if RECORDS_DESCENDANTS {
+            let recorder = Arc::clone(&self.shared);
+            thread::spawn(move || recorder.record());
+        }
     }
 
     pub fn kill_group(&self) {
