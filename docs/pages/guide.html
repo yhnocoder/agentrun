@@ -129,6 +129,28 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
 jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code></pre>
 
+<h2 id="parallel">同时运行多个 agent</h2>
+<p>需要几个 agent 同时处理不同的任务时，在后台启动多个 agentrun，每个用自己的 <code>--cwd</code>，输出写到各自的文件，再用 <code>wait</code> 等它们都结束：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --model sonnet --cwd api --format text --prompt "创建 hello.txt，内容为 api" &gt; api.log 2&gt;&amp;1 &amp;
+<span class="prompt">$</span> agentrun claude-code --model sonnet --cwd web --format text --prompt "创建 hello.txt，内容为 web" &gt; web.log 2&gt;&amp;1 &amp;
+<span class="prompt">$</span> wait
+<span class="prompt">$</span> cat api.log web.log
+<span class="dim">[main]</span> prompt 创建 hello.txt，内容为 api
+<span class="dim">[main]</span> tool Write: hello.txt
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`，内容为 `api`，末尾带一个换行符。
+<span class="dim">[end]</span> finished 5.6s  in 27.8k  out 0.1k  cached 82%
+<span class="dim">[main]</span> prompt 创建 hello.txt，内容为 web
+<span class="dim">[main]</span> tool Write: hello.txt
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`，内容为 `web`（末尾带一个换行）。
+<span class="dim">[end]</span> finished 5.0s  in 27.8k  out 0.1k  cached 82%</div>
+<p>每个运行有自己的临时目录、网络代理和 <code>network</code> 事件，结束或被中断时只停止自己启动的进程，所以每个日志可以单独按<a href="#ci">上一节</a>的方法判断成败。运行时可以不同，例如一个用 claude-code、一个用 pi。</p>
+<p>同时运行时注意三点：</p>
+<ul>
+  <li>给每个 agent 一个单独的 <code>--cwd</code>。几个 agent 用同一个目录时，agentrun 不协调它们的写入，同一个文件被几个 agent 改写时，结果取决于写入的先后。</li>
+  <li>每个 agent 的标准输出写到单独的文件。几个运行写到同一个文件或同一个管道时，各自的事件会交错在一起。</li>
+  <li>pi 与 codex 的几个运行共用你的同一个登录。令牌恰好在它们启动时过期，其中一个运行可能因刷新令牌失败而结束，报 <code>OAuth refresh failed</code>（pi）或 <code>refresh token was already used</code>（codex）。这时另一个运行通常已经把新令牌写进你的登录文件，重新运行失败的那一个；仍然失败时重新登录。原因见<a href="session.html#concurrent">多个运行同时进行</a>。</li>
+</ul>
+
 <h2 id="inspect">查看 agent 做了什么</h2>
 <table>
   <thead>

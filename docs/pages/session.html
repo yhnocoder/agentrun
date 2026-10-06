@@ -32,8 +32,9 @@
   <tbody>
     <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>parse_env_args</code>、<code>read_env_file</code>、<code>resolve_path_dirs</code>、<code>find_executable</code>、<code>is_executable</code>、<code>is_variable_name</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
     <tr><td><code>src/run.rs</code></td><td><code>create_tempdir</code>、<code>execute</code>（启动进程组、转发信号、读输出）、<code>supervise</code></td><td>会话临时目录、进程、信号与超时</td></tr>
-    <tr><td><code>src/pi.rs</code>、<code>src/codex.rs</code></td><td>pi：<code>user_state_dir</code>、<code>login_file</code>、<code>prepare_state_dir</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 与 codex 的私有配置目录</td></tr>
+    <tr><td><code>src/pi.rs</code>、<code>src/codex.rs</code></td><td>pi：<code>user_state_dir</code>、<code>login_file</code>、<code>prepare_state_dir</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 与 codex 的私有配置目录、多个运行同时进行</td></tr>
     <tr><td><code>src/credential.rs</code></td><td><code>write_session_credential</code>、<code>write_credential</code>、<code>CredentialReport</code>、<code>CredentialStatus</code></td><td>凭据</td></tr>
+    <tr><td><code>src/process_tree.rs</code></td><td><code>ProcessTable</code>、<code>claim_orphans</code>、<code>ForkWatcher</code>、<code>Recorded</code>、<code>wait_for_exit</code>、<code>kill_group_members</code>、<code>kill_tree</code>、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
     <tr><td><code>src/signal.rs</code></td><td><code>Signals</code>（<code>install</code>、按阶段切换的 <code>prepare</code>、<code>checking</code>、<code>doctoring</code>、<code>running</code>、<code>finishing</code>、<code>exited</code>、<code>kill_group</code>）、<code>Signal</code>（含退出码）、<code>wrapped_child</code></td><td>进程、信号与超时</td></tr>
   </tbody>
 </table>
@@ -111,7 +112,7 @@ GREETING='hello world'</code></pre>
   <li>登录文件用符号链接：两个运行时刷新 OAuth 令牌时都原地改写登录文件（pi 1.0.2 用 <code>writeFileSync</code>，codex 0.159.2 截断后重写，均为源码），新令牌经链接写回用户的文件。复制一份会让刷新后的令牌只留在私有目录里，服务商轮换刷新令牌后，用户原来的登录就失效了。运行时将来改为先写临时文件再重命名时，链接会被换成普通文件，这个做法随之失效。</li>
   <li>codex 的目录不放在会话临时目录里：<code>CODEX_HOME</code> 在会话的 <code>TMPDIR</code> 之下时，codex 不创建它执行 <code>apply_patch</code> 等命令所需的别名（codex 0.159.2 源码）。</li>
 </ul>
-<p>codex 没有跨进程的锁，pi 的锁目录建在私有目录里。用户自己运行的 pi 或 codex 与 agentrun 同时刷新令牌时，后写的一次生效。</p>
+<p>几个运行（包括用户自己在沙箱外运行的 pi 或 codex）同时刷新同一个登录文件里的令牌时会发生什么，见<a href="#concurrent">多个运行同时进行</a>。</p>
 
 <h2 id="credentials">凭据</h2>
 <p>本机沿用用户已有的登录，工具不改动用户自己的登录文件。容器里由启动方把登录文件的内容放进环境变量，工具在运行与 doctor 开始时写到运行时读取的位置。这两个变量可以来自调用方环境，也可以来自 <code>--env</code> 与 <code>--env-file</code>。</p>
@@ -126,7 +127,7 @@ GREETING='hello world'</code></pre>
 </table>
 <p>一次运行只写当前运行时的变量。变量未设或为空时不写。路径变量与 <code>HOME</code> 从组装后的会话环境读取，相对路径按 <code>--cwd</code> 解析。</p>
 <p>每次写入时，工具在同一目录记一个旁注文件 <code>auth.json.agentrun-sha256</code>，内容是这次变量值的 SHA-256（小写十六进制加换行）。下次运行时：登录文件不存在就写入；变量值的 SHA-256 与旁注相同就不动；不同或没有旁注就覆盖登录文件并更新旁注。理由：运行时会在使用中刷新令牌并改写登录文件，变量没变时保留刷新后的令牌；启动方轮换了凭据时，即使登录文件在持久卷上，会话也会改用新账号。</p>
-<p>写入用同目录的临时文件，以排他方式创建、权限 0600、fsync 后重命名，并发启动的多次运行不会读到写了一半的文件；两次运行同时写入时，结果是其中一次写入的完整内容。新建的每一级目录权限 0700，已有目录不改权限。多个并发运行共用同一登录文件时，令牌刷新的冲突由运行时自己处理。写入失败时启动前报错（退出码 2），<code>detail</code> 写变量名与路径，不写值。</p>
+<p>写入前先创建登录文件所在的目录（新建的每一级权限 0700，已有目录不改权限），再对这个目录加排他的 <code>flock</code>，比较旁注、写登录文件、写旁注都在锁内完成。理由：两次运行同时写入不同的值时，没有锁会出现登录文件来自一次、旁注来自另一次，之后的运行按旁注判断会保留错误的账号。登录文件与旁注都用同目录的临时文件写入，以排他方式创建、权限 0600、fsync 后重命名，同时启动的其他运行不会读到写了一半的文件。写入失败时启动前报错（退出码 2），<code>detail</code> 写变量名与路径，不写值。</p>
 <p>claude-code 在容器里用它自己的令牌变量 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 登录，没有登录文件。工具不做转换，只保证它不被删除（它不以 <code>ANTHROPIC_</code> 或 <code>CLAUDE_CODE_USE_</code> 开头）。</p>
 <p>codex 要求登录信息以文件形式保存，登录文件不存在时启动前报错，提示先运行 <code>codex login</code> 或在容器里用 <code>AGENTRUN_CODEX_AUTH</code> 传入。</p>
 <p>凭据内容不出现在事件流、标准错误、<code>--raw</code> 与错误信息里，只显示变量名与文件路径。</p>
@@ -136,8 +137,10 @@ GREETING='hello world'</code></pre>
 <ul>
   <li>运行时启动在新的进程组里，终端的 Ctrl-C 只发给 agentrun，由 agentrun 转发。pi 被包裹时，包裹命令是进程组的首进程，退出码透传 pi 的退出码。</li>
   <li>提示词写入标准输入后关闭（claude-code 写成一行 JSON 消息，见<a href="run.html#claude-code">运行</a>页的 claude-code 一节；pi 例外，提示词是命令行参数，标准输入启动后立即关闭）。运行时的标准错误原样转到 agentrun 的标准错误，同时保留最后 500 个字符供 <code>detail</code> 使用。</li>
-  <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再按进程树清理进程组之外的后代进程（见下一条），然后最多等 1 秒读完剩余的输出，输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 waitpid 判断主进程退出，不用标准输出的 EOF 判断。</li>
+  <li>运行时主进程退出后，无论什么原因，agentrun 都向整个进程组发 SIGKILL，再按进程树清理进程组之外的后代进程（见下一条），然后最多等 1 秒读完剩余的输出，输出 <code>end</code>。理由：实测 claude-code 退出后它启动的后台命令仍在运行，而且这些进程持有标准输出时，读到 EOF 要等它们退出。用 <code>waitid</code> 判断主进程退出，不用标准输出的 EOF 判断。</li>
   <li>按进程树清理：pi 的 bash 工具和沙箱外的 claude-code 用 setsid 启动命令，命令在新会话里，不在进程组内，进程组的 SIGKILL 发不到。Linux 上 agentrun 启动时用 <code>prctl(PR_SET_CHILD_SUBREAPER)</code> 把自己设为 child subreaper，运行时退出后留下的孤儿进程改挂到 agentrun 下，不挂到 1 号进程；主进程退出后，agentrun 读一遍 <code>/proc/&lt;进程号&gt;/stat</code> 里的父进程号，以主进程和自己为根找出全部后代，逐个 SIGKILL，最多等 200 毫秒回收它们，再查一遍进程树，至多三轮。运行期间不做任何事。macOS 没有 subreaper，孤儿进程挂到 launchd，退出后找不回来，而且命令常常启动后台进程后立刻退出（例如 node 的 <code>spawn</code> 加 <code>unref</code>），后台进程在几毫秒内就成了孤儿，所以 agentrun 用 kqueue 的 <code>EVFILT_PROC</code> 加 <code>NOTE_FORK</code> 监视主进程和它的每一个后代：任何一个被监视的进程 fork 时，agentrun 立刻用 libproc（<code>proc_listallpids</code> 与 <code>proc_pidinfo</code>，不启动 <code>ps</code>）读一遍进程表，把新出现的后代记下来并加入监视，另外每 1 秒也读一遍兜底。记录的内容是进程号、启动时间和进程组号：进程号被回收并分给无关进程时启动时间对不上，就不再当作本次运行的进程；进程组号在后台进程换了父进程之后也不变，XNU 不会把仍被某个进程组占用的号分给新进程。主进程退出后，以仍在运行的记录进程和主进程为根找出后代，连同这些记录进程一起清理，再向记录过的每个进程组发 SIGKILL，组长进程还在但不是记录的进程时跳过这个组。启动前检查期间收到信号时，检查进程及其后代也按同样的方法清理。</li>
+  <li>先清理再回收：<code>waitid</code> 带 <code>WNOWAIT</code>，得知主进程退出时不回收它，进程组与进程树清理完之后才回收。理由：主进程被回收后，它的进程号与进程组号可以分给新进程，同时运行的其他程序这时启动的进程会收到本次运行的 SIGKILL。启动前的沙箱检查与 doctor 的检查进程也按这个顺序处理。</li>
+  <li>向进程组发 SIGKILL 后读一遍进程表，组里还有进程就再发一次，至多三轮，每轮之间等 5 毫秒。理由：macOS 上组里的进程恰好在 <code>killpg</code> 执行时 fork，新的子进程可能收不到这次信号而留下，它持有标准错误时 agentrun 读不到 EOF（macOS 复现）。</li>
   <li>收到 SIGINT 或 SIGTERM：运行时启动前收到时不启动，直接输出 <code>interrupted</code>；运行中收到第一个信号时，把同一个信号转发给进程组，等待 5 秒，到时仍未退出就 SIGKILL；等待中再收到信号立即 SIGKILL。等待期间运行时的输出照常解析。</li>
   <li><code>--timeout</code> 到时：向进程组发 SIGTERM，同样等待 5 秒后 SIGKILL。超时后的等待中又收到信号，结果是 <code>interrupted</code>。</li>
   <li>pi 被 <code>bwrap</code> 包裹时，第一个信号（转发的 SIGINT 或 SIGTERM，以及超时的 SIGTERM）只发给 bwrap 的子进程 pi，不发给进程组：agentrun 读 <code>/proc/&lt;bwrap 进程号&gt;/task/&lt;bwrap 进程号&gt;/children</code> 找到它，读不到时扫描 <code>/proc/*/stat</code> 找父进程是 bwrap 的进程；都找不到时仍向进程组发信号。之后的 SIGKILL 仍发给整个进程组。理由：bwrap 0.9.0 不转发 SIGTERM，向进程组发信号时 bwrap 自己退出，<code>--die-with-parent</code> 随即 SIGKILL 被包裹的 pi，pi 没有宽限期，正在改写的 <code>auth.json</code> 可能写坏（云端实测）。pi 自己的子进程收不到第一个信号，由最后的 SIGKILL 清理。</li>
@@ -149,6 +152,24 @@ GREETING='hello world'</code></pre>
 </figure>
 <p>是否被中断只看 agentrun 自己收到的信号与自己的计时，不看运行时的退出码与事件。理由：实测 claude-code 收到 SIGINT 后以退出码 0 结束，SIGTERM 后以 143 结束且没有 result；pi 收到 SIGINT 后以 130 结束，最后没有 <code>message_end</code>；codex 收到 SIGTERM 后在 macOS 上以 143 结束，在 Linux 上以 0 结束。</p>
 <p>已知限制：macOS 上一个进程在 fork 之后、agentrun 读到进程表之前（约 1 毫秒）就退出时，它刚启动的子进程记录不到；子进程还在同一个进程组里时仍会被清理。</p>
+
+<h2 id="concurrent">多个运行同时进行</h2>
+<p>同一个用户可以同时启动多个 agentrun，运行时可以相同也可以不同，<code>--cwd</code> 也可以相同。agentrun 不在运行之间加锁，也不限制同时运行的数量。</p>
+<p>每次运行各自独立的部分：</p>
+<ul>
+  <li>会话临时目录与 pi、codex 的私有配置目录：每次运行新建，名字带随机后缀，结束时只删除自己的。</li>
+  <li>过滤代理：每次运行在自己的进程里启动一个代理，端口随机，Unix socket 在自己的会话临时目录里。沙箱里的进程只能连接本次运行的代理（Linux 上在独立的网络命名空间里，macOS 上 Seatbelt 只放行这一个端口），<code>network</code> 事件只含本次运行的请求。</li>
+  <li>进程清理：只作用于本次运行的进程组和本次运行的进程树。Linux 上孤儿进程挂到最近的 subreaper 祖先，也就是启动它的那个 agentrun；macOS 上只清理本次运行记录过的进程。</li>
+  <li>沙箱的启动前检查：每次运行各自执行一次，检查进程按本页的顺序清理。</li>
+</ul>
+<p>共用的部分：</p>
+<ul>
+  <li>登录文件：每次运行的私有目录里都是指向用户同一个登录文件的符号链接。容器里多次运行同时用 <code>AGENTRUN_CODEX_AUTH</code> 或 <code>AGENTRUN_PI_AUTH</code> 写入时，由目录锁保证登录文件与旁注一致，见<a href="#credentials">凭据</a>。</li>
+  <li>令牌刷新：pi 刷新前给登录文件加锁，锁目录按符号链接本身的路径建在每次运行的私有目录里，几次运行之间、运行与用户自己的 pi 之间互不排斥；codex 只有进程内的锁。两个运行时都在访问令牌离过期不到 5 分钟时刷新，刷新前重新读一次登录文件，文件已被别的进程更新就不再刷新。几次运行在令牌快过期时同时启动，会用同一个刷新令牌各刷新一次。服务商轮换刷新令牌时，后到的刷新通常被拒绝，这次运行不写登录文件：pi 的模型请求失败，报 <code>OAuth refresh failed for &lt;provider&gt;</code>；codex 收到 401 后重新读登录文件，先到的运行已写入新令牌时继续，否则以 <code>refresh token was already used. Please log out and sign in again.</code> 结束。两个运行时都原地改写文件，符号链接不会被换成普通文件（pi 1.0.4 与 codex 0.159.2 源码）。</li>
+  <li>claude-code 的 <code>~/.claude.json</code>：agentrun 不隔离它，同时运行的 claude-code 都读写这个文件。</li>
+  <li>macOS 上 claude-code 沙箱里命令的 <code>TMPDIR</code> 是 <code>/tmp/claude-&lt;uid&gt;</code>，同一用户的所有 claude 会话共用，见<a href="#tmpdir">会话临时目录</a>。</li>
+  <li>相同的 <code>--cwd</code>：几个 agent 都能写这个目录，agentrun 不协调它们的写入，同一个文件被几个 agent 改写时，结果取决于写入的先后。</li>
+</ul>
 </main>
 </body>
 </html>
