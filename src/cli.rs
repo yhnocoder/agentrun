@@ -8,6 +8,7 @@ use serde::Serialize;
 #[command(
     name = "agentrun",
     version,
+    about,
     arg_required_else_help = false,
     disable_help_subcommand = true
 )]
