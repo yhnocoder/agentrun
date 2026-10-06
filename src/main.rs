@@ -2,13 +2,11 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
-use agentrun::process_tree;
-use agentrun::run::{Caller, run};
+use agentrun::run::{Caller, Signals, claim_orphans, run};
 use agentrun::runtime;
-use agentrun::signal::Signals;
 
 fn main() -> ExitCode {
-    process_tree::claim_orphans();
+    claim_orphans();
     let signals = Signals::install();
     let caller = Caller {
         args: std::env::args_os().collect(),

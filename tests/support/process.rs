@@ -6,10 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
-use agentrun::process_tree;
-use agentrun::run::{Caller, run};
+use agentrun::run::{Caller, Signals, claim_orphans, run};
 use agentrun::runtime::Adapter;
-use agentrun::signal::Signals;
 
 use super::env::poll_until;
 use super::fake::FakeAdapter;
@@ -76,7 +74,7 @@ fn sleeper(pidfile: &Path) -> ! {
 }
 
 fn fake_agentrun() -> u8 {
-    process_tree::claim_orphans();
+    claim_orphans();
     let signals = Signals::install();
     if let Some(path) = std::env::var_os(READY_FILE) {
         std::fs::write(path, "").unwrap();

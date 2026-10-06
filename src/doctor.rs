@@ -19,8 +19,7 @@ use crate::network::{
     proxy_environment,
 };
 use crate::output::{Network, NetworkReason, SandboxKind, Signal};
-use crate::process_tree;
-use crate::run::{Caller, create_tempdir, shell_quote};
+use crate::run::{Caller, create_tempdir, kill_group_members, shell_quote, wait_for_exit};
 use crate::runtime::codex;
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{Adapter, Invocation};
@@ -455,7 +454,7 @@ impl Doctor {
             } else {
                 thread::sleep(POLL);
             }
-            if process_tree::wait_for_exit(pid, false) {
+            if wait_for_exit(pid, false) {
                 break;
             }
             if Instant::now() >= deadline {
@@ -463,7 +462,7 @@ impl Doctor {
                 break;
             }
         }
-        process_tree::kill_group_members(pid);
+        kill_group_members(pid);
         self.caller.signals.checking(None);
         let status = child.wait().ok();
         while let Ok(line) = lines.recv_timeout(DRAIN) {

@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
 use crate::output::SandboxKind;
-use crate::process_tree;
+use crate::run::{Signals, wait_for_exit};
 use crate::session::Session;
-use crate::signal::Signals;
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_POLL: Duration = Duration::from_millis(10);
@@ -168,8 +167,8 @@ mod bubblewrap {
     use super::{Available, BWRAP_PREFIX, CANNOT_START_HINT, Unavailable, start_check};
     use crate::cli::Runtime;
     use crate::output::SandboxKind;
+    use crate::run::Signals;
     use crate::session::{Session, find_executable, is_executable};
-    use crate::signal::Signals;
 
     const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
     const CODEX_INSTALL_HINT: &str = "Install bubblewrap (for example: apt-get install bubblewrap, or dnf install bubblewrap), or use --sandbox relax or --sandbox off";
@@ -313,7 +312,7 @@ fn start_check(
 
 fn exits_within_check_timeout(pid: i32) -> bool {
     let deadline = Instant::now() + CHECK_TIMEOUT;
-    while !process_tree::wait_for_exit(pid, false) {
+    while !wait_for_exit(pid, false) {
         if Instant::now() >= deadline {
             return false;
         }
