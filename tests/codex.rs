@@ -2,14 +2,13 @@
 mod support;
 
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use agentrun::codex::Codex;
 use serde_json::{Value, json};
-use tempfile::TempDir;
+use support::env::Env;
 
 fn replay(name: &str, prompt: &str) {
     support::assert_replay(&mut Codex::new(), "codex", name, prompt);
@@ -74,103 +73,36 @@ fn replay_sigint() {
     );
 }
 
-struct Env {
-    root: TempDir,
+fn with_codex(script: &str) -> Env {
+    let env = Env::new();
+    env.install("codex", script);
+    env
 }
 
-impl Env {
-    fn new(script: &str) -> Env {
-        let env = Env {
-            root: tempfile::tempdir().unwrap(),
-        };
-        for dir in [env.bin(), env.tmp(), env.work(), env.home()] {
-            std::fs::create_dir(dir).unwrap();
-        }
-        let path = env.bin().join("codex");
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        env
-    }
-
-    fn with_login(script: &str) -> Env {
-        let env = Env::new(script);
-        env.write_login();
-        env
-    }
-
-    fn bin(&self) -> PathBuf {
-        self.root.path().join("bin")
-    }
-
-    fn tmp(&self) -> PathBuf {
-        self.root.path().join("tmp")
-    }
-
-    fn work(&self) -> PathBuf {
-        self.root.path().join("work")
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("home")
-    }
-
-    fn login(&self) -> PathBuf {
-        self.home().join(".codex/auth.json")
-    }
-
-    fn write_login(&self) -> PathBuf {
-        let path = self.login();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "{\"tokens\":{}}").unwrap();
-        path
-    }
-
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_agentrun"));
-        command
-            .arg("codex")
-            .arg("--cwd")
-            .arg(self.work())
-            .args(args)
-            .env_clear()
-            .env("PATH", format!("{}:/usr/bin:/bin", self.bin().display()))
-            .env("TMPDIR", self.tmp())
-            .env("HOME", self.home())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.command(args).output().unwrap()
-    }
-
-    fn leftovers(&self) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(self.tmp())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
-    }
+fn with_login(script: &str) -> Env {
+    let env = with_codex(script);
+    write_login(&env);
+    env
 }
 
-fn events(output: &Output) -> Vec<Value> {
-    String::from_utf8(output.stdout.clone())
-        .unwrap()
-        .lines()
-        .map(|line| support::without_timing(serde_json::from_str(line).unwrap()))
-        .collect()
+fn login(env: &Env) -> PathBuf {
+    env.home().join(".codex/auth.json")
 }
 
-fn text_of(events: &[Value], index: usize) -> String {
-    events
-        .iter()
-        .filter(|event| event["type"] == "text")
-        .nth(index)
-        .map(|event| event["text"].as_str().unwrap().to_string())
-        .unwrap_or_else(|| panic!("no text event {index} in {events:?}"))
+fn write_login(env: &Env) -> PathBuf {
+    let path = login(env);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{\"tokens\":{}}").unwrap();
+    path
+}
+
+fn command(env: &Env, args: &[&str]) -> Command {
+    let work = env.work();
+    env.command(&[&["codex", "--cwd", work.to_str().unwrap()], args].concat())
+}
+
+fn run(env: &Env, args: &[&str]) -> Output {
+    command(env, args).output().unwrap()
 }
 
 const FAKE_CODEX: &str = r#"#!/bin/sh
@@ -187,23 +119,26 @@ LINES
 
 #[test]
 fn fake_codex_run_without_sandbox() {
-    let env = Env::with_login(FAKE_CODEX);
-    let output = env.run(&[
-        "--sandbox",
-        "off",
-        "--model",
-        "gpt-5.3-codex",
-        "--effort",
-        "low",
-        "--no-subagents",
-        "--prompt",
-        "say hi",
-        "--",
-        "-c",
-        "x=1",
-    ]);
+    let env = with_login(FAKE_CODEX);
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--model",
+            "gpt-5.3-codex",
+            "--effort",
+            "low",
+            "--no-subagents",
+            "--prompt",
+            "say hi",
+            "--",
+            "-c",
+            "x=1",
+        ],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let events = events(&output);
+    let events = support::events(&output);
     let start = &events[0];
     let executable = env.bin().join("codex").to_string_lossy().into_owned();
     let mut argv = vec![
@@ -319,9 +254,12 @@ fn field(report: &str, name: &str) -> String {
 
 #[test]
 fn private_home_links_the_login_file_and_is_removed_afterwards() {
-    let env = Env::new(REPORTING_CODEX);
-    let login = env.write_login();
-    let output = env.run(&["--sandbox", "off", "--prompt", "two\nlines \"quoted\""]);
+    let env = with_codex(REPORTING_CODEX);
+    let login = write_login(&env);
+    let output = run(
+        &env,
+        &["--sandbox", "off", "--prompt", "two\nlines \"quoted\""],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
     let home = PathBuf::from(field(&report, "home"));
@@ -342,19 +280,22 @@ fn private_home_links_the_login_file_and_is_removed_afterwards() {
     assert!(!home.exists());
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
     assert_eq!(std::fs::read_to_string(&login).unwrap(), "{\"tokens\":{}}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "finished");
     assert_eq!(end["result"], "ok");
 }
 
 #[test]
 fn login_file_follows_codex_home_from_the_session_environment() {
-    let env = Env::new(REPORTING_CODEX);
-    let state = env.root.path().join("state");
+    let env = with_codex(REPORTING_CODEX);
+    let state = env.root().join("state");
     std::fs::create_dir(&state).unwrap();
     std::fs::write(state.join("auth.json"), "{}").unwrap();
     let variable = format!("CODEX_HOME={}", state.display());
-    let output = env.run(&["--sandbox", "off", "--env", &variable, "--prompt", "hi"]);
+    let output = run(
+        &env,
+        &["--sandbox", "off", "--env", &variable, "--prompt", "hi"],
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let report = std::fs::read_to_string(env.work().join("state.txt")).unwrap();
     assert_eq!(
@@ -362,59 +303,61 @@ fn login_file_follows_codex_home_from_the_session_environment() {
         state.join("auth.json")
     );
     assert_ne!(PathBuf::from(field(&report, "home")), state);
-    let start = &events(&output)[0];
+    let start = &support::events(&output)[0];
     assert_eq!(start["env"], json!(["CODEX_HOME"]));
 }
 
 #[test]
 fn missing_login_file_is_rejected_with_and_without_dry_run() {
-    let env = Env::new(FAKE_CODEX);
+    let env = with_codex(FAKE_CODEX);
     let detail = format!(
         "codex login file {} not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH",
-        env.login().display()
+        login(&env).display()
     );
     for extra in [&[][..], &["--dry-run"][..]] {
         let mut args = vec!["--sandbox", "off", "--prompt", "hi"];
         args.extend(extra);
-        let output = env.run(&args);
+        let output = run(&env, &args);
         assert_eq!(output.status.code(), Some(2), "{output:?}");
-        let end = events(&output).pop().unwrap();
+        let end = support::events(&output).pop().unwrap();
         assert_eq!(end["status"], "rejected");
         assert_eq!(end["detail"], detail);
         assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
     }
-    let output = env.run(&[
-        "--sandbox",
-        "off",
-        "--env",
-        "CODEX_HOME=/nonexistent",
-        "--prompt",
-        "hi",
-    ]);
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--env",
+            "CODEX_HOME=/nonexistent",
+            "--prompt",
+            "hi",
+        ],
+    );
     assert_eq!(output.status.code(), Some(2), "{output:?}");
     assert_eq!(
-        events(&output).pop().unwrap()["detail"],
+        support::events(&output).pop().unwrap()["detail"],
         "codex login file /nonexistent/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH"
     );
 }
 
 #[test]
 fn dry_run_accepts_login_content_without_the_login_file() {
-    let env = Env::new(FAKE_CODEX);
-    let output = env
-        .command(&["--sandbox", "off", "--dry-run", "--prompt", "hi"])
+    let env = with_codex(FAKE_CODEX);
+    let output = command(&env, &["--sandbox", "off", "--dry-run", "--prompt", "hi"])
         .env("AGENTRUN_CODEX_AUTH", "{\"tokens\":{}}")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(!env.login().exists());
+    assert!(!login(&env).exists());
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
 
 #[test]
 fn dry_run_shows_placeholders_and_creates_nothing() {
-    let env = Env::with_login(FAKE_CODEX);
-    let output = env.run(&["--sandbox", "off", "--dry-run", "--prompt", "hi"]);
+    let env = with_login(FAKE_CODEX);
+    let output = run(&env, &["--sandbox", "off", "--dry-run", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
@@ -436,8 +379,8 @@ fn dry_run_shows_placeholders_and_creates_nothing() {
 
 #[test]
 fn debug_keeps_the_private_home_and_prints_its_path() {
-    let env = Env::with_login(FAKE_CODEX);
-    let output = env.run(&["--sandbox", "off", "--debug", "--prompt", "hi"]);
+    let env = with_login(FAKE_CODEX);
+    let output = run(&env, &["--sandbox", "off", "--debug", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     let tempdir = stderr
@@ -456,12 +399,12 @@ fn debug_keeps_the_private_home_and_prints_its_path() {
 
 #[test]
 fn failed_run_removes_the_private_home() {
-    let env = Env::with_login(
+    let env = with_login(
         "#!/bin/sh\necho '{\"type\":\"turn.failed\",\"error\":{\"message\":\"boom\"}}'\nexit 1\n",
     );
-    let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "failed");
     assert_eq!(end["detail"], "boom");
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
@@ -469,23 +412,22 @@ fn failed_run_removes_the_private_home() {
 
 #[test]
 fn exit_without_turn_completed_fails() {
-    let env = Env::with_login("#!/bin/sh\nexit 0\n");
-    let output = env.run(&["--sandbox", "off", "--prompt", "hi"]);
+    let env = with_login("#!/bin/sh\nexit 0\n");
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let end = events(&output).pop().unwrap();
+    let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "failed");
     assert_eq!(end["detail"], "codex produced no turn.completed");
 }
 
 #[test]
 fn interrupted_run_removes_the_private_home() {
-    let env = Env::with_login(concat!(
+    let env = with_login(concat!(
         "#!/bin/sh\n",
         "echo '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ready\"}}'\n",
         "sleep 30\n",
     ));
-    let mut child = env
-        .command(&["--sandbox", "off", "--prompt", "hi"])
+    let mut child = command(&env, &["--sandbox", "off", "--prompt", "hi"])
         .spawn()
         .unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -524,22 +466,24 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0
 #[test]
 fn custom_network_runs_the_filter_proxy_with_the_service_hosts() {
     let upstream = support::WebServer::start();
-    let env = Env::with_login(CURL_CODEX);
+    let env = with_login(CURL_CODEX);
     let upstream_address = format!("http://127.0.0.1:{}", upstream.port);
-    let output = env
-        .command(&[
+    let output = command(
+        &env,
+        &[
             "--network",
             "custom",
             "--allow-host",
             "listed.test",
             "--prompt",
             "fetch",
-        ])
-        .env("http_proxy", &upstream_address)
-        .env("https_proxy", &upstream_address)
-        .output()
-        .unwrap();
-    let events = events(&output);
+        ],
+    )
+    .env("http_proxy", &upstream_address)
+    .env("https_proxy", &upstream_address)
+    .output()
+    .unwrap();
+    let events = support::events(&output);
     if output.status.code() == Some(2)
         && events[0]["detail"]
             .as_str()
@@ -563,7 +507,7 @@ fn custom_network_runs_the_filter_proxy_with_the_service_hosts() {
             .ends_with("domains={\"listed.test\"=\"allow\"}}")),
         "{argv:?}"
     );
-    let text = text_of(&events, 0);
+    let text = support::text_of(&events, 0);
     let proxy = text
         .split(' ')
         .find_map(|part| part.strip_prefix("proxy="))
@@ -575,13 +519,8 @@ fn custom_network_runs_the_filter_proxy_with_the_service_hosts() {
         text.ends_with(&format!(" denied=403 proxy={proxy} all={proxy} noproxy=/")),
         "{text}"
     );
-    let network: Vec<Value> = events
-        .iter()
-        .filter(|event| event["type"] == "network")
-        .cloned()
-        .collect();
     assert_eq!(
-        network,
+        support::network_events(&events),
         [
             json!({"schema": 1, "type": "network", "host": "listed.test", "port": 80, "allowed": true, "reason": null}),
             json!({"schema": 1, "type": "network", "host": "api.openai.com", "port": 443, "allowed": true, "reason": null}),

@@ -1,11 +1,18 @@
 use std::thread;
 
-pub fn run_tests(tests: Vec<(&str, fn())>) {
+macro_rules! test_list {
+    ($($(#[$attr:meta])* $name:ident),* $(,)?) => {
+        vec![$($(#[$attr])* (stringify!($name), $name as fn())),*]
+    };
+}
+pub(crate) use test_list;
+
+pub fn run_tests(tests: Vec<(&'static str, fn())>) {
     let filters: Vec<String> = std::env::args()
         .skip(1)
         .filter(|arg| !arg.starts_with('-'))
         .collect();
-    let selected: Vec<(&str, fn())> = tests
+    let selected: Vec<(&'static str, fn())> = tests
         .into_iter()
         .filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str())))
         .collect();

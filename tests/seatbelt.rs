@@ -3,7 +3,6 @@
 #[allow(dead_code)]
 mod support;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
@@ -54,8 +53,7 @@ impl Wrapped {
         let state = state(&self.state_dir()).unwrap();
         write_seatbelt_profile(&self.cwd(), &self.tempdir(), Some(&state), port).unwrap();
         let script = self.tempdir().join("script.sh");
-        std::fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        support::env::write_script(&script, &format!("#!/bin/sh\n{body}"));
         let mut argv = vec![script.to_string_lossy().into_owned()];
         argv.extend(args.iter().map(|arg| arg.to_string()));
         let wrapped = wrap_seatbelt(&self.tempdir(), &argv);

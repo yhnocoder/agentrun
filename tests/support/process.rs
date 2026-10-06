@@ -1,20 +1,24 @@
+use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use agentrun::adapter::Adapter;
 use agentrun::process_tree;
 use agentrun::run::{Caller, run};
 use agentrun::signal::Signals;
 
+use super::env::poll_until;
 use super::fake::FakeAdapter;
 
 pub const FAKE_AGENTRUN: &str = "AGENTRUN_TEST_FAKE_AGENTRUN";
+pub const READY_FILE: &str = "AGENTRUN_TEST_READY_FILE";
 const ROLE: &str = "AGENTRUN_TEST_ROLE";
 const SLEEPER_LIFETIME: Duration = Duration::from_secs(60);
+const GONE_LIMIT: Duration = Duration::from_secs(2);
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn take_over_if_spawned() {
@@ -74,15 +78,18 @@ fn sleeper(pidfile: &Path) -> ! {
 fn fake_agentrun() -> u8 {
     process_tree::claim_orphans();
     let signals = Signals::install();
+    if let Some(path) = std::env::var_os(READY_FILE) {
+        std::fs::write(path, "").unwrap();
+    }
     let caller = Caller {
         args: std::env::args_os().collect(),
         env: std::env::vars_os().collect(),
         stdin: Box::new(std::io::stdin()),
-        stdin_is_terminal: false,
+        stdin_is_terminal: std::io::stdin().is_terminal(),
         stdout: Arc::new(Mutex::new(std::io::stdout())),
-        stdout_is_terminal: false,
+        stdout_is_terminal: std::io::stdout().is_terminal(),
         stderr: Arc::new(Mutex::new(std::io::stderr())),
-        stderr_is_terminal: false,
+        stderr_is_terminal: std::io::stderr().is_terminal(),
         signals,
     };
     run(caller, &|_| {
@@ -123,11 +130,7 @@ pub fn describe(pid: i32) -> String {
 }
 
 pub fn wait_until_gone(pid: i32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !process_is_gone(pid) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    process_is_gone(pid)
+    poll_until(GONE_LIMIT, || process_is_gone(pid))
 }
 
 pub fn read_pid(path: &Path) -> i32 {

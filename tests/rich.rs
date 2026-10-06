@@ -1,14 +1,11 @@
-#[path = "support/fake.rs"]
-mod fake;
 #[path = "support/harness.rs"]
 mod harness;
+#[allow(dead_code)]
+#[path = "support/mod.rs"]
+mod support;
 
-use std::fs::File;
-use std::io::{IsTerminal, Read};
-use std::os::fd::FromRawFd;
-use std::os::unix::fs::PermissionsExt;
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::io::Read;
+use std::process::Stdio;
 use std::time::Instant;
 
 use agentrun::adapter::Adapter;
@@ -16,50 +13,26 @@ use agentrun::aggregate::Aggregator;
 use agentrun::cli::SandboxMode;
 use agentrun::output::TextFormatter;
 use agentrun::rich::Rich;
-use agentrun::run::{Caller, Exit, conclude, run, translate_line};
-use agentrun::signal::Signals;
-use fake::FakeAdapter;
+use agentrun::run::{Exit, conclude, translate_line};
+use support::env::Env;
+use support::fake::FakeAdapter;
+use support::process::{self, spawn_lock};
 
-const FAKE_AGENTRUN: &str = "AGENTRUN_RICH_TEST_FAKE_AGENTRUN";
 const COLUMNS: usize = 100;
 const ROWS: usize = 30;
 const RULE_CHAR: char = '─';
 
 fn main() {
-    if std::env::var_os(FAKE_AGENTRUN).is_some() {
-        std::process::exit(fake_agentrun().into());
-    }
-    harness::run_tests(vec![
-        (
-            "scroll_lines_match_text_and_panel_stays_at_bottom",
-            scroll_lines_match_text_and_panel_stays_at_bottom,
-        ),
-        (
-            "stderr_lines_enter_the_scroll_area",
-            stderr_lines_enter_the_scroll_area,
-        ),
-        (
-            "pseudo_terminal_run_ends_with_end_line_and_visible_cursor",
-            pseudo_terminal_run_ends_with_end_line_and_visible_cursor,
-        ),
-    ]);
+    process::take_over_if_spawned();
+    harness::run_tests(tests());
 }
 
-fn fake_agentrun() -> u8 {
-    let caller = Caller {
-        args: std::env::args_os().collect(),
-        env: std::env::vars_os().collect(),
-        stdin: Box::new(std::io::stdin()),
-        stdin_is_terminal: std::io::stdin().is_terminal(),
-        stdout: Arc::new(Mutex::new(std::io::stdout())),
-        stdout_is_terminal: std::io::stdout().is_terminal(),
-        stderr: Arc::new(Mutex::new(std::io::stderr())),
-        stderr_is_terminal: std::io::stderr().is_terminal(),
-        signals: Signals::install(),
-    };
-    run(caller, &|_| {
-        Some(Box::new(FakeAdapter::new(false)) as Box<dyn Adapter>)
-    })
+fn tests() -> Vec<(&'static str, fn())> {
+    harness::test_list![
+        scroll_lines_match_text_and_panel_stays_at_bottom,
+        stderr_lines_enter_the_scroll_area,
+        pseudo_terminal_run_ends_with_end_line_and_visible_cursor,
+    ]
 }
 
 struct Screen {
@@ -333,53 +306,31 @@ fn stderr_lines_enter_the_scroll_area() {
 }
 
 fn pseudo_terminal_run_ends_with_end_line_and_visible_cursor() {
-    let root = tempfile::tempdir().unwrap();
-    let bin = root.path().join("bin");
-    let tmp = root.path().join("tmp");
-    let work = root.path().join("work");
-    for dir in [&bin, &tmp, &work] {
-        std::fs::create_dir(dir).unwrap();
-    }
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' '{SUBAGENT_START}'\nprintf '%s\\n' '{SUBAGENT_TOOL_START}'\necho 'oops' >&2\nprintf '%s\\n' '{SUBAGENT_TOOL_END}'\nprintf '%s\\n' '{SUBAGENT_END}'\nprintf '%s\\n' '{MAIN_TEXT}'\n"
+    let env = Env::new();
+    env.install(
+        "claude",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' '{SUBAGENT_START}'\nprintf '%s\\n' '{SUBAGENT_TOOL_START}'\necho 'oops' >&2\nprintf '%s\\n' '{SUBAGENT_TOOL_END}'\nprintf '%s\\n' '{SUBAGENT_END}'\nprintf '%s\\n' '{MAIN_TEXT}'\n"
+        ),
     );
-    let claude = bin.join("claude");
-    std::fs::write(&claude, script).unwrap();
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let mut master = 0;
-    let mut slave = 0;
-    let mut size = libc::winsize {
-        ws_row: ROWS as u16,
-        ws_col: COLUMNS as u16,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let opened = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &raw mut size,
-        )
-    };
-    assert_eq!(opened, 0, "openpty");
-    let mut master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    let (mut master, slave) = support::open_pty(ROWS as u16, COLUMNS as u16);
+    let work = env.work();
+    let mut command = env.fake_command(&[
+        "claude-code",
+        "--sandbox",
+        "off",
+        "--prompt",
+        "hi",
+        "--cwd",
+        work.to_str().unwrap(),
+    ]);
     command
-        .args(["claude-code", "--sandbox", "off", "--prompt", "hi", "--cwd"])
-        .arg(&work)
-        .env_clear()
-        .env(FAKE_AGENTRUN, "1")
-        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-        .env("TMPDIR", &tmp)
-        .stdin(Stdio::null())
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
-    let mut child = command.spawn().unwrap();
+    let mut child = {
+        let _guard = spawn_lock();
+        command.spawn().unwrap()
+    };
     drop(command);
 
     let mut bytes = Vec::new();
