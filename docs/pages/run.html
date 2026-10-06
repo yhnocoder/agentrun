@@ -21,8 +21,27 @@
 <p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · <a href="isolation.html">沙箱与网络</a> · <a href="events.html">事件与输出</a> · 运行 · <a href="testing.html">测试与发布</a></p>
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
-<h1>运行：命令行与运行时 <span class="tag">草稿</span></h1>
+<h1>运行：命令行与运行时</h1>
 <p class="lead">前半页写调用方怎么运行 agentrun：命令行选项、一次运行的顺序、启动前检查、doctor 与退出码。后半页每个运行时一节：agentrun 用什么参数启动它、它的原始输出怎么映射到统一事件、什么情况算失败。运行时的参数与行为来自实测，写明了实测的版本；<mark>运行时升级后要重新核对</mark>。原始输出的完整字段见 <a href="claudecode.jsonl.html">claude-code 事件流</a>与 <a href="pi.jsonl.html">pi 事件流</a>两页字段参考。</p>
+
+<h2 id="code">代码位置</h2>
+<table>
+  <thead>
+    <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/main.rs</code></td><td>入口：安装信号处理，把进程的参数、环境与标准流装进 <code>Caller</code>，调用 <code>run::run</code>，把返回的退出码交给进程</td><td>命令行界面、退出码</td></tr>
+    <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Command</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
+    <tr><td><code>src/run.rs</code></td><td><code>Caller</code>、<code>Invocation</code>、<code>Exit</code>、<code>run</code>（解析命令行后分派给运行时子命令、<code>doctor::run</code> 或 <code>doctor::connect</code>）、<code>prepare</code>、<code>create_tempdir</code>、<code>translate_line</code>、<code>conclude</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
+    <tr><td><code>src/adapter.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Launch</code>、<code>Record</code>、<code>builtin</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/claudecode.rs</code></td><td><code>ClaudeCode</code></td><td>claude-code</td></tr>
+    <tr><td><code>src/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>、<code>service_host</code>、<code>default_model</code></td><td>pi</td></tr>
+    <tr><td><code>src/codex.rs</code></td><td><code>Codex</code>、<code>network_settings</code>、<code>filesystem_setting</code>、<code>toml_string</code></td><td>codex</td></tr>
+    <tr><td><code>src/doctor.rs</code></td><td><code>Check</code>、<code>Status</code>、<code>Item</code>、<code>run</code>、<code>connect</code></td><td>doctor 检查</td></tr>
+    <tr><td><code>src/json.rs</code></td><td>读取原始 JSON 字段的辅助函数 <code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
+  </tbody>
+</table>
+<p>每个运行时一个 <code>Adapter</code> 实现。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」给出 <code>detail</code>。运行框架 <code>run.rs</code> 不认识任何运行时的字段，理由：新增运行时时只增加一个文件。</p>
 
 <h2>命令行界面</h2>
 <p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>
@@ -41,7 +60,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--model ID</code></td><td>模型，原样传给运行时。pi 必须写成 <code>服务商/模型</code>，并检查 pi 实际使用的模型是否一致，见<a href="#pi">pi 一节</a></td><td>不传，用运行时自己的默认配置</td></tr>
     <tr><td><code>--effort LEVEL</code></td><td>推理强度，传给运行时对应的参数：claude-code 的 <code>--effort</code>、codex 的 <code>model_reasoning_effort</code>、pi 的 <code>--thinking</code>。不检查取值</td><td>不传</td></tr>
     <tr><td><code>--max-turns N</code></td><td>最多轮数，N 为正整数。只有 claude-code 支持，其他运行时给出时是用法错误</td><td>不限</td></tr>
-    <tr><td><code>--timeout SECONDS</code></td><td>从运行时启动开始计时，到时终止整个进程组，见<a href="session.html#signals">进程、信号与超时</a></td><td>不限</td></tr>
+    <tr><td><code>--timeout SECONDS</code></td><td>从运行时启动开始计时，到时终止整个进程组，SECONDS 为正整数，见<a href="session.html#signals">进程、信号与超时</a></td><td>不限</td></tr>
     <tr><td><code>--sandbox on|relax|off</code></td><td>沙箱做不到时怎么办，见<a href="isolation.html#sandbox">沙箱模式</a>。高于环境变量 <code>AGENTRUN_SANDBOX</code></td><td><code>on</code></td></tr>
     <tr><td><code>--network none|full|custom</code></td><td>命令与网页工具能访问哪些主机，见<a href="isolation.html#network">网络</a></td><td><code>none</code></td></tr>
     <tr><td><code>--allow-host HOST[:PORT]</code></td><td>允许访问的主机，可重复，只能与 <code>--network custom</code> 一起给出</td><td>无</td></tr>
@@ -62,7 +81,9 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
 command: /usr/local/bin/pi -p --mode json --no-session ... -- '&lt;prompt 12 bytes&gt;'
 PATH: /usr/local/bin:/usr/bin:/bin
 set: GH_TOKEN
-removed: (none)</div>
+removed: (none)
+agentrun variables: (none)</div>
+<p><code>agentrun variables</code> 一行列出调用方环境里以 <code>AGENTRUN_</code> 开头的变量名，它们只给 agentrun 自己用，不进入会话，见<a href="session.html#env">会话环境</a>。</p>
 
 <p>另外有 <code>agentrun doctor</code>。在 <a href="#doctor_check">后文</a> 详细描述。</p>
 
@@ -80,13 +101,13 @@ removed: (none)</div>
 <h3 id="preflight">启动前检查</h3>
 <p>以下情形在启动运行时之前报错。标准输出只有一个 <code>end</code> 事件，<code>status</code> 为 <code>rejected</code>，<code>detail</code> 写出原因与修正方法；同一个原因另写一行到标准错误；agentrun 以退出码 2 结束。</p>
 <ul>
-  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对。</li>
+  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败；codex 的登录文件不存在。</li>
   <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
   <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>。</li>
-  <li>会话临时目录创建失败。</li>
+  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的私有状态目录或 Seatbelt 配置文件写不出、codex 的私有目录创建失败。</li>
 </ul>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 
@@ -100,11 +121,11 @@ removed: (none)</div>
   <tbody>
     <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到，说明里写出路径</td></tr>
     <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 运行 <code>claude auth status</code>，读它输出的 JSON 里的 <code>loggedIn</code>；设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时说明写这个变量名，否则写 <code>authMethod</code>。codex 先检查登录文件存在，再用私有 <code>CODEX_HOME</code> 运行 <code>codex login status</code>，退出码 0 为通过。pi 用 <code>--mode json</code> 启动一次，读到 assistant 的 <code>message_start</code> 事件就终止它，不等模型回复；事件里的 <code>provider</code> 与 <code>model</code> 是 pi 实际选中的服务商与模型，给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败。pi 对不存在的模型名只在 stderr 上警告并照用，这个检查把该警告判为失败</td></tr>
-    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、目录内的文件写出、目录外写不进去。claude-code 的沙箱由它自己在进程内启动，无法单独调用，所以用 agentrun 给 pi 用的包裹代替：两者在 Linux 上都用 bwrap 与 socat，在 macOS 上都用 Seatbelt，检查的是同一组程序能否在当前环境启动。pi 用同一个包裹，并额外在包裹下实际启动一次 pi 与 node。codex 用 <code>codex sandbox</code> 执行同一条命令，文件系统与网络配置同实际运行。检查结束后删除该目录，给了 <code>--debug</code> 时保留并打印路径，保留前删除目录里指向登录文件的链接。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
-    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查，且沙箱检查没有运行时为 <code>skip</code>。启动过滤代理，在该运行时实际使用的沙箱里对一个允许的主机发 CONNECT 请求确认能连上，再对一个不允许的主机确认被拒绝。<code>custom</code> 时允许的主机是第一条 <code>--allow-host</code>（通配规则取 <code>www.</code> 加域名），不允许的主机是 <code>doctor-check.invalid:443</code>，要求拒绝原因为 <code>not_allowed</code>。<code>full</code> 时允许的主机是该运行时的模型服务主机（claude-code 为 <code>api.anthropic.com</code>，codex 为 <code>chatgpt.com</code>，pi 为选中服务商的主机），不允许的主机是 <code>169.254.169.254:80</code>，要求拒绝原因为 <code>private_address</code>。codex 的网络由它自己的代理控制：<code>full</code> 时不拦截私有地址，只检查允许的一半；<code>custom</code> 时拒绝来自 codex 代理，说明里不带原因。macOS 上 codex 的 <code>custom</code> 检查失败且主机解析到 <code>198.18.0.0/15</code> 时，说明里指出这是 fake-ip，需要关掉本机代理软件的 fake-ip 模式</td></tr>
+    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、目录内的文件写出、目录外写不进去。claude-code 的沙箱由它自己在进程内启动，无法单独调用，所以用 agentrun 给 pi 用的包裹代替：两者在 Linux 上都用 bwrap 与 socat，在 macOS 上都用 Seatbelt，检查的是同一组程序能否在当前环境启动。pi 用同一个包裹，并额外在包裹下运行一次 <code>pi --version</code>，确认 pi 与它依赖的 node 能在沙箱里启动，说明里加 <code>pi started</code>。codex 用 <code>codex sandbox</code> 执行同一条命令，文件系统与网络配置同实际运行。检查结束后删除该目录，给了 <code>--debug</code> 时保留并打印路径，保留前删除目录里指向登录文件的链接。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
+    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查，且沙箱检查没有运行时为 <code>skip</code>。启动过滤代理，在该运行时实际使用的沙箱里对一个允许的主机发 CONNECT 请求确认能连上，再对一个不允许的主机确认被拒绝。<code>custom</code> 时允许的主机是第一条 <code>--allow-host</code>（通配规则取 <code>www.</code> 加域名），不允许的主机是 <code>doctor-check.invalid:443</code>，要求拒绝原因为 <code>not_allowed</code>。<code>full</code> 时允许的主机是该运行时的模型服务主机（claude-code 为 <code>api.anthropic.com</code>，codex 为 <code>chatgpt.com</code>，pi 为选中服务商在模型服务主机表里的主机，表里没有时用 <code>api.anthropic.com</code>），不允许的主机是 <code>169.254.169.254:80</code>，要求拒绝原因为 <code>private_address</code>。两次连接都由 agentrun 自己完成：在沙箱里运行 <code>agentrun doctor-connect HOST PORT</code>，它按环境里的代理变量经过滤代理连接，退出码 0 表示连上。codex 的网络由它自己的代理控制：<code>full</code> 时不启动过滤代理，不拦截私有地址，只检查允许的一半；<code>custom</code> 时 codex 的代理把请求转给过滤代理，与另外两个运行时一样要求过滤代理记录 <code>not_allowed</code>。macOS 上 codex 的 <code>custom</code> 检查失败且主机解析到 <code>198.18.0.0/15</code> 时，说明里指出这是 fake-ip，需要关掉本机代理软件的 fake-ip 模式</td></tr>
   </tbody>
 </table>
-<p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒，超时按 <code>fail</code> 记并写明。可执行文件没找到时，登录与网络为 <code>skip</code>；沙箱对 claude-code 与 pi 仍然检查，对 codex 为 <code>fail</code>，因为它的沙箱就是 codex 本身。默认输出每项一行，四列对齐；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>，被信号中断时输出已完成的项。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
+<p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒，超时按 <code>fail</code> 记并写明；<code>doctor-connect</code> 连接代理或目标最多等 10 秒。可执行文件没找到时，登录为 <code>skip</code>；沙箱与网络对 claude-code 与 pi 仍然检查，因为它们用的是 agentrun 自己的包裹与 <code>doctor-connect</code>，pi 的沙箱检查这时不启动 pi，说明里加 <code>pi not started (executable not found)</code>；对 codex 两项都为 <code>fail</code>，说明为 <code>executable not found</code>，因为它的沙箱与代理就是 codex 本身。默认输出每项一行，四列对齐；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>，被信号中断时输出已完成的项。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code pi
 [ok]   claude-code  executable  /opt/node22/bin/claude
 [ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
@@ -239,7 +260,7 @@ removed: (none)</div>
 <ol>
   <li>最后一个 result 的 <code>is_error</code> 为 true：取它的 <code>result</code> 文字。例如无效模型（同时退出码 1、标准错误有 <code>[claude-code:unrecognized_model]</code>）、无效凭据（退出码 1）。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。例如未知选项，没有任何事件。</li>
-  <li>退出码 0 但没有 result：<code>runtime exited with code N without a result event</code>。</li>
+  <li>退出码 0 但没有 result：<code>runtime exited with code 0 without a result event</code>。</li>
 </ol>
 <p>收到 SIGINT 时 claude-code 约 0.4 秒退出，退出码 0，最后的 result 为 <code>is_error: true</code>、subtype <code>error_during_execution</code>；SIGTERM 时退出码 143、没有 result。两种情况都由 agentrun 记为 <code>interrupted</code>。</p>
 <p>auto 模式的分类器会拒绝部分命令。实测稳定被拒绝的是读取凭据的命令，例如 <code>cat ~/.ssh/id_rsa</code>；用 curl 把文件外发会触发模型的安全拦截，整次运行以 API Error 失败。</p>

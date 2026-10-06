@@ -28,6 +28,18 @@
   <p>读这条流的三条规则：每行一个 JSON 对象，按 <code>type</code> 与 <code>subtype</code> 分发，不认识的类型跳过；一次运行可能有多个 <code>result</code> 事件，以最后一个为准；成败看最后一个 <code>result</code> 的 <code>is_error</code>，退出码只区分启动失败与运行时的限额失败。</p>
 </blockquote>
 
+<h2 id="code">代码位置</h2>
+<table>
+  <thead>
+    <tr><th>位置</th><th>内容</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/claudecode.rs</code></td><td><code>ClaudeCode</code>：<code>launch</code> 生成本页「怎样产生这条流」的命令，<code>translate</code> 按 <code>type</code> 分发给 <code>translate_assistant</code>、<code>translate_user</code>、<code>translate_system</code>，<code>failure</code> 读最后一个 <code>result</code></td></tr>
+    <tr><td><code>tests/fixtures/claude-code/</code></td><td>本页样本的原始输出 <code>*.raw.jsonl</code> 与对应的统一事件 <code>*.events.jsonl</code>，格式见<a href="testing.html#fixtures">测试与发布</a></td></tr>
+    <tr><td><code>tests/claudecode.rs</code></td><td>回放这些样本的 <code>replay_*</code> 测试与用假 <code>claude</code> 脚本做的适配器测试</td></tr>
+  </tbody>
+</table>
+
 <h2>怎样产生这条流</h2>
 <pre><code class="language-bash">echo '{"type":"user","message":{"role":"user","content":"提示词"}}' | claude -p \
   --input-format stream-json --replay-user-messages \

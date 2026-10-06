@@ -21,8 +21,22 @@
 <p class="nav"><a href="../index.html">总览</a> · <a href="quickstart.html">快速开始</a> · <a href="guide.html">使用指南</a> · <a href="session.html">会话环境</a> · 沙箱与网络 · <a href="events.html">事件与输出</a> · <a href="run.html">运行</a> · <a href="testing.html">测试与发布</a></p>
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
-<h1>沙箱与网络 <span class="tag">草稿</span></h1>
+<h1>沙箱与网络</h1>
 <p class="lead">agentrun 用沙箱限制 agent 能写的文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code> 与 <code>--network</code> 两个选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
+
+<h2 id="code">代码位置</h2>
+<table>
+  <thead>
+    <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/sandbox.rs</code></td><td><code>Sandbox</code>、<code>resolve_mode</code>、<code>check</code>（启动前检查，按操作系统调用 Linux 的 <code>bubblewrap::probe</code> 或 macOS 的 <code>probe</code>）、<code>wrap_pi</code>、<code>ProxyForward</code>、<code>seatbelt_profile</code>、<code>write_seatbelt_profile</code>、<code>wrap_seatbelt</code>、<code>wrapper_failure</code></td><td>沙箱模式、判断沙箱能不能用、pi 的包裹</td></tr>
+    <tr><td><code>src/network.rs</code></td><td><code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>、<code>Upstream</code>、<code>NoProxyRule</code>、<code>ProxyAddress</code>、<code>ProxyEndpoint</code>、<code>FilterProxy</code>（<code>bind</code>、<code>serve</code>）、<code>proxy_needed</code>、<code>proxy_environment</code>、<code>is_private</code></td><td>网络、过滤代理、不支持 IPv6</td></tr>
+    <tr><td><code>src/claudecode.rs</code>、<code>src/codex.rs</code>、<code>src/pi.rs</code></td><td>各自 <code>launch</code> 里生成的沙箱与网络参数：claude-code 的 <code>--settings</code> 与放行列表，codex 的 <code>network_settings</code> 与 <code>filesystem_setting</code>，pi 的 <code>SERVICE_HOSTS</code> 表与包裹调用</td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
+    <tr><td><code>src/doctor.rs</code></td><td><code>sandbox</code>、<code>sandbox_test</code>、<code>network</code>、<code>network_test</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
+  </tbody>
+</table>
+<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个线程；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
 <p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
@@ -118,7 +132,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>沙箱打开且需要按主机放行时，agentrun 在启动运行时之前在自己的进程里启动一个过滤代理，会话结束时关闭。代理运行在沙箱外，沙箱里的进程只能连到它。</p>
 <ul>
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
-  <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成的名字与 IPv4 字面量，其他字节的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
+  <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成、最长 253 个字节的名字与 IPv4 字面量，其他字节或更长的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
   <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
   <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB，连接目标最多等 10 秒。</li>
@@ -140,16 +154,16 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><th>运行时</th><th><code>none</code></th><th><code>full</code> 与 <code>custom</code></th><th>网页工具</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。设了这两个端口后 claude-code 不再按 <code>allowedDomains</code> 过滤，沙箱里命令的流量全部交给过滤代理，主机由过滤代理判定（claude 2.1.289 云端实测），所以 <code>allowedDomains</code> 保持为空</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
+    <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。设了这两个端口后 claude-code 不再按 <code>allowedDomains</code> 过滤，沙箱里命令的流量交给过滤代理，主机由过滤代理判定（claude 2.1.289 云端实测），所以 <code>allowedDomains</code> 保持为空。例外：claude-code 给沙箱里的命令设置的 <code>NO_PROXY</code> 列出了 <code>localhost</code>、<code>127.0.0.1</code>、<code>169.254.0.0/16</code>、<code>10.0.0.0/8</code>、<code>172.16.0.0/12</code>、<code>192.168.0.0/16</code>，目标是这些网段里的 IP 字面量时命令不经代理，在没有网络的命名空间里直接连接失败，过滤代理看不到这次请求，没有 <code>network</code> 事件（claude 2.1.289 云端实测）；解析到私有地址的主机名仍由过滤代理拒绝</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
     <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：权限配置的网络打开，直接联网，不经过代理，没有 <code>network</code> 事件。custom：开启 codex 自带的代理，放行 <code>--allow-host</code> 列出的主机；codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，codex 的代理把放行的请求转给它，过滤代理按同一份列表再判断一次并输出 <code>network</code> 事件。codex 的代理关闭 SOCKS5，因为 SOCKS5 的连接不经过上游。codex 访问模型与刷新令牌的请求也经过过滤代理，过滤代理另外放行 codex 的服务主机，见模型服务的主机。codex 的代理配置不写 <code>allow_local_binding</code>：本机 DNS 由代理工具做 fake-ip 时，公网域名解析到 198.18.0.0/15，codex 的代理把这个网段当作私有地址，放行列表里的主机也被拒绝。加 <code>allow_local_binding=true</code> 能通过，但加上后沙箱里的命令能绕过代理直接连接本机回环地址上的端口，所以这个选项由调用方在 <code>--</code> 之后用 <code>-c permissions.agentrun.network.allow_local_binding=true</code> 自己打开。agentrun 的过滤代理不把这个网段当作私有地址</td><td>full：<code>web_search="live"</code>。none 与 custom：<code>web_search="disabled"</code></td></tr>
     <tr><td>pi</td><td>包裹断开网络，只能连代理，代理只放行模型服务</td><td>同 none，代理按取值放行</td><td>pi 没有网页工具，靠 bash 里的 <code>curl</code></td></tr>
   </tbody>
 </table>
-<p>claude-code 的 WebFetch 在 claude 进程里运行，不经过沙箱也不经过代理，只能靠权限规则限制主机。所以沙箱没有运行时，custom 下的 WebFetch 仍按主机限制。claude-code 进程本身不设置代理变量，它访问 Anthropic 的流量不经过过滤代理。</p>
+<p>claude-code 的 WebFetch 在 claude 进程里运行，不经过沙箱也不经过代理，只能靠权限规则限制主机。沙箱打开时权限模式是 dontAsk，放行规则以外的主机被拒绝；沙箱没有运行时权限模式是 auto，放行规则以外的主机由分类器判断，云端实测分类器放行了不在列表里的主机，所以这时 custom 下的 WebFetch 不受主机限制，见剩余风险。claude-code 进程本身不设置代理变量，它访问 Anthropic 的流量不经过过滤代理。</p>
 <p>claude-code 的沙箱运行时，三种取值下会话环境都设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>。理由：claude-code 在断网的网络命名空间里用 <code>socat</code> 把沙箱里的端口转发到它的代理 socket，没有指定地址族；内核没有 IPv6 时（Cloud Managed 容器），socat 1.8 选了 IPv6 而启动失败，claude-code 丢弃它的输出，沙箱里的命令连不上任何代理。这个变量让 socat 改用 IPv4 监听。</p>
 
 <h3>模型服务的主机</h3>
-<p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>：</p>
+<p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>。模型服务的主机只在 443 端口放行，并且跳过私有地址检查：</p>
 <table>
   <thead>
     <tr><th>pi 的服务商</th><th>放行的主机</th></tr>
@@ -191,7 +205,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）；Linux 上这个目录在会话临时目录之内，没有这项风险（本机 Linux 与云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置（云端实测）。边界是容器</td></tr>
+    <tr><td>claude-code</td><td>内置的 Read 能读工作目录以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）；Linux 上这个目录在会话临时目录之内，没有这项风险（本机 Linux 与云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网；Write 能写任何位置；<code>--network custom</code> 下 WebFetch 能读放行列表以外的主机（均为云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）。<code>--network full</code> 下命令直接联网，不经过滤代理，没有私有地址检查，<code>169.254.169.254</code> 这类地址可以访问（用户定）</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
     <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户的 pi 登录文件。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>
