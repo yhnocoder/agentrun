@@ -4,21 +4,20 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
-use crate::event::SandboxKind;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{ProxyEndpoint, proxy_environment};
+use crate::output::{SandboxKind, TokenCounts};
 use crate::sandbox::{
     PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
     write_seatbelt_profile,
 };
 use crate::session::Session;
-use crate::usage::TokenCounts;
 
-pub const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
-pub const STATE_HOME_SUBDIR: &str = ".pi/agent";
+const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
+pub(crate) const STATE_HOME_SUBDIR: &str = ".pi/agent";
 const SERVICE_HOSTS: [(&str, &str); 5] = [
     ("deepseek", "api.deepseek.com"),
     ("anthropic", "api.anthropic.com"),
@@ -28,8 +27,8 @@ const SERVICE_HOSTS: [(&str, &str); 5] = [
 ];
 const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
-pub const LOGIN_FILE: &str = "auth.json";
-pub const SETTINGS_FILE: &str = "settings.json";
+const LOGIN_FILE: &str = "auth.json";
+pub(crate) const SETTINGS_FILE: &str = "settings.json";
 const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "auth.json",
     "auth.json.lock",
@@ -67,7 +66,7 @@ pub struct Pi {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Model {
+pub(crate) struct Model {
     pub provider: String,
     pub model: String,
 }
@@ -311,7 +310,7 @@ impl Adapter for Pi {
     }
 }
 
-pub fn parse_model(value: &str) -> Result<Model, String> {
+pub(crate) fn parse_model(value: &str) -> Result<Model, String> {
     let name = value.split(':').next().unwrap_or_default();
     match name.split_once('/') {
         Some((provider, model)) if !provider.is_empty() && !model.is_empty() => Ok(Model {
@@ -324,11 +323,11 @@ pub fn parse_model(value: &str) -> Result<Model, String> {
     }
 }
 
-pub fn user_state_dir(session: &Session, cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn user_state_dir(session: &Session, cwd: &Path) -> Option<PathBuf> {
     session.runtime_dir(cwd, STATE_DIR_VARIABLE, STATE_HOME_SUBDIR)
 }
 
-pub fn prepare_state(user_dir: &Path) -> Result<PiState, String> {
+pub(crate) fn prepare_state(user_dir: &Path) -> Result<PiState, String> {
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -381,14 +380,14 @@ pub fn state(user_dir: &Path) -> std::io::Result<PiState> {
     })
 }
 
-pub fn default_model(settings: &Path) -> Option<Model> {
+pub(crate) fn default_model(settings: &Path) -> Option<Model> {
     Some(Model {
         provider: settings_string(settings, DEFAULT_PROVIDER_KEY)?,
         model: settings_string(settings, DEFAULT_MODEL_KEY)?,
     })
 }
 
-pub fn service_host(provider: &str) -> Option<&'static str> {
+pub(crate) fn service_host(provider: &str) -> Option<&'static str> {
     SERVICE_HOSTS
         .iter()
         .find(|(name, _)| *name == provider)
@@ -442,8 +441,8 @@ mod tests {
 
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
-    use crate::event::SandboxKind;
     use crate::network::ProxyEndpoint;
+    use crate::output::SandboxKind;
     use crate::sandbox::Sandbox;
     use crate::session::{Session, parse_env_args};
 

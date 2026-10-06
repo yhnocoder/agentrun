@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use agentrun::adapter::Adapter;
-use agentrun::run::{Caller, run};
-use agentrun::signal::Signals;
+use agentrun::run::{Caller, Signals, run};
+use agentrun::runtime::Adapter;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -17,6 +16,7 @@ use super::process::{FAKE_AGENTRUN, spawn_lock};
 
 pub const WAIT_LIMIT: Duration = Duration::from_secs(30);
 pub const POLL: Duration = Duration::from_millis(20);
+const TERMINATE_LIMIT: Duration = Duration::from_secs(10);
 
 pub fn poll_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + limit;
@@ -314,8 +314,6 @@ impl Agentrun {
         let exited = poll_until(WAIT_LIMIT, || self.child.try_wait().unwrap().is_some());
         let elapsed = self.started.elapsed();
         if !exited {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
             panic!(
                 "agentrun {} did not finish within {WAIT_LIMIT:?}; events {:?}",
                 self.pid(),
@@ -340,6 +338,10 @@ impl Agentrun {
 impl Drop for Agentrun {
     fn drop(&mut self) {
         if let Ok(None) = self.child.try_wait() {
+            self.signal(libc::SIGTERM);
+            poll_until(TERMINATE_LIMIT, || {
+                !matches!(self.child.try_wait(), Ok(None))
+            });
             let _ = self.child.kill();
             let _ = self.child.wait();
         }

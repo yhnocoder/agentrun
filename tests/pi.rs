@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::Instant;
 
-use agentrun::pi::Pi;
+use agentrun::runtime::pi::Pi;
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use support::env::{Env, WAIT_LIMIT, poll_until};

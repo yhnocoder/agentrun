@@ -7,16 +7,14 @@ use std::time::{Duration, Instant};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator;
 
-use crate::cli::{Format, SandboxMode};
-use crate::event::{Body, End, EndStatus, Event, Signal};
-use crate::output::Output;
-use crate::process_tree::{
+use super::process_tree::{
     self, ForkWatcher, PROC_ROOT, ProcessTable, RECORDS_DESCENDANTS, Recorded, SNAPSHOT_PERIOD,
     wrapped_child,
 };
-use crate::usage::Usage;
+use crate::cli::{Format, SandboxMode};
+use crate::output::{Body, End, EndStatus, Event, Output, Signal, Usage};
 
-pub const GRACE_PERIOD: Duration = Duration::from_secs(5);
+const GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 pub type SharedWriter = Arc<Mutex<dyn Write + Send>>;
 

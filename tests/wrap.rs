@@ -11,8 +11,8 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentrun::event::SandboxKind;
-use agentrun::pi::state;
+use agentrun::output::SandboxKind;
+use agentrun::runtime::pi::state;
 use agentrun::sandbox::{PiState, ProxyForward, wrap_pi, wrapper_failure};
 use support::env::write_script;
 use support::process::wait_until_gone;

@@ -8,12 +8,10 @@ use std::io::Read;
 use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
-use agentrun::adapter::Adapter;
-use agentrun::aggregate::Aggregator;
 use agentrun::cli::SandboxMode;
-use agentrun::output::TextFormatter;
-use agentrun::rich::Rich;
+use agentrun::output::{Aggregator, Rich, TextFormatter};
 use agentrun::run::{Exit, conclude, translate_line};
+use agentrun::runtime::Adapter;
 use support::env::Env;
 use support::fake::FakeAdapter;
 use support::process::{self, spawn_lock};
@@ -150,7 +148,7 @@ impl Session {
         session
     }
 
-    fn emit(&mut self, events: &[agentrun::event::Event]) {
+    fn emit(&mut self, events: &[agentrun::output::Event]) {
         for event in events {
             self.expected.extend(self.text.lines(event));
             let mut bytes = Vec::new();

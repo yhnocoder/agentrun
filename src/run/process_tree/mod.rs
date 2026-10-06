@@ -1,20 +1,27 @@
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as platform;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as platform;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub use platform::{ForkWatcher, RECORDS_DESCENDANTS, claim_orphans};
+
 pub const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
-#[cfg(target_os = "macos")]
-pub const RECORDS_DESCENDANTS: bool = true;
-#[cfg(not(target_os = "macos"))]
-pub const RECORDS_DESCENDANTS: bool = false;
 const REAP_WAIT: Duration = Duration::from_millis(200);
 const REAP_POLL: Duration = Duration::from_millis(5);
 const KILL_PASSES: usize = 3;
 pub const PROC_ROOT: &str = "/proc";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Process {
+struct Process {
     pub pid: i32,
     pub started: String,
     pub pgid: i32,
@@ -58,19 +65,11 @@ pub struct ProcessTable {
 }
 
 impl ProcessTable {
-    #[cfg(target_os = "linux")]
     pub fn snapshot() -> ProcessTable {
-        ProcessTable::read_proc(Path::new(PROC_ROOT))
+        platform::snapshot()
     }
 
-    #[cfg(target_os = "macos")]
-    pub fn snapshot() -> ProcessTable {
-        let mut entries: Vec<Entry> = list_pids().into_iter().filter_map(bsd_info).collect();
-        entries.sort_unstable_by_key(|entry| entry.pid);
-        ProcessTable { entries }
-    }
-
-    pub fn read_proc(proc_root: &Path) -> ProcessTable {
+    fn read_proc(proc_root: &Path) -> ProcessTable {
         let mut entries: Vec<Entry> = std::fs::read_dir(proc_root)
             .map(|dir| {
                 dir.flatten()
@@ -83,14 +82,14 @@ impl ProcessTable {
         ProcessTable { entries }
     }
 
-    pub fn children_of(&self, parent: i32) -> impl Iterator<Item = Process> + '_ {
+    fn children_of(&self, parent: i32) -> impl Iterator<Item = Process> + '_ {
         self.entries
             .iter()
             .filter(move |entry| entry.parent == parent)
             .map(Entry::process)
     }
 
-    pub fn descendants(&self, roots: &[i32]) -> Vec<Process> {
+    fn descendants(&self, roots: &[i32]) -> Vec<Process> {
         let mut found = BTreeSet::new();
         let mut pending: Vec<i32> = roots.to_vec();
         while let Some(parent) = pending.pop() {
@@ -103,7 +102,7 @@ impl ProcessTable {
         found.into_iter().collect()
     }
 
-    pub fn still_running(&self, process: &Process) -> bool {
+    fn still_running(&self, process: &Process) -> bool {
         self.find(process.pid)
             .is_some_and(|entry| entry.started == process.started)
     }
@@ -124,141 +123,6 @@ impl Entry {
             pgid: self.pgid,
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-pub fn claim_orphans() {
-    unsafe {
-        libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1);
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn claims_orphans() -> bool {
-    let mut claims: libc::c_int = 0;
-    unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut claims) == 0 && claims != 0 }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn claim_orphans() {}
-
-pub struct ForkWatcher {
-    #[cfg(target_os = "macos")]
-    queue: libc::c_int,
-}
-
-#[cfg(target_os = "macos")]
-impl ForkWatcher {
-    pub fn start(main: i32) -> Option<ForkWatcher> {
-        let queue = unsafe { libc::kqueue() };
-        if queue < 0 {
-            return None;
-        }
-        let watcher = ForkWatcher { queue };
-        watcher.track(main);
-        Some(watcher)
-    }
-
-    pub fn track(&self, pid: i32) {
-        let change = libc::kevent {
-            ident: pid as libc::uintptr_t,
-            filter: libc::EVFILT_PROC,
-            flags: libc::EV_ADD | libc::EV_CLEAR,
-            fflags: libc::NOTE_FORK | libc::NOTE_EXIT,
-            data: 0,
-            udata: std::ptr::null_mut(),
-        };
-        unsafe {
-            libc::kevent(
-                self.queue,
-                &change,
-                1,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            );
-        }
-    }
-
-    pub fn wait(&self, timeout: Duration) {
-        let mut events: [libc::kevent; 16] = unsafe { std::mem::zeroed() };
-        let timeout = libc::timespec {
-            tv_sec: timeout.as_secs() as libc::time_t,
-            tv_nsec: timeout.subsec_nanos() as libc::c_long,
-        };
-        unsafe {
-            libc::kevent(
-                self.queue,
-                std::ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                events.len() as libc::c_int,
-                &timeout,
-            );
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for ForkWatcher {
-    fn drop(&mut self) {
-        unsafe {
-            libc::close(self.queue);
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-impl ForkWatcher {
-    pub fn start(_main: i32) -> Option<ForkWatcher> {
-        None
-    }
-
-    pub fn track(&self, _pid: i32) {}
-
-    pub fn wait(&self, timeout: Duration) {
-        thread::sleep(timeout);
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn list_pids() -> Vec<libc::pid_t> {
-    let needed = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    let mut pids = vec![0 as libc::pid_t; needed.max(0) as usize + 64];
-    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
-    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-    pids.truncate(filled.clamp(0, pids.len() as libc::c_int) as usize);
-    pids.retain(|pid| *pid > 0);
-    pids
-}
-
-#[cfg(target_os = "macos")]
-fn bsd_info(pid: libc::pid_t) -> Option<Entry> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let got = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&mut info as *mut libc::proc_bsdinfo).cast(),
-            size,
-        )
-    };
-    if got != size || info.pbi_status == libc::SZOMB {
-        return None;
-    }
-    Some(Entry {
-        pid,
-        parent: info.pbi_ppid as i32,
-        pgid: info.pbi_pgid as i32,
-        started: format!("{}.{:06}", info.pbi_start_tvsec, info.pbi_start_tvusec),
-    })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn claims_orphans() -> bool {
-    false
 }
 
 pub fn wait_for_exit(pid: i32, block: bool) -> bool {
@@ -301,7 +165,7 @@ pub fn kill_tree(parents: &[i32], recorded: &Recorded) {
             .cloned()
             .collect();
         let mut roots = parents.to_vec();
-        if claims_orphans() {
+        if platform::claims_orphans() {
             roots.push(own);
         }
         roots.extend(targets.iter().map(|process| process.pid));

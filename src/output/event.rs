@@ -4,10 +4,10 @@ use serde::{Serialize, Serializer};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+use super::usage::{TokenCounts, Usage};
 use crate::cli::{NetworkMode, Runtime};
-use crate::usage::{TokenCounts, Usage};
 
-pub const SCHEMA: u8 = 1;
+const SCHEMA: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
@@ -44,7 +44,7 @@ struct Envelope<'a> {
     body: &'a Body,
 }
 
-pub fn format_time(time: SystemTime) -> String {
+fn format_time(time: SystemTime) -> String {
     OffsetDateTime::from(time)
         .format(format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
@@ -67,7 +67,7 @@ pub enum Body {
 }
 
 impl Body {
-    pub fn kind(&self) -> &'static str {
+    fn kind(&self) -> &'static str {
         match self {
             Body::Start(_) => "start",
             Body::Prompt(_) => "prompt",

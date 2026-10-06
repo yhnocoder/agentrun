@@ -30,15 +30,15 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>、<code>EndStatus</code> 与 <code>Signal</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
-    <tr><td><code>src/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
-    <tr><td><code>src/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tool</code>）、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
-    <tr><td><code>src/output.rs</code></td><td><code>Output</code></td><td>text 格式、rich 格式</td></tr>
-    <tr><td><code>src/text.rs</code></td><td><code>TextFormatter</code>、<code>subagent_label</code>、<code>first_line</code></td><td>text 格式、<code>[note]</code> 行</td></tr>
-    <tr><td><code>src/rich.rs</code></td><td><code>Rich</code>、<code>Panel</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
+    <tr><td><code>src/output/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>、<code>EndStatus</code> 与 <code>Signal</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
+    <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
+    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tool</code>）、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
+    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code></td><td>text 格式、rich 格式</td></tr>
+    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>、<code>subagent_label</code>、<code>first_line</code></td><td>text 格式、<code>[note]</code> 行</td></tr>
+    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>Panel</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
-<p>适配器输出的是 <code>adapter::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，rich 另外通过 <code>open_tool</code> 读取还没有结束的调用来显示「正在执行的工具」。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
+<p>适配器输出的是 <code>runtime::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，rich 另外通过 <code>open_tool</code> 读取还没有结束的调用来显示「正在执行的工具」。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
 
 <h2>统一事件流</h2>
 <p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use super::event::{Body, EndStatus, Event, SandboxKind};
+use super::usage::TokenCounts;
 use crate::cli::SandboxMode;
-use crate::event::{Body, EndStatus, Event, SandboxKind};
-use crate::usage::TokenCounts;
 
 pub struct TextFormatter {
     sandbox: SandboxMode,
@@ -154,11 +154,11 @@ fn usage_items(counts: &TokenCounts) -> String {
 mod tests {
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
-    use crate::event::{
+    use crate::output::event::{
         End, Network, NetworkInfo, NetworkReason, Prompt, Start, SubagentEnd, SubagentStart,
         SubagentStatus, Text, Tool, UsageReport,
     };
-    use crate::usage::Usage;
+    use crate::output::usage::Usage;
 
     fn event(body: Body) -> Event {
         Event {

@@ -3,10 +3,10 @@ use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use super::event::{Body, Event};
+use super::text::{TextFormatter, first_line, subagent_label};
+use super::usage::{TokenCounts, tokens};
 use crate::cli::SandboxMode;
-use crate::event::{Body, Event};
-use crate::text::{TextFormatter, first_line, subagent_label};
-use crate::usage::{TokenCounts, tokens};
 
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -31,7 +31,7 @@ pub fn terminal_size() -> (usize, usize) {
     }
 }
 
-pub struct Panel {
+struct Panel {
     started: Instant,
     main_model: Option<String>,
     main_context: Option<u64>,
@@ -51,7 +51,7 @@ struct Subagent {
 }
 
 impl Panel {
-    pub fn new(started: Instant) -> Panel {
+    fn new(started: Instant) -> Panel {
         Panel {
             started,
             main_model: None,
@@ -63,7 +63,7 @@ impl Panel {
         }
     }
 
-    pub fn observe(&mut self, event: &Event, now: Instant) {
+    fn observe(&mut self, event: &Event, now: Instant) {
         match &event.body {
             Body::Start(start) => self.main_model = start.model.clone(),
             Body::Usage(usage) => {
@@ -97,7 +97,7 @@ impl Panel {
         }
     }
 
-    pub fn lines(
+    fn lines(
         &self,
         open_tool: OpenTool,
         width: usize,
@@ -201,7 +201,7 @@ fn table(rows: Vec<Vec<String>>, shrink: &[usize], prefix: &str, max: usize) -> 
         .collect()
 }
 
-pub fn truncate(text: &str, max: usize) -> String {
+fn truncate(text: &str, max: usize) -> String {
     if text.width() <= max {
         return text.to_string();
     }
@@ -221,7 +221,7 @@ pub fn truncate(text: &str, max: usize) -> String {
     result
 }
 
-pub fn clock(elapsed: Duration) -> String {
+fn clock(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     if seconds < 3600 {
         format!("{}:{:02}", seconds / 60, seconds % 60)
@@ -369,7 +369,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
-    use crate::event::{
+    use crate::output::event::{
         NetworkInfo, SandboxKind, Start, SubagentEnd, SubagentStart, SubagentStatus, UsageReport,
     };
 

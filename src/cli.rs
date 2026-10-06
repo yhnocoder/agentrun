@@ -236,7 +236,7 @@ pub enum Format {
     Jsonl,
 }
 
-pub fn prescan_format(args: &[OsString]) -> Option<Format> {
+pub(crate) fn prescan_format(args: &[OsString]) -> Option<Format> {
     let mut rest = args.iter().skip(1).map(|arg| arg.to_str());
     while let Some(arg) = rest.next() {
         match arg {
@@ -257,7 +257,7 @@ fn parse_format(value: &str) -> Option<Format> {
     Format::from_str(value, false).ok()
 }
 
-pub fn default_format(stdout_is_terminal: bool) -> Format {
+pub(crate) fn default_format(stdout_is_terminal: bool) -> Format {
     if stdout_is_terminal {
         Format::Rich
     } else {
@@ -265,7 +265,7 @@ pub fn default_format(stdout_is_terminal: bool) -> Format {
     }
 }
 
-pub fn usage_error_detail(rendered: &str) -> String {
+pub(crate) fn usage_error_detail(rendered: &str) -> String {
     let joined = rendered
         .lines()
         .take_while(|line| !line.starts_with("Usage:") && !line.starts_with("For more information"))

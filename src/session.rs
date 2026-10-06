@@ -124,7 +124,7 @@ fn session_path(path_dirs: &[PathBuf], base: Option<&OsString>) -> OsString {
     path
 }
 
-pub fn is_variable_name(key: &str) -> bool {
+fn is_variable_name(key: &str) -> bool {
     let mut chars = key.chars();
     chars
         .next()
@@ -132,7 +132,7 @@ pub fn is_variable_name(key: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-pub fn parse_env_args(
+pub(crate) fn parse_env_args(
     args: &[String],
     caller_env: &[(OsString, OsString)],
 ) -> Result<Vec<(String, OsString)>, String> {
@@ -159,7 +159,7 @@ pub fn parse_env_args(
         .collect()
 }
 
-pub fn resolve_path_dirs(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn resolve_path_dirs(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     dirs.iter()
         .map(|dir| {
             std::path::absolute(dir)
@@ -170,7 +170,7 @@ pub fn resolve_path_dirs(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
-pub fn read_env_file(path: &Path) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn read_env_file(path: &Path) -> Result<Vec<(String, String)>, String> {
     let bytes =
         std::fs::read(path).map_err(|error| format!("--env-file {}: {error}", path.display()))?;
     let content = String::from_utf8(bytes)
@@ -218,7 +218,7 @@ fn unquote(value: &str) -> &str {
     }
 }
 
-pub fn find_executable(name: &str, path: &OsStr, cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn find_executable(name: &str, path: &OsStr, cwd: &Path) -> Option<PathBuf> {
     std::env::split_paths(path)
         .filter(|dir| !dir.as_os_str().is_empty())
         .map(|dir| cwd.join(dir).join(name))
@@ -226,7 +226,7 @@ pub fn find_executable(name: &str, path: &OsStr, cwd: &Path) -> Option<PathBuf> 
         .and_then(|candidate| std::path::absolute(candidate).ok())
 }
 
-pub fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)

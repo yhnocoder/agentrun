@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record};
 use crate::cli::{NetworkMode, Runtime};
-use crate::event::SubagentStatus;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
-use crate::usage::{TokenCounts, Usage};
+use crate::output::{SubagentStatus, TokenCounts, Usage};
 
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
@@ -545,8 +544,8 @@ mod tests {
 
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
-    use crate::event::SandboxKind;
     use crate::network;
+    use crate::output::SandboxKind;
     use crate::sandbox::Sandbox;
     use crate::session::Session;
 

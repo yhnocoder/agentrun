@@ -12,26 +12,25 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Invocation};
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
-use crate::codex;
 use crate::credential::write_session_credential;
-use crate::event::{Network, NetworkReason, SandboxKind, Signal};
 use crate::network::{
     FilterProxy, HostRule, Policy, ProxyAddress, SOCKET_FILE, Upstream, check_usage,
     proxy_environment,
 };
-use crate::pi::{self, Model, Pi};
-use crate::process_tree;
-use crate::run::{Caller, create_tempdir, shell_quote};
+use crate::output::{Network, NetworkReason, SandboxKind, Signal};
+use crate::run::{Caller, create_tempdir, kill_group_members, shell_quote, wait_for_exit};
+use crate::runtime::codex;
+use crate::runtime::pi::{self, Model, Pi};
+use crate::runtime::{Adapter, Invocation};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, PiState, ProxyForward, Sandbox, UNAVAILABLE_PREFIX,
     wrap_pi, wrap_seatbelt, write_seatbelt_profile,
 };
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 
-pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-pub const USAGE_EXIT_CODE: u8 = 2;
+pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const USAGE_EXIT_CODE: u8 = 2;
 const FAIL_EXIT_CODE: u8 = 1;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY: Duration = Duration::from_millis(50);
@@ -65,7 +64,7 @@ const CODEX_PROXY_NOT_ALLOWED: &str = "x-proxy-error: blocked-by-allowlist";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Check {
+enum Check {
     Executable,
     Login,
     Sandbox,
@@ -85,7 +84,7 @@ impl Check {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Status {
+enum Status {
     Ok,
     Fail,
     Skip,
@@ -102,7 +101,7 @@ impl Status {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Item {
+struct Item {
     pub runtime: Runtime,
     pub check: Check,
     pub status: Status,
@@ -121,7 +120,7 @@ impl Item {
     }
 }
 
-pub fn selected(args: &[OsString]) -> bool {
+pub(crate) fn selected(args: &[OsString]) -> bool {
     matches!(
         args.get(1).and_then(|arg| arg.to_str()),
         Some("doctor" | "doctor-connect")
@@ -455,7 +454,7 @@ impl Doctor {
             } else {
                 thread::sleep(POLL);
             }
-            if process_tree::wait_for_exit(pid, false) {
+            if wait_for_exit(pid, false) {
                 break;
             }
             if Instant::now() >= deadline {
@@ -463,7 +462,7 @@ impl Doctor {
                 break;
             }
         }
-        process_tree::kill_group_members(pid);
+        kill_group_members(pid);
         self.caller.signals.checking(None);
         let status = child.wait().ok();
         while let Ok(line) = lines.recv_timeout(DRAIN) {
@@ -1213,7 +1212,7 @@ impl Wrap {
     }
 }
 
-pub fn connect(caller: &Caller, args: &ConnectArgs) -> u8 {
+pub(crate) fn connect(caller: &Caller, args: &ConnectArgs) -> u8 {
     let proxy = PROXY_VARIABLES
         .iter()
         .find_map(|name| caller.var(name).filter(|value| !value.is_empty()));
