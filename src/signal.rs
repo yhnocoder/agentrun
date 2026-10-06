@@ -10,10 +10,10 @@ use signal_hook::iterator;
 use crate::cli::{Format, SandboxMode};
 use crate::event::{Body, End, EndStatus, Event};
 use crate::output::Output;
+use crate::process_tree::{self, PROC_ROOT, Process, SNAPSHOT_PERIOD, wrapped_child};
 use crate::usage::Usage;
 
 pub const GRACE_PERIOD: Duration = Duration::from_secs(5);
-const PROC_ROOT: &str = "/proc";
 
 pub type SharedWriter = Arc<Mutex<dyn Write + Send>>;
 
@@ -83,6 +83,7 @@ impl Doctoring {
             kill_group(pid, libc::SIGKILL);
             kill_process(pid, libc::SIGKILL);
         }
+        process_tree::kill_tree(self.check_pid.as_slice(), &[]);
         if let (Some(tempdir), false) = (&self.tempdir, self.keep_tempdir) {
             let _ = std::fs::remove_dir_all(tempdir);
         }
@@ -105,14 +106,33 @@ struct Running {
     signal_wrapped_child: bool,
     terminating: bool,
     deadline: Option<Instant>,
+    descendants: Vec<Process>,
+    recorded_at: Instant,
 }
 
 impl Running {
+    fn record(&mut self) {
+        self.store(Instant::now(), process_tree::record_descendants(self.pgid));
+    }
+
+    fn store(&mut self, recorded_at: Instant, descendants: Vec<Process>) {
+        if recorded_at >= self.recorded_at {
+            self.descendants = descendants;
+            self.recorded_at = recorded_at;
+        }
+    }
+
+    fn kill_all(&mut self) {
+        self.record();
+        kill_group(self.pgid, libc::SIGKILL);
+    }
+
     fn terminate(&mut self, signal: i32) {
         if self.terminating {
-            kill_group(self.pgid, libc::SIGKILL);
+            self.kill_all();
             return;
         }
+        self.record();
         let child = if self.signal_wrapped_child {
             wrapped_child(Path::new(PROC_ROOT), self.pgid)
         } else {
@@ -226,14 +246,18 @@ impl Signals {
             signal_wrapped_child,
             terminating: false,
             deadline: timeout.map(|timeout| Instant::now() + timeout),
+            descendants: Vec::new(),
+            recorded_at: Instant::now(),
         });
         let watcher = Arc::clone(&self.shared);
         thread::spawn(move || watcher.watch());
+        let recorder = Arc::clone(&self.shared);
+        thread::spawn(move || recorder.record());
     }
 
     pub fn kill_group(&self) {
-        if let Phase::Running(running) = &self.shared.lock().phase {
-            kill_group(running.pgid, libc::SIGKILL);
+        if let Phase::Running(running) = &mut self.shared.lock().phase {
+            running.kill_all();
         }
     }
 
@@ -241,6 +265,7 @@ impl Signals {
         let mut state = self.shared.lock();
         if let Phase::Running(running) = &state.phase {
             kill_group(running.pgid, libc::SIGKILL);
+            process_tree::kill_tree(&[running.pgid], &running.descendants);
         }
         state.phase = Phase::Finishing;
         self.shared.changed.notify_all();
@@ -304,7 +329,7 @@ impl Shared {
                 continue;
             }
             if running.terminating {
-                kill_group(running.pgid, libc::SIGKILL);
+                running.kill_all();
                 running.deadline = None;
             } else {
                 running.terminate(SIGTERM);
@@ -312,15 +337,32 @@ impl Shared {
             }
         }
     }
+
+    fn record(&self) {
+        while let Some(pgid) = self.running_pgid() {
+            let recorded_at = Instant::now();
+            let descendants = process_tree::record_descendants(pgid);
+            if let Phase::Running(running) = &mut self.lock().phase {
+                running.store(recorded_at, descendants);
+            }
+            thread::sleep(SNAPSHOT_PERIOD);
+        }
+    }
+
+    fn running_pgid(&self) -> Option<i32> {
+        match &self.lock().phase {
+            Phase::Running(running) => Some(running.pgid),
+            _ => None,
+        }
+    }
 }
 
 impl Preparation {
     fn abort(&self, signal: Signal) -> u8 {
         if let Some(pid) = self.check_pid {
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
+            kill_process(pid, libc::SIGKILL);
         }
+        process_tree::kill_tree(self.check_pid.as_slice(), &[]);
         let status = EndStatus::Interrupted(signal);
         let end = Event::now(Body::End(End {
             status,
@@ -351,90 +393,5 @@ fn kill_group(pgid: i32, signal: i32) {
 fn kill_process(pid: i32, signal: i32) {
     unsafe {
         libc::kill(pid, signal);
-    }
-}
-
-pub fn wrapped_child(proc_root: &Path, parent: i32) -> Option<i32> {
-    let listed = std::fs::read_to_string(
-        proc_root
-            .join(parent.to_string())
-            .join("task")
-            .join(parent.to_string())
-            .join("children"),
-    )
-    .ok()
-    .and_then(|text| text.split_whitespace().next()?.parse().ok());
-    listed.or_else(|| scan_for_child(proc_root, parent))
-}
-
-fn scan_for_child(proc_root: &Path, parent: i32) -> Option<i32> {
-    let mut pids: Vec<i32> = std::fs::read_dir(proc_root)
-        .ok()?
-        .flatten()
-        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
-        .collect();
-    pids.sort_unstable();
-    pids.into_iter()
-        .find(|pid| parent_of(proc_root, *pid) == Some(parent))
-}
-
-fn parent_of(proc_root: &Path, pid: i32) -> Option<i32> {
-    let stat = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")).ok()?;
-    let (_, after_name) = stat.rsplit_once(')')?;
-    after_name.split_whitespace().nth(1)?.parse().ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_proc(root: &Path, pid: i32, parent: i32, children: Option<&str>) {
-        let dir = root.join(pid.to_string());
-        std::fs::create_dir_all(dir.join("task").join(pid.to_string())).unwrap();
-        std::fs::write(
-            dir.join("stat"),
-            format!("{pid} (my (odd) name) S {parent} {pid} {pid} 0 -1 4194560 100\n"),
-        )
-        .unwrap();
-        if let Some(children) = children {
-            std::fs::write(
-                dir.join("task").join(pid.to_string()).join("children"),
-                children,
-            )
-            .unwrap();
-        }
-    }
-
-    #[test]
-    fn children_file_gives_the_first_pid() {
-        let root = tempfile::tempdir().unwrap();
-        write_proc(root.path(), 100, 1, Some("205 206 "));
-        write_proc(root.path(), 205, 100, Some(""));
-        write_proc(root.path(), 206, 100, None);
-        assert_eq!(wrapped_child(root.path(), 100), Some(205));
-    }
-
-    #[test]
-    fn empty_or_missing_children_file_falls_back_to_scanning() {
-        let root = tempfile::tempdir().unwrap();
-        write_proc(root.path(), 100, 1, Some("\n"));
-        write_proc(root.path(), 99, 1, None);
-        write_proc(root.path(), 300, 100, None);
-        write_proc(root.path(), 301, 100, None);
-        std::fs::create_dir(root.path().join("self")).unwrap();
-        assert_eq!(wrapped_child(root.path(), 100), Some(300));
-        write_proc(root.path(), 400, 1, None);
-        write_proc(root.path(), 500, 400, None);
-        assert_eq!(wrapped_child(root.path(), 400), Some(500));
-    }
-
-    #[test]
-    fn no_child_gives_none() {
-        let root = tempfile::tempdir().unwrap();
-        write_proc(root.path(), 100, 1, Some(""));
-        write_proc(root.path(), 101, 1, None);
-        assert_eq!(wrapped_child(root.path(), 100), None);
-        assert_eq!(wrapped_child(root.path(), 7), None);
-        assert_eq!(wrapped_child(Path::new("/nonexistent/proc"), 1), None);
     }
 }

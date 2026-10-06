@@ -10,6 +10,7 @@ pub mod json;
 pub mod network;
 pub mod output;
 pub mod pi;
+pub mod process_tree;
 pub mod rich;
 pub mod run;
 pub mod sandbox;
