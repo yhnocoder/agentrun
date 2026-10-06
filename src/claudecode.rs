@@ -30,6 +30,7 @@ const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
 const RANDOM_SOURCE: &str = "/dev/urandom";
 
+#[derive(Default)]
 pub struct ClaudeCode {
     cwd: PathBuf,
     no_subagents: bool,
@@ -92,23 +93,9 @@ struct NetworkSettings {
     socks_proxy_port: Option<Value>,
 }
 
-impl Default for ClaudeCode {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ClaudeCode {
     pub fn new() -> ClaudeCode {
-        ClaudeCode {
-            cwd: PathBuf::new(),
-            no_subagents: false,
-            prompt_echoed: false,
-            subagents: HashSet::new(),
-            denied: HashSet::new(),
-            pending_usages: Vec::new(),
-            last_result: None,
-        }
+        ClaudeCode::default()
     }
 
     fn translate_assistant(&mut self, line: &Value) -> Vec<Record> {

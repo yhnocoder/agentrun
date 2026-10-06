@@ -70,6 +70,7 @@ const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
 const BWRAP_PREFIX: &str = "bwrap: ";
 const DETAIL_MAX_CHARS: usize = 500;
 
+#[derive(Default)]
 pub struct Codex {
     cwd: PathBuf,
     model: Option<String>,
@@ -80,23 +81,9 @@ pub struct Codex {
     last_error: Option<String>,
 }
 
-impl Default for Codex {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Codex {
     pub fn new() -> Codex {
-        Codex {
-            cwd: PathBuf::new(),
-            model: None,
-            sandboxed: false,
-            sandbox_failure: None,
-            turn_completed: false,
-            turn_failed: None,
-            last_error: None,
-        }
+        Codex::default()
     }
 
     fn item_completed(&mut self, item: &Value) -> Vec<Record> {
