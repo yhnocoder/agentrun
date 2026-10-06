@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
 use crate::event::SandboxKind;
-use crate::pi::WRITABLE_STATE_ENTRIES;
 use crate::process_tree;
 use crate::session::Session;
 use crate::signal::Signals;
@@ -342,6 +341,7 @@ pub struct ProxyForward<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PiState {
     pub dir: PathBuf,
+    pub writable: Vec<PathBuf>,
     pub login_target: Option<PathBuf>,
     pub readonly: Vec<PathBuf>,
 }
@@ -418,8 +418,8 @@ pub fn seatbelt_profile(
     profile.push_str(&format!("  (subpath {})\n", quoted(cwd)));
     profile.push_str(&format!("  (subpath {})\n", quoted(tempdir)));
     if let Some(state) = state {
-        for name in WRITABLE_STATE_ENTRIES {
-            profile.push_str(&format!("  (literal {})\n", quoted(&state.dir.join(name))));
+        for path in &state.writable {
+            profile.push_str(&format!("  (literal {})\n", quoted(path)));
         }
         if let Some(login_target) = &state.login_target {
             profile.push_str(&format!("  (literal {})\n", quoted(login_target)));
@@ -623,6 +623,16 @@ mod tests {
     fn state(dir: &str, login_target: Option<&str>, readonly: &[&str]) -> PiState {
         PiState {
             dir: PathBuf::from(dir),
+            writable: [
+                "auth.json",
+                "auth.json.lock",
+                "models-store.json",
+                "models-store.json.lock",
+                "settings.json.lock",
+            ]
+            .iter()
+            .map(|name| Path::new(dir).join(name))
+            .collect(),
             login_target: login_target.map(PathBuf::from),
             readonly: readonly.iter().map(PathBuf::from).collect(),
         }

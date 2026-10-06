@@ -780,7 +780,7 @@ impl Doctor {
                     bwrap,
                     work: dirs.work.clone(),
                     tmp: dirs.tmp.clone(),
-                    state,
+                    state: state.map(Box::new),
                     forward,
                 })
             }
@@ -1156,7 +1156,7 @@ enum Wrap {
         bwrap: PathBuf,
         work: PathBuf,
         tmp: PathBuf,
-        state: Option<PiState>,
+        state: Option<Box<PiState>>,
         forward: Option<Forward>,
     },
     Seatbelt {
@@ -1190,7 +1190,7 @@ impl Wrap {
                     port: &forward.port,
                     socket: &forward.socket,
                 });
-                wrap_pi(bwrap, work, tmp, state.as_ref(), forward.as_ref(), inner)
+                wrap_pi(bwrap, work, tmp, state.as_deref(), forward.as_ref(), inner)
             }
             Wrap::Seatbelt { tmp } => wrap_seatbelt(tmp, inner),
             Wrap::Codex { prefix } => {

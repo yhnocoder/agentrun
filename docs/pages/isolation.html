@@ -104,7 +104,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>pi 状态目录的放行按平台实现，输入都是 <code>src/sandbox.rs</code> 的 <code>PiState</code>：</p>
 <ul>
   <li>Linux：<code>bwrap</code> 把整个状态目录 <code>--bind</code> 为可写，再把目录里已有的其他条目（跟随符号链接后是目录或普通文件的）逐个 <code>--ro-bind</code> 只读覆盖；<code>auth.json</code> 是指向别处的符号链接时，最后再 <code>--bind</code> 链接目标。bwrap 不能只绑定一个还不存在的文件，而 pi 要在目录里新建锁目录，所以整目录可写。剩余风险：沙箱里的 agent 能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载它；已有的条目不能改写。</li>
-  <li>macOS：Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、状态目录里这五个条目的字面路径（<code>literal</code>，不存在的也写，pi 自己创建）、<code>auth.json</code> 是符号链接时的链接目标，以及 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。状态目录里的其他条目不能新建也不能改写。</li>
+  <li>macOS：Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、状态目录里这五个条目的字面路径（<code>literal</code>，来自 <code>PiState</code> 的 <code>writable</code>，不存在的也写，pi 自己创建）、<code>auth.json</code> 是符号链接时的链接目标，以及 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。状态目录里的其他条目不能新建也不能改写。</li>
 </ul>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>

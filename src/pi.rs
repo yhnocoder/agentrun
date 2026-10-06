@@ -30,7 +30,7 @@ const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
 pub const LOGIN_FILE: &str = "auth.json";
 pub const SETTINGS_FILE: &str = "settings.json";
-pub const WRITABLE_STATE_ENTRIES: [&str; 5] = [
+const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "auth.json",
     "auth.json.lock",
     "models-store.json",
@@ -371,6 +371,10 @@ pub fn state(user_dir: &Path) -> std::io::Result<PiState> {
     }
     readonly.sort();
     Ok(PiState {
+        writable: WRITABLE_STATE_ENTRIES
+            .iter()
+            .map(|name| dir.join(name))
+            .collect(),
         dir,
         login_target,
         readonly,
@@ -705,6 +709,16 @@ mod tests {
         let state = state(&dir).unwrap();
         let real = setup.real_user_state();
         assert_eq!(state.dir, real);
+        assert_eq!(
+            state.writable,
+            [
+                real.join("auth.json"),
+                real.join("auth.json.lock"),
+                real.join("models-store.json"),
+                real.join("models-store.json.lock"),
+                real.join("settings.json.lock"),
+            ]
+        );
         assert_eq!(state.login_target, None);
         assert_eq!(
             state.readonly,
@@ -934,6 +948,10 @@ mod tests {
         let real_path = |path: &Path| std::fs::canonicalize(path).unwrap();
         let state = PiState {
             dir: setup.real_user_state(),
+            writable: WRITABLE_STATE_ENTRIES
+                .iter()
+                .map(|name| setup.real_user_state().join(name))
+                .collect(),
             login_target: Some(real_path(&real)),
             readonly: vec![setup.real_user_state().join("real-auth.json")],
         };
