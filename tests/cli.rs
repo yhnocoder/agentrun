@@ -2,6 +2,8 @@
 mod support;
 
 use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
@@ -554,17 +556,39 @@ fn start_network_reports_mode_allow_and_enforcement() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn real_bwrap_passes_the_sandbox_step() {
+fn real_bwrap() -> Option<(Env, PathBuf)> {
     let Some(bwrap) = support::system_bwrap() else {
         eprintln!("skipped: bwrap is not installed");
+        return None;
+    };
+    if !support::sandbox_available() {
+        return None;
+    }
+    let env = with_fake("pi");
+    env.install("claude", "#!/bin/sh\nexit 0\n");
+    Some((env, bwrap))
+}
+
+#[cfg(target_os = "linux")]
+fn run_with_bwrap(env: &Env, bwrap: &Path, args: &[&str]) -> Output {
+    let path = format!(
+        "{}:{}",
+        env.bin().display(),
+        bwrap.parent().unwrap().display()
+    );
+    command(env, args).env("PATH", path).output().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_passes_the_sandbox_step_for_pi() {
+    let Some((env, bwrap)) = real_bwrap() else {
         return;
     };
-    let env = with_fake("pi");
     let system = bwrap.parent().unwrap();
-    let path = format!("{}:{}", env.bin().display(), system.display());
-    let output = command(
+    let output = run_with_bwrap(
         &env,
+        &bwrap,
         &[
             "pi",
             "--debug",
@@ -574,10 +598,7 @@ fn real_bwrap_passes_the_sandbox_step() {
             "--prompt",
             "hi",
         ],
-    )
-    .env("PATH", &path)
-    .output()
-    .unwrap();
+    );
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     let first = stderr.lines().next().unwrap_or_default();
     if first.contains("bwrap cannot start") {
@@ -605,25 +626,36 @@ fn real_bwrap_passes_the_sandbox_step() {
     );
     assert!(printed.contains("--unshare-net"), "{printed}");
     assert!(env.leftovers().is_empty());
-    let output = command(&env, &["pi", "--dry-run", "--prompt", "hi"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_rejects_pi_when_the_provider_is_unknown() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
+    let output = run_with_bwrap(&env, &bwrap, &["pi", "--dry-run", "--prompt", "hi"]);
     assert_eq!(
         assert_rejected(&output),
         "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>"
     );
-    let output = command(
+    let output = run_with_bwrap(
         &env,
+        &bwrap,
         &["pi", "--dry-run", "--model", "acme/robot", "--prompt", "hi"],
-    )
-    .env("PATH", &path)
-    .output()
-    .unwrap();
+    );
     assert_eq!(
         assert_rejected(&output),
         "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_accepts_an_unknown_pi_provider_with_custom_or_full_network() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
     for mode in ["custom", "full"] {
         let mut args = vec![
             "pi",
@@ -637,13 +669,20 @@ fn real_bwrap_passes_the_sandbox_step() {
             args.extend(["--allow-host", "robot.example"]);
         }
         args.extend(["--prompt", "hi"]);
-        let output = command(&env, &args).env("PATH", &path).output().unwrap();
-        assert_dry_run(&output);
+        assert_dry_run(&run_with_bwrap(&env, &bwrap, &args));
     }
     assert!(env.leftovers().is_empty());
-    env.install("claude", "#!/bin/sh\nexit 0\n");
-    let output = command(
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_gives_claude_code_the_proxy_ports_with_full_network() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
+    let output = run_with_bwrap(
         &env,
+        &bwrap,
         &[
             "claude-code",
             "--network",
@@ -652,10 +691,7 @@ fn real_bwrap_passes_the_sandbox_step() {
             "--prompt",
             "hi",
         ],
-    )
-    .env("PATH", &path)
-    .output()
-    .unwrap();
+    );
     assert_dry_run(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
     let printed = stdout.lines().next().unwrap();
@@ -665,10 +701,19 @@ fn real_bwrap_passes_the_sandbox_step() {
         ),
         "{printed}"
     );
-    let output = command(&env, &["claude-code", "--dry-run", "--prompt", "hi"])
-        .env("PATH", &path)
-        .output()
-        .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_gives_claude_code_no_proxy_with_network_none() {
+    let Some((env, bwrap)) = real_bwrap() else {
+        return;
+    };
+    let output = run_with_bwrap(
+        &env,
+        &bwrap,
+        &["claude-code", "--dry-run", "--prompt", "hi"],
+    );
     assert_dry_run(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
     let printed = stdout.lines().next().unwrap();

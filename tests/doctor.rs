@@ -4,6 +4,8 @@ mod support;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
@@ -503,13 +505,14 @@ fn sandbox_without_bwrap_fails_on_and_skips_relax() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn real_bwrap_runs_the_sandbox_and_network_checks() {
-    let Some(system) = support::system_bwrap().map(|bwrap| bwrap.parent().unwrap().to_path_buf())
-    else {
+fn real_bwrap_doctor() -> Option<(Env, PathBuf)> {
+    let Some(bwrap) = support::system_bwrap() else {
         eprintln!("skipped: bwrap is not installed");
-        return;
+        return None;
     };
+    if !support::sandbox_available() {
+        return None;
+    }
     let env = Env::new();
     env.install("claude", CLAUDE_LOGGED_IN);
     env.install("pi", PI_DEEPSEEK);
@@ -517,16 +520,45 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
     pi_settings(&env);
     write_home(&env, ".codex/auth.json", "{}");
     write_home(&env, ".pi/agent/auth.json", "{}");
+    Some((env, bwrap.parent().unwrap().to_path_buf()))
+}
+
+#[cfg(target_os = "linux")]
+fn doctor_with_bwrap(env: &Env, system: &Path, args: &[&str]) -> Output {
+    let path = format!("{}:{}", env.bin().display(), system.display());
+    doctor(env, args).env("PATH", path).output().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn kept_dir(debug: &str) -> PathBuf {
+    PathBuf::from(
+        debug
+            .lines()
+            .find_map(|line| line.strip_prefix("[debug] kept "))
+            .unwrap_or_else(|| panic!("no kept directory in {debug}")),
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_claude_code_sandbox_and_network_checks_pass() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
     let server = WebServer::start();
     let allow = format!("127.0.0.1:{}", server.port);
-    let path = format!("{}:{}", env.bin().display(), system.display());
-    let output = doctor(
+    let output = doctor_with_bwrap(
         &env,
-        &["--network", "custom", "--allow-host", &allow, "--debug"],
-    )
-    .env("PATH", &path)
-    .output()
-    .unwrap();
+        &system,
+        &[
+            "claude-code",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+            "--debug",
+        ],
+    );
     let lines = stdout_lines(&output);
     let debug = stderr(&output);
     if line_for(&lines, "claude-code", "sandbox").contains("bwrap cannot start") {
@@ -545,6 +577,33 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
         ),
         "{debug}"
     );
+    assert_eq!(output.status.code(), Some(0), "{lines:#?}\n{debug}");
+    std::fs::remove_dir_all(kept_dir(&debug)).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_pi_checks_bind_the_state_dir_and_reach_the_allowed_host() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    let server = WebServer::start();
+    let allow = format!("127.0.0.1:{}", server.port);
+    let output = doctor_with_bwrap(
+        &env,
+        &system,
+        &[
+            "pi",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+            "--debug",
+        ],
+    );
+    let lines = stdout_lines(&output);
+    let debug = stderr(&output);
     assert_eq!(
         line_for(&lines, "pi", "sandbox"),
         "[ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started",
@@ -557,12 +616,6 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
         ),
         "{debug}"
     );
-    assert_eq!(
-        line_for(&lines, "codex", "sandbox"),
-        "[fail] codex        sandbox     a write outside the allowed directories succeeded",
-        "{debug}"
-    );
-    assert_eq!(output.status.code(), Some(1));
     let pi_sandbox_commands: Vec<&str> = debug
         .lines()
         .filter(|line| line.starts_with("[debug] pi sandbox command: "))
@@ -589,6 +642,41 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
             && network_command.contains(" doctor-connect 127.0.0.1 "),
         "{network_command}"
     );
+    let kept = kept_dir(&debug);
+    assert!(kept.join("pi-sandbox/work/inside.txt").exists());
+    assert!(!kept.join("pi-sandbox/outside.txt").exists());
+    std::fs::remove_dir_all(kept).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_codex_sandbox_check_reports_the_outside_write() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    let server = WebServer::start();
+    let allow = format!("127.0.0.1:{}", server.port);
+    let output = doctor_with_bwrap(
+        &env,
+        &system,
+        &[
+            "codex",
+            "--network",
+            "custom",
+            "--allow-host",
+            &allow,
+            "--debug",
+        ],
+    );
+    let lines = stdout_lines(&output);
+    let debug = stderr(&output);
+    assert_eq!(
+        line_for(&lines, "codex", "sandbox"),
+        "[fail] codex        sandbox     a write outside the allowed directories succeeded",
+        "{debug}"
+    );
+    assert_eq!(output.status.code(), Some(1));
     let codex_command = debug
         .lines()
         .find(|line| line.starts_with("[debug] codex sandbox command: "))
@@ -598,25 +686,21 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
             && codex_command.contains(" -c permissions.agentrun.network.enabled=false -C "),
         "{codex_command}"
     );
-    let kept = debug
-        .lines()
-        .find_map(|line| line.strip_prefix("[debug] kept "))
-        .unwrap();
-    assert!(
-        PathBuf::from(kept)
-            .join("pi-sandbox/work/inside.txt")
-            .exists()
-    );
-    assert!(!PathBuf::from(kept).join("pi-sandbox/outside.txt").exists());
-    assert!(
-        PathBuf::from(kept)
-            .join("codex-sandbox/outside.txt")
-            .exists()
-    );
+    let kept = kept_dir(&debug);
+    assert!(kept.join("codex-sandbox/outside.txt").exists());
     std::fs::remove_dir_all(kept).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
-    let output = doctor(
+#[cfg(target_os = "linux")]
+#[test]
+fn real_bwrap_network_check_fails_for_an_unreachable_host() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    let output = doctor_with_bwrap(
         &env,
+        &system,
         &[
             "claude-code",
             "--network",
@@ -624,17 +708,14 @@ fn real_bwrap_runs_the_sandbox_and_network_checks() {
             "--allow-host",
             "*.example",
         ],
-    )
-    .env("PATH", &path)
-    .output()
-    .unwrap();
+    );
     let lines = stdout_lines(&output);
     assert!(
         line_for(&lines, "claude-code", "network")
             .starts_with("[fail] claude-code  network     www.example:443 not reachable: "),
         "{lines:#?}"
     );
-    assert!(env.leftovers().is_empty());
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
 
 #[cfg(target_os = "macos")]

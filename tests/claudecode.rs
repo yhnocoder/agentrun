@@ -281,14 +281,13 @@ fn network_settings(argv: &Value) -> Value {
 }
 
 #[test]
-fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
+fn sandboxed_claude_with_full_network_gets_the_proxy_ports() {
     if !support::sandbox_available() {
         return;
     }
     let server = support::WebServer::start();
     let env = with_claude(CURL_CLAUDE);
     std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
-
     let output = run(&env, &["--network", "full", "--prompt", "fetch"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let full = support::events(&output);
@@ -321,7 +320,18 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
             json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": false, "reason": "private_address"})
         ]
     );
+    assert_eq!(server.served(), 0);
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
+#[test]
+fn sandboxed_claude_with_custom_network_reaches_the_listed_host() {
+    if !support::sandbox_available() {
+        return;
+    }
+    let server = support::WebServer::start();
+    let env = with_claude(CURL_CLAUDE);
+    std::fs::write(env.work().join("port"), server.port.to_string()).unwrap();
     let port_rule = format!("127.0.0.1:{}", server.port);
     let output = run(
         &env,
@@ -364,7 +374,16 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
             json!({"schema": 1, "type": "network", "host": "127.0.0.1", "port": server.port, "allowed": true, "reason": null})
         ]
     );
+    assert_eq!(server.served(), 1);
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
+#[test]
+fn sandboxed_claude_with_network_none_gets_no_proxy() {
+    if !support::sandbox_available() {
+        return;
+    }
+    let env = with_claude(CURL_CLAUDE);
     let output = run(&env, &["--prompt", "fetch"], "");
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let none = support::events(&output);
@@ -386,7 +405,12 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         "code=noproxy socat=4 proxy=unset"
     );
     assert!(support::network_events(&none).is_empty());
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
 
+#[test]
+fn unsandboxed_claude_with_full_network_gets_no_settings() {
+    let env = with_claude(CURL_CLAUDE);
     let output = run(
         &env,
         &["--sandbox", "off", "--network", "full", "--prompt", "fetch"],
@@ -413,6 +437,5 @@ fn sandboxed_claude_gets_the_filter_proxy_ports_in_full_and_custom() {
         support::text_of(&open, 0),
         "code=noproxy socat=unset proxy=unset"
     );
-    assert_eq!(server.served(), 1);
-    assert!(env.leftovers().is_empty());
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
