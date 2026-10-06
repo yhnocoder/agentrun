@@ -29,3 +29,7 @@ harness = false
 [[test]]
 name = "rich"
 harness = false
+
+[[test]]
+name = "concurrency"
+harness = false

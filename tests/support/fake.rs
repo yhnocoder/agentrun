@@ -5,8 +5,9 @@ use agentrun::adapter::{Adapter, Launch, Record};
 use agentrun::cli::Runtime;
 use agentrun::event::SandboxKind;
 use agentrun::event::SubagentStatus;
+use agentrun::network::proxy_environment;
 use agentrun::run::Invocation;
-use agentrun::sandbox::{wrap_pi, wrap_seatbelt, write_seatbelt_profile};
+use agentrun::sandbox::{ProxyForward, wrap_pi, wrap_seatbelt, write_seatbelt_profile};
 use agentrun::usage::{TokenCounts, Usage};
 use serde_json::Value;
 
@@ -38,17 +39,25 @@ impl Adapter for FakeAdapter {
             .bwrap
             .as_deref()
             .filter(|_| invocation.sandbox.runs());
+        let port = invocation.proxy.as_ref().map(|proxy| proxy.port_text());
         if let Some(bwrap) = bwrap {
+            let forward = match (&invocation.proxy, &port, &invocation.sandbox.socat) {
+                (Some(proxy), Some(port), Some(socat)) => Some(ProxyForward {
+                    socat,
+                    port,
+                    socket: &proxy.socket,
+                }),
+                _ => None,
+            };
             argv = wrap_pi(
                 bwrap,
                 &invocation.cwd,
                 &invocation.tempdir,
                 None,
-                None,
+                forward.as_ref(),
                 &argv,
             );
         } else if invocation.sandbox.kind == SandboxKind::Seatbelt {
-            let port = invocation.proxy.as_ref().map(|proxy| proxy.port_text());
             write_seatbelt_profile(&invocation.cwd, &invocation.tempdir, None, port.as_deref())
                 .map_err(|error| error.to_string())?;
             argv = wrap_seatbelt(&invocation.tempdir, &argv);
@@ -56,7 +65,7 @@ impl Adapter for FakeAdapter {
         Ok(Launch {
             argv,
             stdin: format!("{}\n", invocation.prompt).into_bytes(),
-            env: Vec::new(),
+            env: port.as_deref().map(proxy_environment).unwrap_or_default(),
             signal_wrapped_child: bwrap.is_some(),
             service_hosts: Vec::new(),
         })

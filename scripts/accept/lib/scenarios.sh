@@ -734,4 +734,5 @@ run_runtime() {
     fi
     run_scenario "$name" "$rt"
   done
+  run_concurrent_for_runtime
 }

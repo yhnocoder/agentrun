@@ -6,6 +6,7 @@ REPO_DIR=$(cd "$SCRIPT_DIR/../.." && pwd -P)
 
 . "$SCRIPT_DIR/lib/util.sh"
 . "$SCRIPT_DIR/lib/scenarios.sh"
+. "$SCRIPT_DIR/lib/concurrent.sh"
 
 AGENTRUN=""
 RUNTIMES="claude-code,pi,codex"
@@ -13,6 +14,7 @@ SANDBOX=on
 LABEL=""
 OUT_BASE="./accept-out"
 ONLY=""
+PARALLEL=3
 CLAUDE_MODEL=sonnet
 PI_MODEL=deepseek/deepseek-flash
 
@@ -20,7 +22,8 @@ usage() {
   cat <<'EOT'
 usage: scripts/accept/accept.sh [--agentrun PATH] [--runtimes claude-code,pi,codex]
                                 [--sandbox on|relax|off] [--label NAME] [--out DIR]
-                                [--only NAME,...] [--claude-model ID] [--pi-model ID]
+                                [--only NAME,...] [--parallel N] [--claude-model ID]
+                                [--pi-model ID]
 EOT
 }
 
@@ -40,7 +43,10 @@ Options
   --label NAME       prefix of the output directory name. Default: <macos|linux>-sandbox-<mode>
   --out DIR          parent of the output directory. Default: ./accept-out
   --only NAME,...    run only these scenarios (sandbox-check always runs, because
-                     it decides which scenarios apply). Default: all
+                     it decides which scenarios apply). Default: all except the
+                     concurrent-* scenarios, which run only when listed here
+  --parallel N       runs started at once by concurrent-same and concurrent-interrupt.
+                     Default: 3
   --claude-model ID  --model for claude-code. Default: sonnet
   --pi-model ID      --model for pi. Default: deepseek/deepseek-flash
                      codex gets no --model and uses its own default
@@ -49,6 +55,11 @@ Scenarios
   sandbox-check dry-run usage-error relax-note basic-task outside-write session-tmp
   network-none network-custom network-full webfetch subagents no-subagents
   config-isolation fail-model fail-arg fail-credential interrupt timeout cleanup doctor
+  Run only with --only, because they call the model many times at once:
+  concurrent-same concurrent-same-cwd concurrent-network concurrent-interrupt concurrent-mixed
+  After each of them the script checks that ~/.claude.json and the pi and codex login
+  files are valid JSON, runs basic-task again with the same runtime, and checks that
+  no agentrun-* directory and no runtime process is left.
 
 Running in each environment
   macOS and Linux, in this repository:
@@ -96,7 +107,7 @@ usage_error() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --agentrun|--runtimes|--sandbox|--label|--out|--only|--claude-model|--pi-model)
+    --agentrun|--runtimes|--sandbox|--label|--out|--only|--parallel|--claude-model|--pi-model)
       [ $# -ge 2 ] || usage_error "$1 needs a value"
       ;;
   esac
@@ -107,6 +118,7 @@ while [ $# -gt 0 ]; do
     --label) LABEL=$2; shift 2 ;;
     --out) OUT_BASE=$2; shift 2 ;;
     --only) ONLY=$2; shift 2 ;;
+    --parallel) PARALLEL=$2; shift 2 ;;
     --claude-model) CLAUDE_MODEL=$2; shift 2 ;;
     --pi-model) PI_MODEL=$2; shift 2 ;;
     -h|--help) help; exit 0 ;;
@@ -128,9 +140,13 @@ for rt in $RUNTIME_LIST; do
   esac
 done
 
+case "$PARALLEL" in
+  ''|*[!0-9]*|0) usage_error "--parallel must be a positive integer" ;;
+esac
+
 ONLY_LIST=$(printf '%s' "$ONLY" | tr ',' ' ')
 for name in $ONLY_LIST; do
-  in_list "$name" "$ALL_SCENARIOS" || usage_error "unknown scenario: $name"
+  in_list "$name" "$ALL_SCENARIOS $CONCURRENT_SCENARIOS" || usage_error "unknown scenario: $name"
 done
 
 selected() {
@@ -213,6 +229,7 @@ write_env_txt
 for rt in $RUNTIME_LIST; do
   run_runtime "$rt"
 done
+run_concurrent_mixed
 
 echo
 echo "output: $OUT_DIR"
