@@ -8,10 +8,10 @@ use std::io::Read;
 use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
-use agentrun::adapter::Adapter;
 use agentrun::cli::SandboxMode;
 use agentrun::output::{Aggregator, Rich, TextFormatter};
 use agentrun::run::{Exit, conclude, translate_line};
+use agentrun::runtime::Adapter;
 use support::env::Env;
 use support::fake::FakeAdapter;
 use support::process::{self, spawn_lock};

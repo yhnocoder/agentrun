@@ -4,7 +4,7 @@ mod support;
 use std::io::Write;
 use std::process::{Output, Stdio};
 
-use agentrun::claudecode::ClaudeCode;
+use agentrun::runtime::claudecode::ClaudeCode;
 use serde_json::{Value, json};
 use support::env::Env;
 

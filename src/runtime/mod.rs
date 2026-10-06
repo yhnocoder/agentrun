@@ -1,16 +1,20 @@
+pub mod claudecode;
+pub mod codex;
+pub mod pi;
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::claudecode::ClaudeCode;
 use crate::cli::{Format, RunArgs, Runtime};
-use crate::codex::Codex;
 use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{SubagentStatus, TokenCounts, Usage};
-use crate::pi::Pi;
 use crate::sandbox::Sandbox;
 use crate::session::Session;
+use claudecode::ClaudeCode;
+use codex::Codex;
+use pi::Pi;
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;

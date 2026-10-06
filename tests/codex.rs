@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-use agentrun::codex::Codex;
+use agentrun::runtime::codex::Codex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::env::Env;

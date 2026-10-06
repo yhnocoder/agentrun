@@ -2,9 +2,9 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
-use agentrun::adapter;
 use agentrun::process_tree;
 use agentrun::run::{Caller, run};
+use agentrun::runtime;
 use agentrun::signal::Signals;
 
 fn main() -> ExitCode {
@@ -21,5 +21,5 @@ fn main() -> ExitCode {
         stderr_is_terminal: std::io::stderr().is_terminal(),
         signals,
     };
-    ExitCode::from(run(caller, &adapter::builtin))
+    ExitCode::from(run(caller, &runtime::builtin))
 }

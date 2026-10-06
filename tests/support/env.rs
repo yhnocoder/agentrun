@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use agentrun::adapter::Adapter;
 use agentrun::run::{Caller, run};
+use agentrun::runtime::Adapter;
 use agentrun::signal::Signals;
 use serde_json::Value;
 use tempfile::TempDir;

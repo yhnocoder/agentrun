@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::adapter::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};

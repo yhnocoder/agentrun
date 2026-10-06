@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use super::event::{self, Body, Event, SubagentStatus};
 use super::usage::{TokenCounts, Usage};
-use crate::adapter::Record;
+use crate::runtime::Record;
 
 const SUMMARY_MAX_CHARS: usize = 120;
 

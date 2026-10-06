@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
-use agentrun::adapter::Adapter;
 use agentrun::process_tree;
 use agentrun::run::{Caller, run};
+use agentrun::runtime::Adapter;
 use agentrun::signal::Signals;
 
 use super::env::poll_until;

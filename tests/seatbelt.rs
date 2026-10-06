@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use agentrun::output::SandboxKind;
-use agentrun::pi::state;
+use agentrun::runtime::pi::state;
 use agentrun::sandbox::{wrap_seatbelt, wrapper_failure, write_seatbelt_profile};
 use tempfile::TempDir;
 
