@@ -13,7 +13,6 @@ use crate::cli::Runtime;
 use crate::session::Session;
 
 const LOGIN_FILE: &str = "auth.json";
-const SIDECAR_FILE: &str = "auth.json.agentrun-sha256";
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -83,16 +82,36 @@ pub fn write_credential(path: &Path, value: &[u8]) -> std::io::Result<Credential
         .map(|byte| format!("{byte:02x}"))
         .chain(std::iter::once("\n".to_string()))
         .collect();
-    let dir = path.parent().unwrap_or(Path::new("."));
-    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let _lock = lock_exclusively(dir)?;
-    let sidecar = path.with_file_name(SIDECAR_FILE);
-    if path.exists() && std::fs::read_to_string(&sidecar).is_ok_and(|recorded| recorded == digest) {
+    let linked = path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        .then(|| std::fs::canonicalize(path).ok())
+        .flatten();
+    let target = match linked {
+        Some(target) => target,
+        None => {
+            DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(path.parent().unwrap_or(Path::new(".")))?;
+            path.to_path_buf()
+        }
+    };
+    let _lock = lock_exclusively(target.parent().unwrap_or(Path::new(".")))?;
+    let sidecar = sidecar_of(&target);
+    if target.exists() && std::fs::read_to_string(&sidecar).is_ok_and(|recorded| recorded == digest)
+    {
         return Ok(CredentialStatus::Unchanged);
     }
-    write_atomically(path, value)?;
+    write_atomically(&target, value)?;
     write_atomically(&sidecar, digest.as_bytes())?;
     Ok(CredentialStatus::Written)
+}
+
+fn sidecar_of(target: &Path) -> PathBuf {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(".agentrun-sha256");
+    target.with_file_name(name)
 }
 
 fn lock_exclusively(dir: &Path) -> std::io::Result<File> {
@@ -152,6 +171,7 @@ mod tests {
     use super::*;
 
     const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n";
+    const SIDECAR_FILE: &str = "auth.json.agentrun-sha256";
 
     fn session(runtime: Runtime, env: &[(&str, &str)]) -> Session {
         let env: Vec<(OsString, OsString)> = env
@@ -258,6 +278,76 @@ mod tests {
             CredentialStatus::Written
         );
         assert_eq!(std::fs::read(&login).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn linked_login_file_is_written_through_the_link() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared.json");
+        std::fs::write(&shared, "old").unwrap();
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let login = state.join(LOGIN_FILE);
+        std::os::unix::fs::symlink(&shared, &login).unwrap();
+        assert_eq!(
+            write_credential(&login, b"abc").unwrap(),
+            CredentialStatus::Written
+        );
+        assert!(login.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&shared).unwrap(), b"abc");
+        assert_eq!(mode(&shared), 0o600);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("shared.json.agentrun-sha256")).unwrap(),
+            ABC_SHA256
+        );
+        assert_eq!(entries(&state), [LOGIN_FILE]);
+    }
+
+    #[test]
+    fn dangling_link_is_replaced_by_the_login_file() {
+        let root = tempfile::tempdir().unwrap();
+        let login = root.path().join(LOGIN_FILE);
+        std::os::unix::fs::symlink(root.path().join("missing.json"), &login).unwrap();
+        assert_eq!(
+            write_credential(&login, b"abc").unwrap(),
+            CredentialStatus::Written
+        );
+        assert!(login.symlink_metadata().unwrap().file_type().is_file());
+        assert_eq!(std::fs::read(&login).unwrap(), b"abc");
+        assert_eq!(sidecar(root.path()), ABC_SHA256);
+        assert_eq!(entries(root.path()), [LOGIN_FILE, SIDECAR_FILE]);
+    }
+
+    #[test]
+    fn two_state_dirs_linked_to_one_login_file_share_one_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let shared_dir = root.path().join("shared");
+        std::fs::create_dir(&shared_dir).unwrap();
+        let shared = shared_dir.join(LOGIN_FILE);
+        std::fs::write(&shared, "old").unwrap();
+        let logins: Vec<PathBuf> = ["first", "second"]
+            .iter()
+            .map(|name| {
+                let state = root.path().join(name);
+                std::fs::create_dir(&state).unwrap();
+                let login = state.join(LOGIN_FILE);
+                std::os::unix::fs::symlink(&shared, &login).unwrap();
+                login
+            })
+            .collect();
+        assert_eq!(
+            write_credential(&logins[0], b"abc").unwrap(),
+            CredentialStatus::Written
+        );
+        assert_eq!(
+            write_credential(&logins[1], b"abc").unwrap(),
+            CredentialStatus::Unchanged
+        );
+        assert_eq!(entries(&shared_dir), [LOGIN_FILE, SIDECAR_FILE]);
+        assert_eq!(sidecar(&shared_dir), ABC_SHA256);
+        for login in &logins {
+            assert_eq!(entries(login.parent().unwrap()), [LOGIN_FILE]);
+        }
     }
 
     #[test]
