@@ -435,7 +435,7 @@ fn detached_process_is_killed_after_timeout() {
         spawn_detached_sleeper("$PIDFILE")
     ));
     let outcome = env
-        .start(&["--timeout", "1"], true, Stdio::null())
+        .start(&["--timeout", "3"], true, Stdio::null())
         .finish(&env);
     assert_eq!(outcome.code, 3);
     assert_eq!(outcome.end()["status"], "timeout");
@@ -539,9 +539,9 @@ fn second_signal_kills_immediately() {
 fn timeout_terminates_the_runtime() {
     let env = Env::new(&format!("echo '{READY}'\nsleep 30\n"));
     let outcome = env
-        .start(&["--timeout", "1"], true, Stdio::null())
+        .start(&["--timeout", "3"], true, Stdio::null())
         .finish(&env);
-    assert_between(outcome.elapsed, 0.9, 3.0, &outcome.events);
+    assert_between(outcome.elapsed, 2.9, 5.0, &outcome.events);
     assert_eq!(outcome.code, 3);
     assert_eq!(outcome.end()["status"], "timeout");
     assert_eq!(outcome.end()["exit_code"], Value::Null);
@@ -552,18 +552,18 @@ fn timeout_terminates_the_runtime() {
 fn timeout_with_ignored_sigterm_kills_after_grace() {
     let env = Env::new(&format!("trap '' TERM\necho '{READY}'\nsleep 30\n"));
     let outcome = env
-        .start(&["--timeout", "1"], true, Stdio::null())
+        .start(&["--timeout", "3"], true, Stdio::null())
         .finish(&env);
-    assert_between(outcome.elapsed, 5.5, 9.0, &outcome.events);
+    assert_between(outcome.elapsed, 7.5, 11.0, &outcome.events);
     assert_eq!(outcome.code, 3);
     assert_eq!(outcome.end()["status"], "timeout");
 }
 
 fn signal_during_timeout_grace_kills_immediately() {
     let env = Env::new(&format!("trap '' TERM\necho '{READY}'\nsleep 30\n"));
-    let agentrun = env.start(&["--timeout", "1"], true, Stdio::null());
+    let agentrun = env.start(&["--timeout", "3"], true, Stdio::null());
     agentrun.wait_for_ready();
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_secs(4));
     let sent = Instant::now();
     agentrun.signal(libc::SIGINT);
     let outcome = agentrun.finish(&env);
