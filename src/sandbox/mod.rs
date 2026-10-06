@@ -276,7 +276,11 @@ pub fn wrapper_failure(
     stderr_tail
         .lines()
         .find_map(|line| line.strip_prefix(prefix))
-        .map(|rest| format!("sandbox failed to start: {rest}"))
+        .map(start_failure)
+}
+
+pub fn start_failure(reason: &str) -> String {
+    format!("sandbox failed to start: {reason}")
 }
 
 #[cfg(test)]
@@ -624,6 +628,11 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn start_failure_names_the_reason() {
+        assert_eq!(start_failure("x"), "sandbox failed to start: x");
     }
 
     #[test]

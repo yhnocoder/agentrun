@@ -10,6 +10,7 @@ use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::TokenCounts;
+use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::Session;
 
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
@@ -66,7 +67,6 @@ const NO_SUBAGENTS_ARGS: [&str; 6] = [
     "multi_agent_v2",
 ];
 const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
-const BWRAP_PREFIX: &str = "bwrap: ";
 const DETAIL_MAX_CHARS: usize = 500;
 
 #[derive(Default)]
@@ -120,7 +120,7 @@ impl Codex {
             return;
         }
         if let Some(reason) = first_line(&string(output)).strip_prefix(BWRAP_PREFIX) {
-            self.sandbox_failure = Some(format!("sandbox failed to start: {reason}"));
+            self.sandbox_failure = Some(start_failure(reason));
         }
     }
 
