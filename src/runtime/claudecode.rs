@@ -36,7 +36,13 @@ pub struct ClaudeCode {
     subagents: HashSet<String>,
     denied: HashSet<String>,
     pending_usages: Vec<PendingUsage>,
-    last_result: Option<Value>,
+    last_result: Option<LastResult>,
+}
+
+struct LastResult {
+    is_error: bool,
+    text: Option<String>,
+    by_model: Option<Vec<(String, TokenCounts)>>,
 }
 
 struct PendingUsage {
@@ -382,7 +388,16 @@ impl Adapter for ClaudeCode {
             Some("user") => self.translate_user(line),
             Some("system") => self.translate_system(line),
             Some("result") => {
-                self.last_result = Some(line.clone());
+                self.last_result = Some(LastResult {
+                    is_error: line["is_error"] == Value::Bool(true),
+                    text: optional_string(&line["result"]),
+                    by_model: line["modelUsage"].as_object().map(|models| {
+                        models
+                            .iter()
+                            .map(|(model, usage)| (model.clone(), model_usage_counts(usage)))
+                            .collect()
+                    }),
+                });
                 Vec::new()
             }
             _ => Vec::new(),
@@ -392,16 +407,10 @@ impl Adapter for ClaudeCode {
     fn after_exit(&mut self) -> Vec<Record> {
         let mut records = self.flush_usages();
         if let Some(result) = &self.last_result {
-            if let Some(text) = result["result"].as_str() {
-                records.push(Record::Result {
-                    text: text.to_string(),
-                });
+            if let Some(text) = &result.text {
+                records.push(Record::Result { text: text.clone() });
             }
-            if let Some(models) = result["modelUsage"].as_object() {
-                let by_model: Vec<(String, TokenCounts)> = models
-                    .iter()
-                    .map(|(model, usage)| (model.clone(), model_usage_counts(usage)))
-                    .collect();
+            if let Some(by_model) = &result.by_model {
                 records.push(Record::RunUsage(Usage::sum(
                     by_model
                         .iter()
@@ -414,8 +423,8 @@ impl Adapter for ClaudeCode {
 
     fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
         match &self.last_result {
-            Some(result) if result["is_error"] == Value::Bool(true) => Some(Failure::from_detail(
-                result["result"].as_str().unwrap_or_default().to_string(),
+            Some(result) if result.is_error => Some(Failure::from_detail(
+                result.text.clone().unwrap_or_default(),
             )),
             _ if exit_code != Some(0) => Some(Failure::Unexplained),
             None => Some(Failure::Message(NO_RESULT_DETAIL.to_string())),
