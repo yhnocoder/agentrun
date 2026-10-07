@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{
     Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
 };
@@ -26,6 +26,7 @@ const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_UPSTREAM_RESPONSE: &str = "upstream proxy answered an invalid response";
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const UPSTREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Report = Box<dyn Fn(Network) + Send + Sync>;
 
@@ -377,7 +378,12 @@ fn tunnel_through(
     }
 }
 
-pub(super) fn relay(client: Client, server_stream: TcpStream, initial: &[u8]) {
+pub(super) fn relay(
+    client: Client,
+    server_stream: TcpStream,
+    initial: &[u8],
+    idle_timeout: Duration,
+) {
     let Ok(mut to_server) = server_stream.try_clone() else {
         return;
     };
@@ -390,16 +396,47 @@ pub(super) fn relay(client: Client, server_stream: TcpStream, initial: &[u8]) {
     let Ok(mut to_client) = client.try_clone() else {
         return;
     };
-    let downstream = thread::spawn(move || {
-        let _ = io::copy(&mut from_server, &mut to_client);
-        let _ = to_client.shutdown(Shutdown::Write);
-    });
+    let _ = from_server.set_read_timeout(Some(idle_timeout));
+    let client_closed = Arc::new(AtomicBool::new(false));
+    let downstream = {
+        let client_closed = Arc::clone(&client_closed);
+        thread::spawn(move || {
+            copy_until_idle(&mut from_server, &mut to_client, &client_closed);
+            let _ = to_client.shutdown(Shutdown::Write);
+        })
+    };
     let mut from_client = client;
     let _ = io::copy(&mut from_client, &mut to_server);
     let _ = to_server.shutdown(Shutdown::Write);
+    client_closed.store(true, Ordering::SeqCst);
     let _ = downstream.join();
     let _ = from_client.shutdown(Shutdown::Both);
     let _ = server_stream.shutdown(Shutdown::Both);
+}
+
+pub(super) fn copy_until_idle(
+    from_server: &mut TcpStream,
+    to_client: &mut Client,
+    client_closed: &AtomicBool,
+) {
+    let mut buffer = [0u8; 8192];
+    loop {
+        match from_server.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(count) => {
+                if to_client.write_all(&buffer[..count]).is_err() {
+                    return;
+                }
+            }
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if client_closed.load(Ordering::SeqCst) {
+                    return;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
 }
 
 pub(super) enum HeadError {
@@ -443,7 +480,66 @@ pub(super) fn write_all(stream: &mut impl Write, bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::*;
+
+    fn open_tunnel(idle: Duration) -> (TcpStream, TcpStream, mpsc::Receiver<()>) {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let clients = TcpListener::bind("127.0.0.1:0").unwrap();
+        let caller = TcpStream::connect(clients.local_addr().unwrap()).unwrap();
+        let (proxy_side, _) = clients.accept().unwrap();
+        let server_stream = TcpStream::connect(upstream.local_addr().unwrap()).unwrap();
+        let (upstream_side, _) = upstream.accept().unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            relay(Client::Tcp(proxy_side), server_stream, b"early ", idle);
+            let _ = done.send(());
+        });
+        for stream in [&caller, &upstream_side] {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+        }
+        (caller, upstream_side, finished)
+    }
+
+    #[test]
+    fn tunnel_with_a_silent_upstream_ends_after_the_client_closes() {
+        let (mut caller, mut upstream_side, finished) = open_tunnel(Duration::from_millis(200));
+        caller.write_all(b"hello").unwrap();
+        caller.shutdown(Shutdown::Write).unwrap();
+        let mut received = Vec::new();
+        upstream_side.read_to_end(&mut received).unwrap();
+        assert_eq!(received, b"early hello");
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the tunnel did not end");
+        let mut rest = Vec::new();
+        assert_eq!(caller.read_to_end(&mut rest).unwrap(), 0);
+        drop(upstream_side);
+    }
+
+    #[test]
+    fn tunnel_relays_upstream_gaps_longer_than_the_idle_timeout_while_the_client_is_open() {
+        let (mut caller, mut upstream_side, finished) = open_tunnel(Duration::from_millis(100));
+        let sender = thread::spawn(move || {
+            for part in [&b"first "[..], b"second ", b"third"] {
+                thread::sleep(Duration::from_millis(350));
+                upstream_side.write_all(part).unwrap();
+            }
+            upstream_side.shutdown(Shutdown::Write).unwrap();
+            upstream_side
+        });
+        let mut received = Vec::new();
+        caller.read_to_end(&mut received).unwrap();
+        assert_eq!(received, b"first second third");
+        caller.shutdown(Shutdown::Write).unwrap();
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the tunnel did not end");
+        drop(sender.join().unwrap());
+    }
 
     #[test]
     fn read_head_reports_too_large_closed_and_read_errors() {

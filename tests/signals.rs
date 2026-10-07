@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use support::env::{Agentrun, Env, Finished, wait_until};
+use support::fake::SIGNAL_IN_LAUNCH;
 use support::process::{self, READY_FILE, describe, read_pid, spawn_role, wait_until_gone};
 
 const READY: &str = r#"{"record":"text","parent":null,"text":"ready"}"#;
@@ -37,6 +38,7 @@ fn tests() -> Vec<(&'static str, fn())> {
         timeout_with_ignored_sigterm_kills_after_grace,
         signal_during_timeout_grace_kills_immediately,
         signal_before_launch_ends_without_start,
+        signal_during_a_failing_launch_still_rejects,
         adapter_can_terminate_the_process_group,
         #[cfg(target_os = "linux")]
         signal_during_sandbox_check_kills_the_check,
@@ -288,6 +290,26 @@ fn signal_before_launch_ends_without_start() {
         end["usage"],
         serde_json::json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "by_model": {}})
     );
+}
+
+fn signal_during_a_failing_launch_still_rejects() {
+    let env = with_claude("exit 0\n");
+    let mut command = env.fake_command(&[
+        "claude-code",
+        "--sandbox",
+        "off",
+        "--cwd",
+        env.work().to_str().unwrap(),
+        "--prompt",
+        "hi",
+    ]);
+    command.env(SIGNAL_IN_LAUNCH, "1");
+    let outcome = finish(Agentrun::spawn(command), &env);
+    assert_eq!(outcome.code, 2, "{}", outcome.stderr);
+    assert_eq!(outcome.events.len(), 1, "{:?}", outcome.events);
+    let end = outcome.end();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(end["detail"], "launch failed after a signal");
 }
 
 #[cfg(target_os = "linux")]

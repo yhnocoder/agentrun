@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use agentrun::cli::{RunArgs, Runtime};
 use agentrun::network::proxy_environment;
@@ -7,6 +8,8 @@ use agentrun::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
 use agentrun::runtime::{Adapter, Failure, Invocation, Launch, PrivateDir};
 use agentrun::sandbox;
 use serde_json::Value;
+
+pub const SIGNAL_IN_LAUNCH: &str = "AGENTRUN_TEST_SIGNAL_IN_LAUNCH";
 
 pub struct FakeAdapter {
     echoes: bool,
@@ -32,6 +35,14 @@ impl Adapter for FakeAdapter {
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
+        if std::env::var_os(SIGNAL_IN_LAUNCH).is_some() {
+            unsafe {
+                libc::kill(libc::getpid(), libc::SIGTERM);
+            }
+            // why(#69): SIGTERM 要在 launch 返回之前到达信号处理线程，测试才覆盖 Hold 内收到信号的情况
+            std::thread::sleep(Duration::from_millis(200));
+            return Err("launch failed after a signal".to_string());
+        }
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
         argv.push(invocation.prompt.clone());
