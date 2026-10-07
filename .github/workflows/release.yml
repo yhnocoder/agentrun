@@ -67,6 +67,10 @@ jobs:
           cp target/${{ matrix.target }}/release/agentrun "${{ steps.version.outputs.file }}"
           chmod 0755 "${{ steps.version.outputs.file }}"
 
+      - name: Sign ad-hoc
+        if: runner.os == 'macOS'
+        run: codesign --force --sign - "${{ steps.version.outputs.file }}"
+
       - name: Check the executable
         env:
           FILE: ${{ steps.version.outputs.file }}

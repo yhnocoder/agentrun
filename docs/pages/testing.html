@@ -208,7 +208,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
     <tr><td><code>agentrun-&lt;版本&gt;-macos-x86_64</code></td><td><code>x86_64-apple-darwin</code></td><td><code>macos-15</code></td></tr>
   </tbody>
 </table>
-<p>Linux 的文件用 musl 静态链接，两个架构都在各自架构的 runner 上原生构建。理由：docker 镜像的 glibc 版本各不相同，静态链接的文件在 Alpine 与较旧的发行版上也能运行。现在的依赖都不需要 C 编译器；以后加入需要的依赖时，在 runner 上安装 <code>musl-tools</code>。macOS 的两个架构都在 arm64 的 <code>macos-15</code> 上构建，x86_64 由 Xcode 的工具链交叉编译。macOS 的文件只有链接器做的 ad-hoc 签名，没有 Developer ID 签名与公证，用浏览器下载的文件要先去掉 quarantine 属性。</p>
+<p>Linux 的文件用 musl 静态链接，两个架构都在各自架构的 runner 上原生构建。理由：docker 镜像的 glibc 版本各不相同，静态链接的文件在 Alpine 与较旧的发行版上也能运行。现在的依赖都不需要 C 编译器；以后加入需要的依赖时，在 runner 上安装 <code>musl-tools</code>。macOS 的两个架构都在 arm64 的 <code>macos-15</code> 上构建，x86_64 由 Xcode 的工具链交叉编译。macOS 的文件构建后用 <code>codesign --force --sign -</code> 做 ad-hoc 签名，理由：链接器只给 arm64 的文件做 ad-hoc 签名，交叉编译的 x86_64 文件没有签名。文件没有 Developer ID 签名与公证，用浏览器下载的文件要先去掉 quarantine 属性。</p>
 <p>每个文件构建后检查，任何一项不通过时任务失败：</p>
 <ul>
   <li>运行 <code>file</code> 并写进日志，Linux 的文件必须是 <code>statically linked</code> 或 <code>static-pie linked</code>。</li>
