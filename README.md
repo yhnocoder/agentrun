@@ -38,9 +38,19 @@ Download a release file. Replace `linux-x86_64` with `linux-arm64`, `macos-arm64
 
 ```sh
 VERSION=1.0.0
-curl -LO https://github.com/yhnocoder/agentrun/releases/download/v$VERSION/agentrun-$VERSION-linux-x86_64
-chmod +x agentrun-$VERSION-linux-x86_64
-mv agentrun-$VERSION-linux-x86_64 ~/.local/bin/agentrun
+FILE=agentrun-$VERSION-linux-x86_64
+curl -LO https://github.com/yhnocoder/agentrun/releases/download/v$VERSION/$FILE
+chmod +x $FILE
+mkdir -p ~/.local/bin
+mv $FILE ~/.local/bin/agentrun
+```
+
+If `~/.local/bin` is not in your `PATH` (it is not by default on macOS), add `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file.
+
+On macOS, a file downloaded with a browser carries the quarantine attribute and the system refuses to run it. Remove the attribute after moving the file:
+
+```sh
+xattr -d com.apple.quarantine ~/.local/bin/agentrun
 ```
 
 Install from crates.io:

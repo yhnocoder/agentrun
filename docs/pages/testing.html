@@ -208,7 +208,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
     <tr><td><code>agentrun-&lt;版本&gt;-macos-x86_64</code></td><td><code>x86_64-apple-darwin</code></td><td><code>macos-15</code></td></tr>
   </tbody>
 </table>
-<p>Linux 的文件用 musl 静态链接，两个架构都在各自架构的 runner 上原生构建。理由：docker 镜像的 glibc 版本各不相同，静态链接的文件在 Alpine 与较旧的发行版上也能运行。现在的依赖都不需要 C 编译器；以后加入需要的依赖时，在 runner 上安装 <code>musl-tools</code>。macOS 的两个架构都在 arm64 的 <code>macos-15</code> 上构建，x86_64 由 Xcode 的工具链交叉编译。macOS 的文件构建后用 <code>codesign --force --sign -</code> 做 ad-hoc 签名，理由：链接器只给 arm64 的文件做 ad-hoc 签名，交叉编译的 x86_64 文件没有签名。文件没有 Developer ID 签名与公证，用浏览器下载的文件要先去掉 quarantine 属性。</p>
+<p>Linux 的文件用 musl 静态链接，两个架构都在各自架构的 runner 上原生构建。理由：docker 镜像的 glibc 版本各不相同，静态链接的文件在 Alpine 与较旧的发行版上也能运行。依赖里没有需要 C 编译器的包；有这样的包时，musl 目标要用 <code>musl-tools</code> 提供的 <code>musl-gcc</code>，runner 上没有安装它，构建会失败。macOS 的两个架构都在 arm64 的 <code>macos-15</code> 上构建，x86_64 由 Xcode 的工具链交叉编译。macOS 的文件构建后用 <code>codesign --force --sign -</code> 做 ad-hoc 签名，理由：链接器只给 arm64 的文件做 ad-hoc 签名，交叉编译的 x86_64 文件没有签名。文件没有 Developer ID 签名与公证，用浏览器下载的文件要先去掉 quarantine 属性。</p>
 <p>每个文件构建后检查，任何一项不通过时任务失败：</p>
 <ul>
   <li>运行 <code>file</code> 并写进日志，Linux 的文件必须是 <code>statically linked</code> 或 <code>static-pie linked</code>。</li>
@@ -217,7 +217,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 </ul>
 <p>每个文件上传为 Actions 的产物，保留 14 天。</p>
 <p><code>licenses</code> 用 <code>cargo-about</code> 按 <code>about.toml</code> 与 <code>about.hbs</code> 生成 <code>THIRD-PARTY-LICENSES.txt</code>，按许可证分组列出每个依赖的名字、版本与许可证全文。依赖的许可证不在 <code>about.toml</code> 的 <code>accepted</code> 列表里时任务失败。理由：发布的可执行文件静态链接了依赖，MIT 与 Apache-2.0 都要求随二进制分发附带许可声明。<code>about.toml</code> 的 <code>targets</code> 只列四个发布目标，只在 Windows 上使用的依赖不进入文件。</p>
-<p><code>release</code> 只在 tag 触发时运行，等 <code>build</code> 与 <code>licenses</code> 都通过后，对四个可执行文件写 <code>SHA256SUMS</code>（每行 <code>&lt;哈希&gt;  &lt;文件名&gt;</code>），用 <code>gh release create --draft</code> 建标题为 <code>agentrun &lt;版本&gt;</code> 的草稿 Release，上传四个可执行文件、<code>SHA256SUMS</code> 与 <code>THIRD-PARTY-LICENSES.txt</code>。正文为空，发布说明由维护者贴入后发布。</p>
+<p><code>release</code> 只在 tag 上运行（推送 tag，或在 Actions 页面对 tag 手动运行），等 <code>build</code> 与 <code>licenses</code> 都通过后，对四个可执行文件写 <code>SHA256SUMS</code>（每行 <code>&lt;哈希&gt;  &lt;文件名&gt;</code>），用 <code>gh release create --draft</code> 建标题为 <code>agentrun &lt;版本&gt;</code> 的草稿 Release，上传四个可执行文件、<code>SHA256SUMS</code> 与 <code>THIRD-PARTY-LICENSES.txt</code>。正文为空，发布说明由维护者贴入后发布。</p>
 <p><code>Cargo.toml</code> 的 <code>[profile.release]</code> 设 <code>strip = true</code>、<code>lto = true</code> 与 <code>codegen-units = 1</code>，理由：发布的文件更小，代价是 release 构建更慢。</p>
 <p>发布一个版本的步骤：</p>
 <ol>

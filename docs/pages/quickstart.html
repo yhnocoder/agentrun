@@ -27,11 +27,15 @@
 <h2 id="install">安装 agentrun</h2>
 <p>agentrun 是一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64。从 <a href="https://github.com/yhnocoder/agentrun/releases">GitHub Releases</a> 下载与你的系统对应的文件，放进 PATH。把命令里的 <code>linux-x86_64</code> 换成 <code>linux-arm64</code>、<code>macos-arm64</code> 或 <code>macos-x86_64</code>：</p>
 <pre><code class="language-bash">VERSION=1.0.0
-curl -LO https://github.com/yhnocoder/agentrun/releases/download/v$VERSION/agentrun-$VERSION-linux-x86_64
-chmod +x agentrun-$VERSION-linux-x86_64
-mv agentrun-$VERSION-linux-x86_64 ~/.local/bin/agentrun</code></pre>
-<p>在 macOS 上用浏览器下载的文件带有 quarantine 属性，系统会拒绝运行它。先去掉这个属性：</p>
-<pre><code class="language-bash">xattr -d com.apple.quarantine agentrun-1.0.0-macos-arm64</code></pre>
+FILE=agentrun-$VERSION-linux-x86_64
+curl -LO https://github.com/yhnocoder/agentrun/releases/download/v$VERSION/$FILE
+chmod +x $FILE
+mkdir -p ~/.local/bin
+mv $FILE ~/.local/bin/agentrun</code></pre>
+<p><code>~/.local/bin</code> 不在 PATH 里时（macOS 默认不在），把下面一行加进 shell 的配置文件（zsh 是 <code>~/.zshrc</code>，bash 是 <code>~/.bashrc</code>），再打开一个新的终端：</p>
+<pre><code class="language-bash">export PATH="$HOME/.local/bin:$PATH"</code></pre>
+<p>在 macOS 上用浏览器下载的文件带有 quarantine 属性，系统会拒绝运行它。放进 <code>~/.local/bin</code> 之后去掉这个属性：</p>
+<pre><code class="language-bash">xattr -d com.apple.quarantine ~/.local/bin/agentrun</code></pre>
 <p>装了 Rust 工具链时，也可以从 crates.io 安装：</p>
 <pre><code class="language-bash">cargo install agentrun --locked</code></pre>
 <p>确认它已经在 PATH 里：</p>
