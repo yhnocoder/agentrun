@@ -53,7 +53,13 @@ On macOS, a file downloaded with a browser carries the quarantine attribute and 
 xattr -d com.apple.quarantine ~/.local/bin/agentrun
 ```
 
-Install from crates.io:
+Install with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall). It downloads the release file for your machine into `~/.cargo/bin` without compiling:
+
+```sh
+cargo binstall agentrun
+```
+
+Build from crates.io with the Rust toolchain:
 
 ```sh
 cargo install agentrun --locked

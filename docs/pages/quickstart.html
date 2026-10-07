@@ -36,7 +36,9 @@ mv $FILE ~/.local/bin/agentrun</code></pre>
 <pre><code class="language-bash">export PATH="$HOME/.local/bin:$PATH"</code></pre>
 <p>在 macOS 上用浏览器下载的文件带有 quarantine 属性，系统会拒绝运行它。放进 <code>~/.local/bin</code> 之后去掉这个属性：</p>
 <pre><code class="language-bash">xattr -d com.apple.quarantine ~/.local/bin/agentrun</code></pre>
-<p>装了 Rust 工具链时，也可以从 crates.io 安装：</p>
+<p>装了 <a href="https://github.com/cargo-bins/cargo-binstall">cargo-binstall</a> 时，可以用它安装。它从 GitHub Releases 下载与你的系统对应的文件，放进 <code>~/.cargo/bin</code>，不在本机编译：</p>
+<pre><code class="language-bash">cargo binstall agentrun</code></pre>
+<p>装了 Rust 工具链时，也可以从 crates.io 下载源码，在本机编译安装：</p>
 <pre><code class="language-bash">cargo install agentrun --locked</code></pre>
 <p>确认它已经在 PATH 里：</p>
 <div class="term"><span class="prompt">$</span> agentrun --version
