@@ -438,12 +438,11 @@ mod tests {
     use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
 
-    use clap::Parser;
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::cli::{Cli, Format, Parsed, SandboxMode};
+    use crate::cli::{SandboxMode, parse_run};
     use crate::network::{self, ProxyEndpoint};
     use crate::sandbox::{Sandbox, Wrapper};
 
@@ -482,10 +481,7 @@ mod tests {
         fn invocation(&self, sandboxed: bool, extra: &[&str]) -> Invocation {
             let mut args = vec!["agentrun", "codex", "--prompt", "hi"];
             args.extend(extra);
-            let (runtime, args) = match Cli::try_parse_from(args).unwrap().command.into_parsed() {
-                Parsed::Run(runtime, args) => (runtime, args),
-                _ => unreachable!("the tests parse runtime subcommands"),
-            };
+            let (runtime, args) = parse_run(&args);
             let allow_hosts = network::check_usage(args.network, &args.allow_host).unwrap();
             let proxy = (sandboxed && args.network == NetworkMode::Custom).then(|| ProxyEndpoint {
                 port: Some(4321),
@@ -496,30 +492,27 @@ mod tests {
                 OsString::from("CODEX_HOME"),
                 self.user_home().into_os_string(),
             )];
+            let wrapper = if sandboxed {
+                Wrapper::Codex
+            } else {
+                Wrapper::None
+            };
             Invocation {
-                runtime,
-                args,
-                cwd: self.work(),
-                prompt: "hi".to_string(),
-                format: Format::Jsonl,
-                sandbox: Sandbox {
-                    mode: SandboxMode::On,
-                    wrapper: if sandboxed {
-                        Wrapper::Codex
-                    } else {
-                        Wrapper::None
-                    },
-                    reason: String::new(),
-                    description: String::new(),
-                },
+                sandbox: Sandbox::new(SandboxMode::On, wrapper),
                 tempdir: if dry_run {
                     PathBuf::from("<tempdir>")
                 } else {
                     self.tempdir()
                 },
-                session: Session::assemble(runtime, &env, &[], &[], &[]),
                 allow_hosts,
                 proxy,
+                ..Invocation::new(
+                    runtime,
+                    args,
+                    self.work(),
+                    "hi".to_string(),
+                    Session::assemble(runtime, &env, &[], &[], &[]),
+                )
             }
         }
     }

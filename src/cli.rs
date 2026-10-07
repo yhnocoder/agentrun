@@ -280,6 +280,14 @@ pub(crate) fn usage_error_detail(rendered: &str) -> String {
 }
 
 #[cfg(test)]
+pub(crate) fn parse_run(argv: &[&str]) -> (Runtime, RunArgs) {
+    match Cli::try_parse_from(argv).unwrap().command.into_parsed() {
+        Parsed::Run(runtime, args) => (runtime, args),
+        _ => unreachable!("the tests parse runtime subcommands"),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -443,12 +443,11 @@ mod tests {
     use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
 
-    use clap::Parser;
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::cli::{Cli, Format, Parsed, SandboxMode};
+    use crate::cli::{SandboxMode, parse_run};
     use crate::network::ProxyEndpoint;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::{Session, parse_env_args};
@@ -497,39 +496,25 @@ mod tests {
         fn invocation(&self, env: &[(&str, &str)], sandboxed: bool, extra: &[&str]) -> Invocation {
             let mut args = vec!["agentrun", "pi", "--prompt", "hi"];
             args.extend(extra);
-            let (runtime, args) = match Cli::try_parse_from(args).unwrap().command.into_parsed() {
-                Parsed::Run(runtime, args) => (runtime, args),
-                _ => unreachable!("the tests parse runtime subcommands"),
-            };
+            let (runtime, args) = parse_run(&args);
             let caller_env: Vec<(OsString, OsString)> = env
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value)))
                 .collect();
             let env_args = parse_env_args(&args.env, &caller_env).unwrap();
             let session = Session::assemble(runtime, &caller_env, &[], &[], &env_args);
+            let wrapper = if sandboxed {
+                Wrapper::Bubblewrap {
+                    bwrap: PathBuf::from("/usr/bin/bwrap"),
+                    socat: PathBuf::from("/usr/bin/socat"),
+                }
+            } else {
+                Wrapper::None
+            };
             Invocation {
-                runtime,
-                args,
-                cwd: self.work(),
-                prompt: "hi".to_string(),
-                format: Format::Jsonl,
-                sandbox: Sandbox {
-                    mode: SandboxMode::On,
-                    wrapper: if sandboxed {
-                        Wrapper::Bubblewrap {
-                            bwrap: PathBuf::from("/usr/bin/bwrap"),
-                            socat: PathBuf::from("/usr/bin/socat"),
-                        }
-                    } else {
-                        Wrapper::None
-                    },
-                    reason: String::new(),
-                    description: String::new(),
-                },
+                sandbox: Sandbox::new(SandboxMode::On, wrapper),
                 tempdir: self.tempdir(),
-                session,
-                allow_hosts: Vec::new(),
-                proxy: None,
+                ..Invocation::new(runtime, args, self.work(), "hi".to_string(), session)
             }
         }
 

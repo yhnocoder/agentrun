@@ -46,6 +46,15 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    pub fn new(mode: SandboxMode, wrapper: Wrapper) -> Sandbox {
+        Sandbox {
+            mode,
+            wrapper,
+            reason: String::new(),
+            description: String::new(),
+        }
+    }
+
     pub fn kind(&self) -> SandboxKind {
         match self.wrapper {
             Wrapper::Bubblewrap { .. } => SandboxKind::Bubblewrap,

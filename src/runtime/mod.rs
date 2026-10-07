@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::cli::{Format, RunArgs, Runtime};
+use crate::cli::{Format, RunArgs, Runtime, SandboxMode};
 use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{Record, SandboxKind};
-use crate::sandbox::{PiState, Sandbox};
+use crate::sandbox::{PiState, Sandbox, Wrapper};
 use crate::session::Session;
 use claudecode::ClaudeCode;
 use codex::Codex;
@@ -120,6 +120,29 @@ pub struct Invocation {
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
     pub proxy: Option<ProxyEndpoint>,
+}
+
+impl Invocation {
+    pub fn new(
+        runtime: Runtime,
+        args: RunArgs,
+        cwd: PathBuf,
+        prompt: String,
+        session: Session,
+    ) -> Invocation {
+        Invocation {
+            runtime,
+            args,
+            cwd,
+            prompt,
+            format: Format::Jsonl,
+            sandbox: Sandbox::new(SandboxMode::Off, Wrapper::None),
+            tempdir: PathBuf::new(),
+            session,
+            allow_hosts: Vec::new(),
+            proxy: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
