@@ -46,7 +46,7 @@
   --offline --tools read,bash,edit,write,grep,find,ls \
   -- "提示词"</code></pre>
 <p><code>--mode json</code> 选择逐行 JSON 输出，处理完命令行给出的全部提示词后退出，运行中不接受新的输入。<code>-p</code>（<code>--print</code>）在 <code>--mode json</code> 下可以省略，加上它的效果相同。提示词也可以从标准输入管道传入。标准输出里只有 JSON 行，诊断信息写到标准错误。</p>
-<p>agentrun 的 <code>Pi::launch</code> 生成的命令以上面这组选项为基础。</p>
+<p>agentrun 的 <code>Pi::launch</code> 生成的命令以本节开头的命令为基础。</p>
 <p>以下选项改变流的内容：</p>
 <table>
   <thead>
@@ -688,7 +688,7 @@ interface SessionInfoChanged { type: "session_info_changed"; name?: string; }   
 interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; }</code></pre>
 
 <h2>错误、中断与退出码</h2>
-<p>agentrun 的 <code>Pi::failure</code> 读最后一条 assistant 消息的 <code>stopReason</code> 判断成败。</p>
+<p>agentrun 的 <code>Pi::failure</code> 读最后一条 assistant 消息的 <code>stopReason</code>，并结合模型检查与退出码判断成败，完整的判定顺序见<a href="run.html#pi">运行</a>中 pi 一节的「失败判定」。</p>
 <table>
   <thead>
     <tr><th>情形</th><th>退出码</th><th>流里的表现</th></tr>

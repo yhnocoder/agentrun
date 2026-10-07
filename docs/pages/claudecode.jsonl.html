@@ -49,7 +49,7 @@
 <p><code>-p</code>（<code>--print</code>）让 claude 处理一个提示词后退出；<code>--output-format stream-json</code> 选择逐行 JSON 输出；<code>--verbose</code> 是必需的，缺少它时进程不输出任何事件，在标准错误打印 <code>Error: When using --print, --output-format=stream-json requires --verbose</code>，退出码 1。</p>
 <p><code>--input-format stream-json</code> 让 claude 从标准输入读取 JSON 行形式的用户消息，<code>--replay-user-messages</code> 把读到的用户消息回显到输出流里。这样提示词会作为一个 <code>user</code> 事件出现在 <code>system/init</code> 之后、第一个 <code>assistant</code> 之前，带 <code>isReplay: true</code>，事件流本身就是这次运行的完整记录。提示词也可以作为命令行参数传入（<code>claude -p "提示词"</code>）或以纯文本从标准输入传入，这两种方式下输出流里没有提示词，其余事件相同。实测只用过一条提示词，写完后关闭标准输入，进程正常结束。</p>
 <p>事件流写到标准输出，标准输出里只有 JSON 行。诊断信息写到标准错误，例如模型名不存在时的 <code>[claude-code:unrecognized_model] {"model":"...","query_source":"sdk"}</code>。</p>
-<p>agentrun 的 <code>ClaudeCode::launch</code> 生成的命令以上面这组选项为基础。</p>
+<p>agentrun 的 <code>ClaudeCode::launch</code> 生成的命令以本节开头的命令为基础。</p>
 <p>以下选项与环境变量改变流里出现的事件：</p>
 <table>
   <thead>
