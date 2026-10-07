@@ -403,7 +403,6 @@ fn missing_login_file_is_rejected_with_and_without_dry_run() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn filter_proxy_failure_is_reported_before_the_missing_login_file() {
     let env = Env::with("codex", FAKE_CODEX);
