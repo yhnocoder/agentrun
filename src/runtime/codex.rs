@@ -5,15 +5,16 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record, detail_head};
 use crate::cli::{NetworkMode, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::TokenCounts;
-use crate::session::Session;
+use crate::sandbox::{BWRAP_PREFIX, start_failure};
+use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
-const HOME_SUBDIR: &str = ".codex";
+pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
 pub(crate) const LOGIN_FILE: &str = "auth.json";
 pub(crate) const SERVICE_HOSTS: [&str; 4] = [
@@ -66,8 +67,6 @@ const NO_SUBAGENTS_ARGS: [&str; 6] = [
     "multi_agent_v2",
 ];
 const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
-const BWRAP_PREFIX: &str = "bwrap: ";
-const DETAIL_MAX_CHARS: usize = 500;
 
 #[derive(Default)]
 pub struct Codex {
@@ -120,7 +119,7 @@ impl Codex {
             return;
         }
         if let Some(reason) = first_line(&string(output)).strip_prefix(BWRAP_PREFIX) {
-            self.sandbox_failure = Some(format!("sandbox failed to start: {reason}"));
+            self.sandbox_failure = Some(start_failure(reason));
         }
     }
 
@@ -258,10 +257,10 @@ impl Adapter for Codex {
             return Some(detail.clone());
         }
         if let Some(message) = &self.turn_failed {
-            return Some(truncate(message));
+            return Some(detail_head(message));
         }
         if let (false, Some(message)) = (self.turn_completed, &self.last_error) {
-            return Some(truncate(message));
+            return Some(detail_head(message));
         }
         if exit_code != Some(0) {
             return Some(String::new());
@@ -270,10 +269,13 @@ impl Adapter for Codex {
     }
 }
 
+pub(crate) fn user_home(session: &Session, cwd: &Path) -> Option<PathBuf> {
+    session.runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
+}
+
 pub(crate) fn login_file(session: &Session, cwd: &Path) -> PathBuf {
-    session
-        .runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
-        .unwrap_or_else(|| PathBuf::from("$HOME").join(HOME_SUBDIR))
+    user_home(session, cwd)
+        .unwrap_or_else(|| home_placeholder(HOME_SUBDIR))
         .join(LOGIN_FILE)
 }
 
@@ -286,7 +288,7 @@ pub(crate) fn check_login(session: &Session, login: &Path) -> Result<(), String>
         Ok(())
     } else {
         Err(format!(
-            "codex login file {} not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH",
+            "codex login file {} not found. Run codex login, or pass its content in {CODEX_AUTH_VARIABLE}",
             login.display()
         ))
     }
@@ -386,10 +388,6 @@ fn counts(usage: &Value) -> TokenCounts {
     }
 }
 
-fn truncate(message: &str) -> String {
-    message.chars().take(DETAIL_MAX_CHARS).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -402,8 +400,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::network::{self, ProxyEndpoint};
-    use crate::output::SandboxKind;
-    use crate::sandbox::Sandbox;
+    use crate::sandbox::{Sandbox, Wrapper};
 
     struct Setup {
         root: TempDir,
@@ -448,14 +445,12 @@ mod tests {
                 format: Format::Jsonl,
                 sandbox: Sandbox {
                     mode: SandboxMode::On,
-                    kind: if sandboxed {
-                        SandboxKind::Codex
+                    wrapper: if sandboxed {
+                        Wrapper::Codex
                     } else {
-                        SandboxKind::None
+                        Wrapper::None
                     },
                     reason: String::new(),
-                    bwrap: None,
-                    socat: None,
                     description: String::new(),
                 },
                 tempdir: if dry_run {
@@ -933,6 +928,26 @@ mod tests {
             login_file(&session, Path::new("/work")),
             PathBuf::from("$HOME/.codex/auth.json")
         );
+    }
+
+    #[test]
+    fn user_home_prefers_codex_home_then_home() {
+        let env: Vec<(OsString, OsString)> = vec![
+            (OsString::from("HOME"), OsString::from("/home/u")),
+            (OsString::from("CODEX_HOME"), OsString::from("state")),
+        ];
+        let session = Session::assemble(Runtime::Codex, &env, &[], &[], &[]);
+        assert_eq!(
+            user_home(&session, Path::new("/work")),
+            Some(PathBuf::from("/work/state"))
+        );
+        let session = Session::assemble(Runtime::Codex, &env[..1], &[], &[], &[]);
+        assert_eq!(
+            user_home(&session, Path::new("/work")),
+            Some(PathBuf::from("/home/u/.codex"))
+        );
+        let session = Session::assemble(Runtime::Codex, &[], &[], &[], &[]);
+        assert_eq!(user_home(&session, Path::new("/work")), None);
     }
 
     #[test]

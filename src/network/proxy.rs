@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::net::{
     Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
@@ -45,7 +46,11 @@ pub struct FilterProxy {
 }
 
 impl FilterProxy {
-    pub fn bind(tempdir: &Path) -> io::Result<FilterProxy> {
+    pub fn bind(tempdir: &Path) -> Result<FilterProxy, String> {
+        Self::listen(tempdir).map_err(|error| format!("cannot start the filter proxy: {error}"))
+    }
+
+    fn listen(tempdir: &Path) -> io::Result<FilterProxy> {
         let tcp = TcpListener::bind(SocketAddrV4::new(LISTEN_ADDRESS, 0))?;
         let port = tcp.local_addr()?.port();
         let socket = tempdir.join(SOCKET_FILE);
@@ -66,6 +71,16 @@ impl FilterProxy {
             port: Some(self.port),
             socket: self.socket.clone(),
         }
+    }
+    pub fn serve_session(
+        &mut self,
+        policy: Policy,
+        env: &BTreeMap<OsString, OsString>,
+        report: impl Fn(Network) + Send + Sync + 'static,
+    ) -> Vec<String> {
+        let (upstream, notes) = Upstream::from_env(env);
+        self.serve(policy, upstream, report);
+        notes
     }
     pub fn serve(
         &mut self,
@@ -202,6 +217,12 @@ pub(super) enum Route {
     Upstream(ProxyAddress),
 }
 
+pub(super) enum Decision {
+    Denied(NetworkReason),
+    Unreachable,
+    Route(Route),
+}
+
 fn handle(mut client: Client, server: &Server) {
     let _ = client.set_read_timeout(Some(HEAD_TIMEOUT));
     let mut first = [0u8; 1];
@@ -215,15 +236,12 @@ fn handle(mut client: Client, server: &Server) {
     }
 }
 
-pub(super) fn admit(
-    server: &Server,
-    target: &Target,
-    secure: bool,
-) -> Result<Option<Route>, NetworkReason> {
+pub(super) fn admit(server: &Server, target: &Target, secure: bool) -> Decision {
     let decision = decide(server, target, secure);
-    let (allowed, reason) = match &decision {
-        Err(reason) => (false, Some(*reason)),
-        Ok(_) => (true, None),
+    let allowed = !matches!(decision, Decision::Denied(_));
+    let reason = match &decision {
+        Decision::Denied(reason) => Some(*reason),
+        Decision::Unreachable | Decision::Route(_) => None,
     };
     let key = (target.host.clone(), target.port, allowed);
     let first = server
@@ -242,27 +260,26 @@ pub(super) fn admit(
     decision
 }
 
-fn decide(server: &Server, target: &Target, secure: bool) -> Result<Option<Route>, NetworkReason> {
+fn decide(server: &Server, target: &Target, secure: bool) -> Decision {
     if target.host.is_empty() || target.host.contains(':') {
-        return Err(NetworkReason::NotAllowed);
+        return Decision::Denied(NetworkReason::NotAllowed);
     }
-    let allowance = server
-        .policy
-        .allowance(&target.host, target.port)
-        .ok_or(NetworkReason::NotAllowed)?;
+    let Some(allowance) = server.policy.allowance(&target.host, target.port) else {
+        return Decision::Denied(NetworkReason::NotAllowed);
+    };
     let addresses = resolve(&target.host, target.port);
     let check_private = server.policy.mode != NetworkMode::None && allowance == Allowance::Any;
     if check_private && addresses.iter().any(|address| is_private(*address.ip())) {
-        return Err(NetworkReason::PrivateAddress);
+        return Decision::Denied(NetworkReason::PrivateAddress);
     }
     let ips: Vec<Ipv4Addr> = addresses.iter().map(|address| *address.ip()).collect();
     if let Some(proxy) = server.upstream.select(secure, &target.host, &ips) {
-        return Ok(Some(Route::Upstream(proxy.clone())));
+        return Decision::Route(Route::Upstream(proxy.clone()));
     }
     if addresses.is_empty() {
-        return Ok(None);
+        return Decision::Unreachable;
     }
-    Ok(Some(Route::Direct(addresses)))
+    Decision::Route(Route::Direct(addresses))
 }
 
 pub(super) fn connect(

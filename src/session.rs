@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::Runtime;
 
+pub const CODEX_AUTH_VARIABLE: &str = "AGENTRUN_CODEX_AUTH";
+pub const PI_AUTH_VARIABLE: &str = "AGENTRUN_PI_AUTH";
 const AGENTRUN_PREFIX: &[u8] = b"AGENTRUN_";
 const CODEX_REMOVED: [&str; 3] = ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"];
 const CLAUDE_CODE_REMOVED_PREFIXES: [&[u8]; 2] = [b"ANTHROPIC_", b"CLAUDE_CODE_USE_"];
@@ -55,8 +57,8 @@ impl Session {
         }
 
         let sandbox = env.get(OsStr::new("AGENTRUN_SANDBOX")).cloned();
-        let codex_auth = env.get(OsStr::new("AGENTRUN_CODEX_AUTH")).cloned();
-        let pi_auth = env.get(OsStr::new("AGENTRUN_PI_AUTH")).cloned();
+        let codex_auth = env.get(OsStr::new(CODEX_AUTH_VARIABLE)).cloned();
+        let pi_auth = env.get(OsStr::new(PI_AUTH_VARIABLE)).cloned();
         let agentrun_names: Vec<OsString> = env
             .keys()
             .filter(|name| name.as_bytes().starts_with(AGENTRUN_PREFIX))
@@ -90,6 +92,10 @@ impl Session {
         };
         value(variable).or_else(|| value("HOME").map(|home| home.join(home_subdir)))
     }
+}
+
+pub fn home_placeholder(home_subdir: &str) -> PathBuf {
+    PathBuf::from("$HOME").join(home_subdir)
 }
 
 fn removed_by(runtime: Runtime, name: &OsStr) -> bool {

@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cli::{Runtime, SandboxMode};
+use crate::network::ProxyEndpoint;
 use crate::output::SandboxKind;
 use crate::run::{Signals, wait_for_exit};
 use crate::session::Session;
@@ -18,36 +19,49 @@ use seatbelt::SANDBOX_EXEC_PREFIX;
 #[cfg(target_os = "macos")]
 use seatbelt::probe;
 
-pub use bubblewrap::{ProxyForward, wrap_pi};
+pub use bubblewrap::{ProxyForward, wrap_bwrap};
 pub use seatbelt::{seatbelt_profile, wrap_seatbelt, write_seatbelt_profile};
 
 pub(crate) use bubblewrap::{BWRAP_PREFIX, CANNOT_START_HINT};
-pub(crate) use seatbelt::SEATBELT_FILE;
+use seatbelt::SEATBELT_FILE;
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECK_POLL: Duration = Duration::from_millis(10);
 pub(crate) const UNAVAILABLE_PREFIX: &str = "sandbox is not available: ";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Wrapper {
+    Bubblewrap { bwrap: PathBuf, socat: PathBuf },
+    Seatbelt,
+    Codex,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sandbox {
     pub mode: SandboxMode,
-    pub kind: SandboxKind,
+    pub wrapper: Wrapper,
     pub reason: String,
-    pub bwrap: Option<PathBuf>,
-    pub socat: Option<PathBuf>,
     pub description: String,
 }
 
 impl Sandbox {
+    pub fn kind(&self) -> SandboxKind {
+        match self.wrapper {
+            Wrapper::Bubblewrap { .. } => SandboxKind::Bubblewrap,
+            Wrapper::Seatbelt => SandboxKind::Seatbelt,
+            Wrapper::Codex => SandboxKind::Codex,
+            Wrapper::None => SandboxKind::None,
+        }
+    }
+
     pub fn runs(&self) -> bool {
-        self.kind != SandboxKind::None
+        self.wrapper != Wrapper::None
     }
 }
 
 struct Available {
-    kind: SandboxKind,
-    bwrap: Option<PathBuf>,
-    socat: Option<PathBuf>,
+    wrapper: Wrapper,
     description: String,
 }
 
@@ -85,20 +99,16 @@ pub(crate) fn check(
     if mode == SandboxMode::Off {
         return Ok(Sandbox {
             mode,
-            kind: SandboxKind::None,
+            wrapper: Wrapper::None,
             reason: String::new(),
-            bwrap: None,
-            socat: None,
             description: "none (--sandbox off)".to_string(),
         });
     }
     match probe(runtime, session, cwd, signals) {
         Ok(available) => Ok(Sandbox {
             mode,
-            kind: available.kind,
+            wrapper: available.wrapper,
             reason: String::new(),
-            bwrap: available.bwrap,
-            socat: available.socat,
             description: available.description,
         }),
         Err(unavailable) if mode == SandboxMode::On => Err(format!(
@@ -107,11 +117,9 @@ pub(crate) fn check(
         )),
         Err(unavailable) => Ok(Sandbox {
             mode,
-            kind: SandboxKind::None,
+            wrapper: Wrapper::None,
             description: format!("none (--sandbox relax: {})", unavailable.reason),
             reason: unavailable.reason,
-            bwrap: None,
-            socat: None,
         }),
     }
 }
@@ -180,6 +188,10 @@ fn failure_reason(exit_code: Option<i32>, stderr: &str, prefix: &str) -> String 
     if let Some(line) = stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
         return line.strip_prefix(prefix).unwrap_or(line).to_string();
     }
+    exit_text(exit_code)
+}
+
+pub(crate) fn exit_text(exit_code: Option<i32>) -> String {
     match exit_code {
         Some(code) => format!("exited with code {code}"),
         None => "terminated by a signal".to_string(),
@@ -192,6 +204,64 @@ pub struct PiState {
     pub writable: Vec<PathBuf>,
     pub login_target: Option<PathBuf>,
     pub readonly: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wrapped {
+    pub kind: SandboxKind,
+    pub prefix: Vec<String>,
+}
+
+impl Wrapped {
+    pub fn argv(&self, command: &[String]) -> Vec<String> {
+        let mut argv = self.prefix.clone();
+        argv.extend(command.iter().cloned());
+        argv
+    }
+}
+
+pub fn wrap(
+    sandbox: &Sandbox,
+    cwd: &Path,
+    tempdir: &Path,
+    state: Option<&PiState>,
+    proxy: Option<&ProxyEndpoint>,
+    dry_run: bool,
+) -> Result<Wrapped, String> {
+    let port = proxy.map(ProxyEndpoint::port_text);
+    match &sandbox.wrapper {
+        Wrapper::Bubblewrap { bwrap, socat } => {
+            let forward = proxy
+                .zip(port.as_deref())
+                .map(|(endpoint, port)| ProxyForward {
+                    socat,
+                    port,
+                    socket: &endpoint.socket,
+                });
+            Ok(Wrapped {
+                kind: SandboxKind::Bubblewrap,
+                prefix: wrap_bwrap(bwrap, cwd, tempdir, state, forward.as_ref(), &[]),
+            })
+        }
+        Wrapper::Seatbelt => {
+            if !dry_run {
+                write_seatbelt_profile(cwd, tempdir, state, port.as_deref()).map_err(|error| {
+                    format!(
+                        "cannot write the sandbox profile {}: {error}",
+                        tempdir.join(SEATBELT_FILE).display()
+                    )
+                })?;
+            }
+            Ok(Wrapped {
+                kind: SandboxKind::Seatbelt,
+                prefix: wrap_seatbelt(tempdir, &[]),
+            })
+        }
+        Wrapper::Codex | Wrapper::None => Ok(Wrapped {
+            kind: SandboxKind::None,
+            prefix: Vec::new(),
+        }),
+    }
 }
 
 pub fn wrapper_failure(
@@ -210,7 +280,11 @@ pub fn wrapper_failure(
     stderr_tail
         .lines()
         .find_map(|line| line.strip_prefix(prefix))
-        .map(|rest| format!("sandbox failed to start: {rest}"))
+        .map(start_failure)
+}
+
+pub fn start_failure(reason: &str) -> String {
+    format!("sandbox failed to start: {reason}")
 }
 
 #[cfg(test)]
@@ -309,6 +383,12 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exit_text_names_the_code_or_the_signal() {
+        assert_eq!(exit_text(Some(3)), "exited with code 3");
+        assert_eq!(exit_text(None), "terminated by a signal");
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn seatbelt_is_available_on_macos_and_codex_uses_its_own() {
@@ -317,9 +397,7 @@ mod tests {
         for runtime in [Runtime::Pi, Runtime::ClaudeCode] {
             let sandbox =
                 check(SandboxMode::On, runtime, &session, Path::new("/"), &signals).unwrap();
-            assert_eq!(sandbox.kind, SandboxKind::Seatbelt);
-            assert_eq!(sandbox.bwrap, None);
-            assert_eq!(sandbox.socat, None);
+            assert_eq!(sandbox.wrapper, Wrapper::Seatbelt);
             let description = &sandbox.description;
             let millis = description
                 .strip_prefix("seatbelt (/usr/bin/sandbox-exec, check ")
@@ -335,8 +413,154 @@ mod tests {
             &signals,
         )
         .unwrap();
-        assert_eq!(codex.kind, SandboxKind::Codex);
+        assert_eq!(codex.wrapper, Wrapper::Codex);
         assert_eq!(codex.description, "codex");
+    }
+
+    #[test]
+    fn kind_follows_the_wrapper_and_only_none_does_not_run() {
+        let cases = [
+            (
+                Wrapper::Bubblewrap {
+                    bwrap: PathBuf::from("/usr/bin/bwrap"),
+                    socat: PathBuf::from("/usr/bin/socat"),
+                },
+                SandboxKind::Bubblewrap,
+                true,
+            ),
+            (Wrapper::Seatbelt, SandboxKind::Seatbelt, true),
+            (Wrapper::Codex, SandboxKind::Codex, true),
+            (Wrapper::None, SandboxKind::None, false),
+        ];
+        for (wrapper, kind, runs) in cases {
+            let sandbox = Sandbox {
+                mode: SandboxMode::On,
+                wrapper,
+                reason: String::new(),
+                description: String::new(),
+            };
+            assert_eq!(sandbox.kind(), kind);
+            assert_eq!(sandbox.runs(), runs);
+        }
+    }
+
+    fn sandbox_with(wrapper: Wrapper) -> Sandbox {
+        Sandbox {
+            mode: SandboxMode::On,
+            wrapper,
+            reason: String::new(),
+            description: String::new(),
+        }
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn bubblewrap_wrap_forwards_the_proxy_through_socat() {
+        let sandbox = sandbox_with(Wrapper::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            socat: PathBuf::from("/usr/bin/socat"),
+        });
+        let cwd = Path::new("/nonexistent/work");
+        let tempdir = Path::new("/nonexistent/tmp/agentrun-x");
+        let socket = tempdir.join("proxy.sock");
+        let command = strings(&["/usr/bin/pi", "-p"]);
+        let endpoint = ProxyEndpoint {
+            port: Some(41234),
+            socket: socket.clone(),
+        };
+        let wrapped = wrap(&sandbox, cwd, tempdir, None, Some(&endpoint), false).unwrap();
+        assert_eq!(wrapped.kind, SandboxKind::Bubblewrap);
+        let forward = ProxyForward {
+            socat: Path::new("/usr/bin/socat"),
+            port: "41234",
+            socket: &socket,
+        };
+        assert_eq!(
+            wrapped.argv(&command),
+            wrap_bwrap(
+                Path::new("/usr/bin/bwrap"),
+                cwd,
+                tempdir,
+                None,
+                Some(&forward),
+                &command
+            )
+        );
+        let direct = wrap(&sandbox, cwd, tempdir, None, None, false).unwrap();
+        assert_eq!(
+            direct.argv(&command),
+            wrap_bwrap(
+                Path::new("/usr/bin/bwrap"),
+                cwd,
+                tempdir,
+                None,
+                None,
+                &command
+            )
+        );
+        assert!(!direct.prefix.contains(&"/bin/sh".to_string()));
+        assert!(!direct.prefix.contains(&"-c".to_string()));
+        let placeholder = ProxyEndpoint { port: None, socket };
+        let dry = wrap(&sandbox, cwd, tempdir, None, Some(&placeholder), true).unwrap();
+        assert!(dry.prefix.contains(&"<proxy port>".to_string()));
+    }
+
+    #[test]
+    fn seatbelt_wrap_writes_the_profile_unless_dry_run() {
+        let root = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(root.path()).unwrap();
+        let work = real.join("work");
+        let tempdir = real.join("session");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir(&tempdir).unwrap();
+        let sandbox = sandbox_with(Wrapper::Seatbelt);
+        let profile = tempdir.join("seatbelt.sb");
+        let prefix = strings(&["/usr/bin/sandbox-exec", "-f", profile.to_str().unwrap()]);
+        let dry = wrap(&sandbox, &work, &tempdir, None, None, true).unwrap();
+        assert_eq!(dry.kind, SandboxKind::Seatbelt);
+        assert_eq!(dry.prefix, prefix);
+        assert!(!profile.exists());
+        let endpoint = ProxyEndpoint {
+            port: Some(7),
+            socket: tempdir.join("proxy.sock"),
+        };
+        let written = wrap(&sandbox, &work, &tempdir, None, Some(&endpoint), false).unwrap();
+        assert_eq!(written.kind, SandboxKind::Seatbelt);
+        assert_eq!(written.prefix, prefix);
+        assert_eq!(
+            std::fs::read_to_string(&profile).unwrap(),
+            seatbelt_profile(&work, &tempdir, None, Some("7"))
+        );
+        let missing = real.join("missing");
+        let detail = wrap(&sandbox, &work, &missing, None, None, false).unwrap_err();
+        assert!(
+            detail.starts_with(&format!(
+                "cannot write the sandbox profile {}: ",
+                missing.join("seatbelt.sb").display()
+            )),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn codex_and_none_are_not_wrapped_by_agentrun() {
+        let command = strings(&["/usr/bin/codex", "exec"]);
+        for wrapper in [Wrapper::Codex, Wrapper::None] {
+            let wrapped = wrap(
+                &sandbox_with(wrapper),
+                Path::new("/nonexistent/work"),
+                Path::new("/nonexistent/tmp"),
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+            assert_eq!(wrapped.kind, SandboxKind::None);
+            assert_eq!(wrapped.argv(&command), command);
+        }
     }
 
     #[test]
@@ -355,10 +579,8 @@ mod tests {
             sandbox,
             Sandbox {
                 mode: SandboxMode::Off,
-                kind: SandboxKind::None,
+                wrapper: Wrapper::None,
                 reason: String::new(),
-                bwrap: None,
-                socat: None,
                 description: "none (--sandbox off)".to_string(),
             }
         );
@@ -397,7 +619,7 @@ mod tests {
             &signals,
         )
         .unwrap();
-        assert_eq!(relaxed.kind, SandboxKind::None);
+        assert_eq!(relaxed.wrapper, Wrapper::None);
         assert_eq!(relaxed.reason, "bwrap not found in PATH");
         assert_eq!(
             relaxed.description,
@@ -416,6 +638,11 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn start_failure_names_the_reason() {
+        assert_eq!(start_failure("x"), "sandbox failed to start: x");
     }
 
     #[test]

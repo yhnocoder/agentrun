@@ -1,12 +1,16 @@
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 
 use super::address::{HTTP_DEFAULT_PORT, Target, authority_text, parse_host_port, target_text};
-use super::proxy::{Client, Route, Server, admit, connect, read_head, relay, write_all};
+use super::proxy::{Client, Decision, Route, Server, admit, connect, read_head, relay, write_all};
 use crate::output::NetworkReason;
 
 const UNRESOLVED: &str = "could not be resolved";
+const UPSTREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
     let Ok((head, leftover)) = read_head(&mut client, vec![first]) else {
@@ -29,17 +33,21 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
             return;
         };
         let route = match admit(server, &target, true) {
-            Err(reason) => {
+            Decision::Denied(reason) => {
                 respond(&mut client, "403 Forbidden", &denied_body(&target, reason));
                 return;
             }
-            Ok(route) => route,
+            Decision::Unreachable => {
+                respond(
+                    &mut client,
+                    "502 Bad Gateway",
+                    &failed_body(&target, UNRESOLVED),
+                );
+                return;
+            }
+            Decision::Route(route) => route,
         };
-        let connected = match route {
-            None => Err(UNRESOLVED.to_string()),
-            Some(route) => connect(&route, &target, true),
-        };
-        match connected {
+        match connect(&route, &target, true) {
             Err(reason) => {
                 respond(
                     &mut client,
@@ -77,12 +85,12 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
         }
     };
     let route = match admit(server, &target, false) {
-        Err(reason) => {
+        Decision::Denied(reason) => {
             respond(&mut client, "403 Forbidden", &denied_body(&target, reason));
             return;
         }
-        Ok(Some(route)) => route,
-        Ok(None) => {
+        Decision::Route(route) => route,
+        Decision::Unreachable => {
             respond(
                 &mut client,
                 "502 Bad Gateway",
@@ -119,7 +127,14 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
             &failed_body(&target, &reason),
         ),
         Ok((stream, _)) => {
-            forward_request(client, stream, forwarded.as_bytes(), &leftover, body_length);
+            forward_request(
+                client,
+                stream,
+                forwarded.as_bytes(),
+                &leftover,
+                body_length,
+                UPSTREAM_IDLE_TIMEOUT,
+            );
         }
     }
 }
@@ -154,6 +169,7 @@ fn forward_request(
     head: &[u8],
     leftover: &[u8],
     body_length: u64,
+    idle_timeout: Duration,
 ) {
     if server_stream.write_all(head).is_err() {
         return;
@@ -179,15 +195,46 @@ fn forward_request(
     else {
         return;
     };
-    let downstream = thread::spawn(move || {
-        let _ = io::copy(&mut from_server, &mut to_client);
-        let _ = to_client.shutdown(Shutdown::Both);
-    });
+    let _ = from_server.set_read_timeout(Some(idle_timeout));
+    let client_closed = Arc::new(AtomicBool::new(false));
+    let downstream = {
+        let client_closed = Arc::clone(&client_closed);
+        thread::spawn(move || {
+            copy_until_idle(&mut from_server, &mut to_client, &client_closed);
+            let _ = to_client.shutdown(Shutdown::Both);
+        })
+    };
     let mut discarded = [0u8; 4096];
     while matches!(client.read(&mut discarded), Ok(count) if count > 0) {}
+    client_closed.store(true, Ordering::SeqCst);
     let _ = downstream.join();
     let _ = client.shutdown(Shutdown::Both);
     let _ = server_stream.shutdown(Shutdown::Both);
+}
+
+fn copy_until_idle(
+    from_server: &mut TcpStream,
+    to_client: &mut Client,
+    client_closed: &AtomicBool,
+) {
+    let mut buffer = [0u8; 8192];
+    loop {
+        match from_server.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(count) => {
+                if to_client.write_all(&buffer[..count]).is_err() {
+                    return;
+                }
+            }
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if client_closed.load(Ordering::SeqCst) {
+                    return;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
 }
 
 fn respond(client: &mut Client, status: &str, body: &str) {
@@ -241,7 +288,82 @@ fn split_absolute_url(target: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Instant;
+
     use super::*;
+
+    #[test]
+    fn silent_upstream_is_closed_after_the_idle_timeout() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let clients = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut caller = TcpStream::connect(clients.local_addr().unwrap()).unwrap();
+        let (proxy_side, _) = clients.accept().unwrap();
+        let server_stream = TcpStream::connect(upstream.local_addr().unwrap()).unwrap();
+        let (mut upstream_side, _) = upstream.accept().unwrap();
+        let idle = Duration::from_millis(200);
+        let (done, finished) = mpsc::channel();
+        let started = Instant::now();
+        thread::spawn(move || {
+            forward_request(
+                Client::Tcp(proxy_side),
+                server_stream,
+                b"GET / HTTP/1.1\r\n\r\n",
+                &[],
+                0,
+                idle,
+            );
+            let _ = done.send(());
+        });
+        thread::sleep(Duration::from_millis(300));
+        caller.shutdown(Shutdown::Write).unwrap();
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the handler thread did not end");
+        assert!(started.elapsed() >= idle, "{:?}", started.elapsed());
+        upstream_side
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut received = Vec::new();
+        upstream_side.read_to_end(&mut received).unwrap();
+        assert_eq!(received, b"GET / HTTP/1.1\r\n\r\n");
+        let mut rest = Vec::new();
+        assert_eq!(caller.read_to_end(&mut rest).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_that_keeps_sending_within_the_idle_timeout_is_relayed_in_full() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let clients = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut caller = TcpStream::connect(clients.local_addr().unwrap()).unwrap();
+        let (proxy_side, _) = clients.accept().unwrap();
+        let server_stream = TcpStream::connect(upstream.local_addr().unwrap()).unwrap();
+        let (mut upstream_side, _) = upstream.accept().unwrap();
+        let idle = Duration::from_millis(300);
+        thread::spawn(move || {
+            forward_request(
+                Client::Tcp(proxy_side),
+                server_stream,
+                b"GET / HTTP/1.1\r\n\r\n",
+                &[],
+                0,
+                idle,
+            );
+        });
+        caller.shutdown(Shutdown::Write).unwrap();
+        for part in [&b"first "[..], b"second ", b"third"] {
+            thread::sleep(Duration::from_millis(150));
+            upstream_side.write_all(part).unwrap();
+        }
+        upstream_side.shutdown(Shutdown::Write).unwrap();
+        caller
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut received = Vec::new();
+        caller.read_to_end(&mut received).unwrap();
+        assert_eq!(received, b"first second third");
+    }
 
     #[test]
     fn absolute_urls_and_header_names() {

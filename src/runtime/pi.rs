@@ -4,16 +4,13 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record};
+use super::{Adapter, Invocation, Launch, Record, detail_head};
 use crate::cli::NetworkMode;
 use crate::cli::Runtime;
 use crate::json::{first_line, joined_text, optional_string, string};
-use crate::network::{ProxyEndpoint, proxy_environment};
+use crate::network::proxy_environment;
 use crate::output::{SandboxKind, TokenCounts};
-use crate::sandbox::{
-    PiState, ProxyForward, SEATBELT_FILE, wrap_pi, wrap_seatbelt, wrapper_failure,
-    write_seatbelt_profile,
-};
+use crate::sandbox::{self, PiState, wrapper_failure};
 use crate::session::Session;
 
 const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
@@ -27,7 +24,7 @@ const SERVICE_HOSTS: [(&str, &str); 5] = [
 ];
 const DEFAULT_PROVIDER_KEY: &str = "defaultProvider";
 const DEFAULT_MODEL_KEY: &str = "defaultModel";
-const LOGIN_FILE: &str = "auth.json";
+pub(crate) const LOGIN_FILE: &str = "auth.json";
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "auth.json",
@@ -53,7 +50,6 @@ const FIXED_ARGS: [&str; 12] = [
 const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
 const FAILED_STOP_REASONS: [&str; 2] = ["error", "aborted"];
 const NO_REPLY_DETAIL: &str = "pi produced no model reply";
-const DETAIL_MAX_CHARS: usize = 500;
 
 pub struct Pi {
     sandbox: SandboxKind,
@@ -103,11 +99,11 @@ impl Pi {
         let Some(expected) = &self.expected else {
             return Vec::new();
         };
-        let provider = string(&message["provider"]);
-        let model = string(&message["model"]);
-        if provider == expected.provider && model == expected.model {
+        if assistant_model(message).as_ref() == Some(expected) {
             return Vec::new();
         }
+        let provider = string(&message["provider"]);
+        let model = string(&message["model"]);
         self.mismatch = Some(format!(
             "pi uses {provider}/{model}, which does not match --model {}",
             self.model_option.as_deref().unwrap_or_default()
@@ -154,7 +150,6 @@ impl Adapter for Pi {
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
-        self.sandbox = invocation.sandbox.kind;
         self.model_option = invocation.args.model.clone();
         self.expected = match &invocation.args.model {
             Some(model) => Some(parse_model(model)?),
@@ -186,12 +181,7 @@ impl Adapter for Pi {
         let mut env = Vec::new();
         let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
-            let provider = match &self.expected {
-                Some(model) => Some(model.provider.clone()),
-                None => user_dir.as_deref().and_then(|dir| {
-                    settings_string(&dir.join(SETTINGS_FILE), DEFAULT_PROVIDER_KEY)
-                }),
-            };
+            let provider = service_provider(self.expected.as_ref(), user_dir.as_deref());
             match provider.as_deref().and_then(service_host) {
                 Some(host) => service_hosts.push(host.to_string()),
                 None if invocation.args.network == NetworkMode::None => {
@@ -204,55 +194,21 @@ impl Adapter for Pi {
             }
             env.extend(proxy_environment(&proxy.port_text()));
         }
-        let port = invocation.proxy.as_ref().map(ProxyEndpoint::port_text);
-        let bwrap = invocation
-            .sandbox
-            .bwrap
-            .as_deref()
-            .filter(|_| self.sandbox == SandboxKind::Bubblewrap);
-        if let Some(bwrap) = bwrap {
-            let forward = match (&invocation.proxy, &port) {
-                (Some(proxy), Some(port)) => Some(ProxyForward {
-                    socat: invocation
-                        .sandbox
-                        .socat
-                        .as_deref()
-                        .ok_or_else(|| "socat not found in PATH".to_string())?,
-                    port,
-                    socket: &proxy.socket,
-                }),
-                _ => None,
-            };
-            argv = wrap_pi(
-                bwrap,
-                &invocation.cwd,
-                &invocation.tempdir,
-                state.as_ref(),
-                forward.as_ref(),
-                &argv,
-            );
-        } else if self.sandbox == SandboxKind::Seatbelt {
-            if !invocation.args.dry_run {
-                write_seatbelt_profile(
-                    &invocation.cwd,
-                    &invocation.tempdir,
-                    state.as_ref(),
-                    port.as_deref(),
-                )
-                .map_err(|error| {
-                    format!(
-                        "cannot write the sandbox profile {}: {error}",
-                        invocation.tempdir.join(SEATBELT_FILE).display()
-                    )
-                })?;
-            }
-            argv = wrap_seatbelt(&invocation.tempdir, &argv);
-        }
+        let wrapped = sandbox::wrap(
+            &invocation.sandbox,
+            &invocation.cwd,
+            &invocation.tempdir,
+            state.as_ref(),
+            invocation.proxy.as_ref(),
+            invocation.args.dry_run,
+        )?;
+        argv = wrapped.argv(&argv);
+        self.sandbox = wrapped.kind;
         Ok(Launch {
             argv,
             stdin: Vec::new(),
             env,
-            signal_wrapped_child: bwrap.is_some(),
+            signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts,
         })
     }
@@ -300,7 +256,7 @@ impl Adapter for Pi {
         match &self.last_stop {
             Some(stop) if FAILED_STOP_REASONS.contains(&stop.reason.as_str()) => {
                 Some(match &stop.error_message {
-                    Some(message) => message.chars().take(DETAIL_MAX_CHARS).collect(),
+                    Some(message) => detail_head(message),
                     None => format!("stopReason: {}", stop.reason),
                 })
             }
@@ -387,6 +343,28 @@ pub(crate) fn default_model(settings: &Path) -> Option<Model> {
     })
 }
 
+pub(crate) fn service_provider(
+    expected: Option<&Model>,
+    user_dir: Option<&Path>,
+) -> Option<String> {
+    match expected {
+        Some(model) => Some(model.provider.clone()),
+        None => {
+            user_dir.and_then(|dir| settings_string(&dir.join(SETTINGS_FILE), DEFAULT_PROVIDER_KEY))
+        }
+    }
+}
+
+pub(crate) fn assistant_model(message: &Value) -> Option<Model> {
+    if message["role"] != "assistant" {
+        return None;
+    }
+    Some(Model {
+        provider: message["provider"].as_str()?.to_string(),
+        model: message["model"].as_str()?.to_string(),
+    })
+}
+
 pub(crate) fn service_host(provider: &str) -> Option<&'static str> {
     SERVICE_HOSTS
         .iter()
@@ -442,8 +420,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Format, Parsed, SandboxMode};
     use crate::network::ProxyEndpoint;
-    use crate::output::SandboxKind;
-    use crate::sandbox::Sandbox;
+    use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::{Session, parse_env_args};
 
     struct Setup {
@@ -508,14 +485,15 @@ mod tests {
                 format: Format::Jsonl,
                 sandbox: Sandbox {
                     mode: SandboxMode::On,
-                    kind: if sandboxed {
-                        SandboxKind::Bubblewrap
+                    wrapper: if sandboxed {
+                        Wrapper::Bubblewrap {
+                            bwrap: PathBuf::from("/usr/bin/bwrap"),
+                            socat: PathBuf::from("/usr/bin/socat"),
+                        }
                     } else {
-                        SandboxKind::None
+                        Wrapper::None
                     },
                     reason: String::new(),
-                    bwrap: sandboxed.then(|| PathBuf::from("/usr/bin/bwrap")),
-                    socat: sandboxed.then(|| PathBuf::from("/usr/bin/socat")),
                     description: String::new(),
                 },
                 tempdir: self.tempdir(),
@@ -775,6 +753,62 @@ mod tests {
     }
 
     #[test]
+    fn service_provider_prefers_the_expected_model_then_the_settings() {
+        let setup = Setup::new();
+        let dir = setup.user_state();
+        let expected = Model {
+            provider: "deepseek".to_string(),
+            model: "deepseek-flash".to_string(),
+        };
+        setup.write_user_file("settings.json", r#"{"defaultProvider":"openai"}"#);
+        assert_eq!(
+            service_provider(Some(&expected), Some(&dir)),
+            Some("deepseek".to_string())
+        );
+        assert_eq!(
+            service_provider(Some(&expected), None),
+            Some("deepseek".to_string())
+        );
+        assert_eq!(
+            service_provider(None, Some(&dir)),
+            Some("openai".to_string())
+        );
+        assert_eq!(service_provider(None, None), None);
+        for content in [
+            "not json",
+            r#"{"defaultModel":"m"}"#,
+            r#"{"defaultProvider":5}"#,
+        ] {
+            setup.write_user_file("settings.json", content);
+            assert_eq!(service_provider(None, Some(&dir)), None, "{content}");
+        }
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        assert_eq!(service_provider(None, Some(&dir)), None);
+    }
+
+    #[test]
+    fn assistant_model_needs_an_assistant_with_string_fields() {
+        assert_eq!(
+            assistant_model(
+                &json!({"role": "assistant", "provider": "deepseek", "model": "deepseek-flash"})
+            ),
+            Some(Model {
+                provider: "deepseek".to_string(),
+                model: "deepseek-flash".to_string(),
+            })
+        );
+        for message in [
+            json!({"role": "user", "provider": "deepseek", "model": "deepseek-flash"}),
+            json!({"role": "assistant", "model": "deepseek-flash"}),
+            json!({"role": "assistant", "provider": "deepseek"}),
+            json!({"role": "assistant", "provider": 1, "model": "deepseek-flash"}),
+            json!({"role": "assistant", "provider": "deepseek", "model": null}),
+        ] {
+            assert_eq!(assistant_model(&message), None, "{message}");
+        }
+    }
+
+    #[test]
     fn state_dir_variable_from_env_option_selects_the_user_dir() {
         let setup = Setup::new();
         let custom = setup.root.path().join("custom-state");
@@ -913,7 +947,7 @@ mod tests {
     fn seatbelt(setup: &Setup, port: Option<u16>, extra: &[&str]) -> (Pi, Launch) {
         let _ = std::fs::remove_file(setup.tempdir().join("seatbelt.sb"));
         let mut invocation = setup.invocation(&pairs(&setup.with_home()), false, extra);
-        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.sandbox.wrapper = Wrapper::Seatbelt;
         invocation.proxy = Some(proxy(port, setup));
         let mut adapter = Pi::new();
         let launch = adapter
@@ -972,7 +1006,7 @@ mod tests {
     fn seatbelt_launch_without_a_state_dir_leaves_it_out() {
         let setup = Setup::new();
         let mut invocation = setup.invocation(&[], false, &["--model", "deepseek/deepseek-flash"]);
-        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.sandbox.wrapper = Wrapper::Seatbelt;
         invocation.proxy = Some(proxy(Some(1), &setup));
         Pi::new()
             .launch(Path::new("/opt/bin/pi"), &invocation)
@@ -1010,7 +1044,7 @@ mod tests {
         let setup = Setup::new();
         std::fs::write(setup.tempdir().join("seatbelt.sb"), "taken").unwrap();
         let mut invocation = setup.invocation(&[], false, &["--model", "deepseek/deepseek-flash"]);
-        invocation.sandbox.kind = SandboxKind::Seatbelt;
+        invocation.sandbox.wrapper = Wrapper::Seatbelt;
         let detail = Pi::new()
             .launch(Path::new("/opt/bin/pi"), &invocation)
             .unwrap_err();
@@ -1034,20 +1068,6 @@ mod tests {
         assert_eq!(
             adapter.failure(Some(1), "bwrap: not on macOS\n"),
             Some(String::new())
-        );
-    }
-
-    #[test]
-    fn proxied_launch_without_socat_is_an_error() {
-        let setup = Setup::new();
-        let mut invocation = setup.invocation(&[], true, &["--model", "deepseek/deepseek-flash"]);
-        invocation.proxy = Some(proxy(Some(1), &setup));
-        invocation.sandbox.socat = None;
-        assert_eq!(
-            Pi::new()
-                .launch(Path::new("/opt/bin/pi"), &invocation)
-                .unwrap_err(),
-            "socat not found in PATH"
         );
     }
 

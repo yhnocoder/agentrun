@@ -7,11 +7,9 @@ use std::time::Instant;
 
 use super::PiState;
 #[cfg(target_os = "macos")]
-use super::{Available, Unavailable, start_check};
+use super::{Available, Unavailable, Wrapper, start_check};
 #[cfg(target_os = "macos")]
 use crate::cli::Runtime;
-#[cfg(target_os = "macos")]
-use crate::output::SandboxKind;
 #[cfg(target_os = "macos")]
 use crate::run::Signals;
 #[cfg(target_os = "macos")]
@@ -98,9 +96,7 @@ pub(super) fn probe(
 ) -> Result<Available, Unavailable> {
     if runtime == Runtime::Codex {
         return Ok(Available {
-            kind: SandboxKind::Codex,
-            bwrap: None,
-            socat: None,
+            wrapper: Wrapper::Codex,
             description: "codex".to_string(),
         });
     }
@@ -124,9 +120,7 @@ pub(super) fn probe(
     )
     .map_err(|reason| unavailable(format!("sandbox-exec cannot start: {reason}")))?;
     Ok(Available {
-        kind: SandboxKind::Seatbelt,
-        bwrap: None,
-        socat: None,
+        wrapper: Wrapper::Seatbelt,
         description: format!(
             "seatbelt ({SANDBOX_EXEC}, check {}ms)",
             started.elapsed().as_millis()

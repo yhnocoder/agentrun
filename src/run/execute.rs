@@ -13,15 +13,14 @@ use super::process_tree;
 use super::signal::Signals;
 use super::{Caller, Ready, create_raw, elapsed_ms, reject};
 use crate::cli::{Format, Runtime};
-use crate::network::{FilterProxy, Policy, Upstream};
+use crate::network::{FilterProxy, Policy};
 use crate::output::{
     Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD, Rich,
     Signal, Start, Usage, terminal_size,
 };
-use crate::runtime::{Adapter, Launch, Record};
+use crate::runtime::{Adapter, DETAIL_MAX_CHARS, Launch, Record, detail_tail};
 
-const STDERR_TAIL_CHARS: usize = 500;
-const STDERR_TAIL_BYTES: usize = STDERR_TAIL_CHARS * 4 + 3;
+const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
@@ -49,21 +48,20 @@ pub(super) fn execute(
     let debug = invocation.args.debug;
     let (sender, receiver) = mpsc::channel();
     if let Some(proxy) = proxy.as_mut() {
-        let (upstream, notes) = Upstream::from_env(&invocation.session.env);
-        if debug {
-            for note in notes {
-                caller.print_error_line(&format!("[debug] {note}"));
-            }
-        }
         let policy = Policy {
             mode: invocation.args.network,
             rules: invocation.allow_hosts.clone(),
             service_hosts: launch.service_hosts.clone(),
         };
         let reporter = sender.clone();
-        proxy.serve(policy, upstream, move |network| {
+        let notes = proxy.serve_session(policy, &invocation.session.env, move |network| {
             let _ = reporter.send(Message::Network(network));
         });
+        if debug {
+            for note in notes {
+                caller.print_error_line(&format!("[debug] {note}"));
+            }
+        }
     }
     let raw = match raw {
         Some(raw) => Some(raw),
@@ -151,7 +149,7 @@ pub(super) fn execute(
 
     let start = Event::now(Body::Start(Start {
         runtime: invocation.runtime,
-        sandbox: invocation.sandbox.kind,
+        sandbox: invocation.sandbox.kind(),
         network: NetworkInfo {
             mode: invocation.args.network,
             allow: invocation.args.allow_host.clone(),
@@ -422,12 +420,7 @@ fn forward_stderr(
 }
 
 pub fn stderr_tail(stderr: &str) -> String {
-    tail_chars(stderr.trim_end(), STDERR_TAIL_CHARS)
-}
-
-fn tail_chars(text: &str, count: usize) -> String {
-    let skip = text.chars().count().saturating_sub(count);
-    text.chars().skip(skip).collect()
+    detail_tail(stderr.trim_end())
 }
 
 fn finish_tempdir(tempdir: TempDir, debug: bool) {
@@ -485,8 +478,8 @@ mod tests {
 
     #[test]
     fn tail_keeps_last_characters() {
-        assert_eq!(tail_chars("abcdef", 3), "def");
-        assert_eq!(tail_chars("ab", 3), "ab");
-        assert_eq!(tail_chars("é修复", 2), "修复");
+        let stderr = format!("{}修复 \n\n", "a".repeat(600));
+        assert_eq!(stderr_tail(&stderr), format!("{}修复", "a".repeat(498)));
+        assert_eq!(stderr_tail("short\n"), "short");
     }
 }

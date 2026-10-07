@@ -8,11 +8,9 @@ use std::time::Instant;
 
 use super::PiState;
 #[cfg(target_os = "linux")]
-use super::{Available, Unavailable, start_check};
+use super::{Available, Unavailable, Wrapper, start_check};
 #[cfg(target_os = "linux")]
 use crate::cli::Runtime;
-#[cfg(target_os = "linux")]
-use crate::output::SandboxKind;
 #[cfg(target_os = "linux")]
 use crate::run::Signals;
 #[cfg(target_os = "linux")]
@@ -32,7 +30,7 @@ pub struct ProxyForward<'a> {
     pub socket: &'a Path,
 }
 
-pub fn wrap_pi(
+pub fn wrap_bwrap(
     bwrap: &Path,
     cwd: &Path,
     tempdir: &Path,
@@ -106,14 +104,12 @@ pub(super) fn probe(
         let started = Instant::now();
         check_bwrap(&bwrap, session, cwd, signals)?;
         return Ok(Available {
-            kind: SandboxKind::Codex,
+            wrapper: Wrapper::Codex,
             description: format!(
                 "codex (bubblewrap {}, check {}ms)",
                 bwrap.display(),
                 started.elapsed().as_millis()
             ),
-            bwrap: Some(bwrap),
-            socat: None,
         });
     }
     let bwrap = find_executable("bwrap", &session.path, cwd)
@@ -123,15 +119,13 @@ pub(super) fn probe(
     let started = Instant::now();
     check_bwrap(&bwrap, session, cwd, signals)?;
     Ok(Available {
-        kind: SandboxKind::Bubblewrap,
         description: format!(
             "bubblewrap ({}, socat {}, check {}ms)",
             bwrap.display(),
             socat.display(),
             started.elapsed().as_millis()
         ),
-        bwrap: Some(bwrap),
-        socat: Some(socat),
+        wrapper: Wrapper::Bubblewrap { bwrap, socat },
     })
 }
 
@@ -243,7 +237,7 @@ mod tests {
                 "/nonexistent/home/.pi/agent/settings.json",
             ],
         );
-        let with_state = wrap_pi(
+        let with_state = wrap_bwrap(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
@@ -288,7 +282,7 @@ mod tests {
                 "hi",
             ])
         );
-        let without_state = wrap_pi(
+        let without_state = wrap_bwrap(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
@@ -311,7 +305,7 @@ mod tests {
             port: "41234",
             socket: Path::new("/nonexistent/tmp/agentrun-x/proxy.sock"),
         };
-        let wrapped = wrap_pi(
+        let wrapped = wrap_bwrap(
             Path::new("/usr/bin/bwrap"),
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),

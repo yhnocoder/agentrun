@@ -16,6 +16,8 @@ use claudecode::ClaudeCode;
 use codex::Codex;
 use pi::Pi;
 
+pub const DETAIL_MAX_CHARS: usize = 500;
+
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String>;
@@ -31,6 +33,15 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
     }
+}
+
+pub fn detail_head(text: &str) -> String {
+    text.chars().take(DETAIL_MAX_CHARS).collect()
+}
+
+pub fn detail_tail(text: &str) -> String {
+    let skip = text.chars().count().saturating_sub(DETAIL_MAX_CHARS);
+    text.chars().skip(skip).collect()
 }
 
 pub struct Invocation {
@@ -97,4 +108,27 @@ pub enum Record {
     },
     Debug(String),
     Terminate,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detail_head_and_tail_keep_500_characters() {
+        let text = format!("{}{}", "a".repeat(300), "b".repeat(300));
+        assert_eq!(
+            detail_head(&text),
+            format!("{}{}", "a".repeat(300), "b".repeat(200))
+        );
+        assert_eq!(
+            detail_tail(&text),
+            format!("{}{}", "a".repeat(200), "b".repeat(300))
+        );
+        let multibyte = format!("{}修复", "a".repeat(499));
+        assert_eq!(detail_head(&multibyte), format!("{}修", "a".repeat(499)));
+        assert_eq!(detail_tail(&multibyte), format!("{}修复", "a".repeat(498)));
+        assert_eq!(detail_head("short"), "short");
+        assert_eq!(detail_tail("short"), "short");
+    }
 }

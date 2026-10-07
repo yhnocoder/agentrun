@@ -219,14 +219,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
                 ready.invocation.proxy = Some(bound.endpoint());
                 proxy = Some(bound);
             }
-            Err(error) => {
-                return reject(
-                    &mut caller,
-                    format,
-                    &format!("cannot start the filter proxy: {error}"),
-                    started,
-                );
-            }
+            Err(detail) => return reject(&mut caller, format, &detail, started),
         }
     }
     let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {

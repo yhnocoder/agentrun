@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use agentrun::output::SandboxKind;
 use agentrun::runtime::pi::state;
-use agentrun::sandbox::{PiState, ProxyForward, wrap_pi, wrapper_failure};
+use agentrun::sandbox::{PiState, ProxyForward, wrap_bwrap, wrapper_failure};
 use support::env::write_script;
 use support::process::wait_until_gone;
 use tempfile::TempDir;
@@ -104,7 +104,7 @@ impl Wrapped {
         let script = self.script(body);
         let mut argv = vec![script.to_string_lossy().into_owned()];
         argv.extend(args.iter().map(|arg| arg.to_string()));
-        let wrapped = wrap_pi(
+        let wrapped = wrap_bwrap(
             &self.bwrap,
             &self.cwd(),
             &self.tempdir(),
@@ -321,7 +321,7 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
         readonly: Vec::new(),
     };
     let argv = vec!["/bin/true".to_string()];
-    let bad = wrap_pi(
+    let bad = wrap_bwrap(
         &wrapped.bwrap,
         &wrapped.cwd(),
         &wrapped.tempdir(),

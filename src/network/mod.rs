@@ -15,6 +15,7 @@ pub use proxy::FilterProxy;
 pub use rule::{HostRule, Policy};
 pub use upstream::{ProxyAddress, Upstream, parse_no_proxy};
 
+pub(crate) use address::in_cidr;
 pub(crate) use rule::check_usage;
 
 pub(crate) const SOCKET_FILE: &str = "proxy.sock";

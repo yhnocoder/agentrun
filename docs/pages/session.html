@@ -30,10 +30,10 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>parse_env_args</code>、<code>read_env_file</code>、<code>resolve_path_dirs</code>、<code>find_executable</code>、<code>is_executable</code>、<code>is_variable_name</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
+    <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>home_placeholder</code>、<code>CODEX_AUTH_VARIABLE</code>、<code>PI_AUTH_VARIABLE</code>、<code>parse_env_args</code>、<code>read_env_file</code>、<code>resolve_path_dirs</code>、<code>find_executable</code>、<code>is_executable</code>、<code>is_variable_name</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>create_tempdir</code></td><td>会话临时目录</td></tr>
     <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code>（启动进程组、转发信号、读输出）、<code>supervise</code></td><td>会话临时目录、进程、信号与超时</td></tr>
-    <tr><td><code>src/runtime/pi.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/sandbox/mod.rs</code></td><td>pi：<code>user_state_dir</code>、<code>prepare_state</code>、<code>state</code>、<code>WRITABLE_STATE_ENTRIES</code>，<code>PiState</code> 在 <code>src/sandbox/mod.rs</code>；codex：<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 的状态目录与 codex 的私有配置目录、多个运行同时进行</td></tr>
+    <tr><td><code>src/runtime/pi.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/sandbox/mod.rs</code></td><td>pi：<code>user_state_dir</code>、<code>STATE_HOME_SUBDIR</code>、<code>LOGIN_FILE</code>、<code>prepare_state</code>、<code>state</code>、<code>WRITABLE_STATE_ENTRIES</code>，<code>PiState</code> 在 <code>src/sandbox/mod.rs</code>；codex：<code>user_home</code>、<code>HOME_SUBDIR</code>、<code>LOGIN_FILE</code>、<code>login_file</code>、<code>check_login</code>、<code>home_path</code>、<code>create_home</code></td><td>pi 的状态目录与 codex 的私有配置目录、多个运行同时进行</td></tr>
     <tr><td><code>src/credential.rs</code></td><td><code>write_session_credential</code>、<code>write_credential</code>、<code>CredentialReport</code>、<code>CredentialStatus</code></td><td>凭据</td></tr>
     <tr><td><code>src/run/process_tree/</code></td><td><code>mod.rs</code> 的 <code>ProcessTable</code>、<code>Recorded</code>、<code>wait_for_exit</code>、<code>kill_group_members</code>、<code>kill_tree</code>、<code>wrapped_child</code>；<code>linux.rs</code> 与 <code>macos.rs</code> 的 <code>claim_orphans</code>、<code>ForkWatcher</code>、<code>snapshot</code></td><td>进程、信号与超时</td></tr>
     <tr><td><code>src/run/signal.rs</code></td><td><code>Signals</code>（<code>install</code>、按阶段切换的 <code>prepare</code>、<code>checking</code>、<code>doctoring</code>、<code>running</code>、<code>finishing</code>、<code>exited</code>、<code>kill_group</code>，以及推迟处理信号的 <code>hold</code>）、<code>Hold</code></td><td>进程、信号与超时</td></tr>
@@ -129,6 +129,7 @@ GREETING='hello world'</code></pre>
   </tbody>
 </table>
 <p>一次运行只写当前运行时的变量。变量未设或为空时不写。路径变量与 <code>HOME</code> 从组装后的会话环境读取，相对路径按 <code>--cwd</code> 解析。</p>
+<p>写入位置由 <code>codex::user_home</code> 与 <code>pi::user_state_dir</code> 算出，与运行时实际读取的目录是同一个函数。理由：两处分开写时，改了一处的目录约定，凭据就会写到运行时读不到的地方。</p>
 <p>每次写入时，工具在同一目录记一个旁注文件 <code>auth.json.agentrun-sha256</code>，内容是这次变量值的 SHA-256（小写十六进制加换行）。下次运行时：登录文件不存在就写入；变量值的 SHA-256 与旁注相同就不动；不同或没有旁注就覆盖登录文件并更新旁注。理由：运行时会在使用中刷新令牌并改写登录文件，变量没变时保留刷新后的令牌；启动方轮换了凭据时，即使登录文件在持久卷上，会话也会改用新账号。</p>
 <p>写入前先创建登录文件所在的目录（新建的每一级权限 0700，已有目录不改权限），再对这个目录加排他的 <code>flock</code>，比较旁注、写登录文件、写旁注都在锁内完成。理由：两次运行同时写入不同的值时，没有锁会出现登录文件来自一次、旁注来自另一次，之后的运行按旁注判断会保留错误的账号。登录文件与旁注都用同目录的临时文件写入，以排他方式创建、权限 0600、fsync 后重命名，同时启动的其他运行不会读到写了一半的文件。写入失败时启动前报错（退出码 2），<code>detail</code> 写变量名与路径，不写值。</p>
 <p>登录文件是符号链接且链接目标存在时，工具写到链接目标，链接本身保留；目录锁、旁注与临时文件都放在链接目标所在的目录，旁注名是目标文件名加 <code>.agentrun-sha256</code>。链接目标不存在时按普通文件处理，链接被替换为登录文件。理由：几个状态目录链接到同一个登录文件时，它们的写入因此排队，旁注也只有一份。<code>--debug</code> 的 <code>credentials:</code> 一行与错误信息里的路径仍是链接本身的路径。</p>

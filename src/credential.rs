@@ -10,9 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
 
 use crate::cli::Runtime;
-use crate::session::Session;
-
-const LOGIN_FILE: &str = "auth.json";
+use crate::runtime::{codex, pi};
+use crate::session::{CODEX_AUTH_VARIABLE, PI_AUTH_VARIABLE, Session, home_placeholder};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -43,30 +42,33 @@ pub fn write_session_credential(
     session: &Session,
     cwd: &Path,
 ) -> Result<Option<CredentialReport>, String> {
-    let (variable, value, dir_variable, home_subdir) = match runtime {
+    let (variable, value, dir, home_subdir, login_file) = match runtime {
         Runtime::Codex => (
-            "AGENTRUN_CODEX_AUTH",
+            CODEX_AUTH_VARIABLE,
             &session.codex_auth,
-            "CODEX_HOME",
-            ".codex",
+            codex::user_home(session, cwd),
+            codex::HOME_SUBDIR,
+            codex::LOGIN_FILE,
         ),
         Runtime::Pi => (
-            "AGENTRUN_PI_AUTH",
+            PI_AUTH_VARIABLE,
             &session.pi_auth,
-            "PI_CODING_AGENT_DIR",
-            ".pi/agent",
+            pi::user_state_dir(session, cwd),
+            pi::STATE_HOME_SUBDIR,
+            pi::LOGIN_FILE,
         ),
         Runtime::ClaudeCode => return Ok(None),
     };
     let Some(value) = value.as_ref().filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    let Some(dir) = session.runtime_dir(cwd, dir_variable, home_subdir) else {
+    let Some(dir) = dir else {
         return Err(format!(
-            "cannot write {variable} to $HOME/{home_subdir}/{LOGIN_FILE}: HOME is not set"
+            "cannot write {variable} to {}: HOME is not set",
+            home_placeholder(home_subdir).join(login_file).display()
         ));
     };
-    let path = dir.join(LOGIN_FILE);
+    let path = dir.join(login_file);
     let status = write_credential(&path, value.as_bytes())
         .map_err(|error| format!("cannot write {variable} to {}: {error}", path.display()))?;
     Ok(Some(CredentialReport {
@@ -171,6 +173,7 @@ mod tests {
     use super::*;
 
     const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n";
+    const LOGIN_FILE: &str = "auth.json";
     const SIDECAR_FILE: &str = "auth.json.agentrun-sha256";
 
     fn session(runtime: Runtime, env: &[(&str, &str)]) -> Session {
