@@ -1,0 +1,17 @@
+Third-party licenses of agentrun
+
+agentrun is built from the Rust crates listed below. Each section gives one
+license, the crates that use it with their versions, and the full text of the
+license.
+{{#each licenses}}
+
+================================================================================
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

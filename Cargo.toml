@@ -1,6 +1,6 @@
 [package]
 name = "agentrun"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "Run claude-code, codex and pi in a sandbox with one command, on macOS, Linux, cloud containers and docker."
 license = "MIT OR Apache-2.0"
@@ -21,6 +21,11 @@ signal-hook = "0.4.4"
 tempfile = "3.27.0"
 time = { version = "0.3.55", features = ["formatting", "macros"] }
 unicode-width = "0.2.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
 
 [[test]]
 name = "signals"
