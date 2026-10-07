@@ -34,7 +34,7 @@
     <tr><th>位置</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>：<code>launch</code> 生成本页「怎样产生这条流」的命令，<code>translate</code> 按 <code>type</code> 分发给 <code>translate_assistant</code>、<code>translate_user</code>、<code>translate_system</code>，<code>failure</code> 读最后一个 <code>result</code></td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>（<code>launch</code>、<code>translate</code>、<code>failure</code>）</td></tr>
     <tr><td><code>tests/fixtures/claude-code/</code></td><td>本页样本的原始输出 <code>*.raw.jsonl</code> 与对应的统一事件 <code>*.events.jsonl</code>，格式见<a href="testing.html#fixtures">测试与发布</a></td></tr>
     <tr><td><code>tests/claudecode.rs</code></td><td>回放这些样本的 <code>replay_*</code> 测试与用假 <code>claude</code> 脚本做的适配器测试</td></tr>
   </tbody>
@@ -49,6 +49,7 @@
 <p><code>-p</code>（<code>--print</code>）让 claude 处理一个提示词后退出；<code>--output-format stream-json</code> 选择逐行 JSON 输出；<code>--verbose</code> 是必需的，缺少它时进程不输出任何事件，在标准错误打印 <code>Error: When using --print, --output-format=stream-json requires --verbose</code>，退出码 1。</p>
 <p><code>--input-format stream-json</code> 让 claude 从标准输入读取 JSON 行形式的用户消息，<code>--replay-user-messages</code> 把读到的用户消息回显到输出流里。这样提示词会作为一个 <code>user</code> 事件出现在 <code>system/init</code> 之后、第一个 <code>assistant</code> 之前，带 <code>isReplay: true</code>，事件流本身就是这次运行的完整记录。提示词也可以作为命令行参数传入（<code>claude -p "提示词"</code>）或以纯文本从标准输入传入，这两种方式下输出流里没有提示词，其余事件相同。实测只用过一条提示词，写完后关闭标准输入，进程正常结束。</p>
 <p>事件流写到标准输出，标准输出里只有 JSON 行。诊断信息写到标准错误，例如模型名不存在时的 <code>[claude-code:unrecognized_model] {"model":"...","query_source":"sdk"}</code>。</p>
+<p>agentrun 的 <code>ClaudeCode::launch</code> 生成的命令以上面这组选项为基础。</p>
 <p>以下选项与环境变量改变流里出现的事件：</p>
 <table>
   <thead>
@@ -204,6 +205,7 @@ interface EventBase {
 }</code></pre>
 
 <h2>system 事件</h2>
+<p>agentrun 中处理这类事件的是 <code>ClaudeCode::translate</code> 里 <code>type</code> 为 <code>system</code> 的分支。</p>
 <pre><code class="language-typescript">type SystemEvent =
   | SystemInit | SystemStatus | SystemTaskSummary | SystemPostTurnSummary
   | SystemThinkingTokens | SystemApiRetry | SystemPermissionDenied
@@ -401,7 +403,7 @@ interface SystemHookResponse extends EventBase {
 }</code></pre>
 
 <h2>assistant 事件</h2>
-<p>模型的每个内容块一个事件。</p>
+<p>模型的每个内容块一个事件。agentrun 中处理这类事件的是 <code>ClaudeCode::translate</code> 里 <code>type</code> 为 <code>assistant</code> 的分支。</p>
 <pre><code class="language-typescript">interface AssistantEvent extends EventBase {
   type: "assistant";
   message: AssistantMessage;            // Anthropic Messages API 的消息对象
@@ -593,7 +595,7 @@ type ToolInput =
 }</code></pre>
 
 <h2>user 事件</h2>
-<p>工具结果与若干种注入的用户消息都用 <code>user</code> 事件表示。</p>
+<p>工具结果与若干种注入的用户消息都用 <code>user</code> 事件表示。agentrun 中处理这类事件的是 <code>ClaudeCode::translate</code> 里 <code>type</code> 为 <code>user</code> 的分支。</p>
 <pre><code class="language-typescript">interface UserEvent extends EventBase {
   type: "user";
   message: {
@@ -866,6 +868,7 @@ type BlockDelta =
     <tr><td><code>error_max_budget_usd</code></td><td>true</td><td><code>budget_exhausted</code></td><td>超过 <code>--max-budget-usd</code>。<code>errors</code> 为 <code>["Reached maximum budget ($N)"]</code>，没有 <code>result</code> 字段</td><td>1</td></tr>
   </tbody>
 </table>
+<p>agentrun 中处理这类事件的是 <code>ClaudeCode::translate</code> 里 <code>type</code> 为 <code>result</code> 的分支，它记下最后一个 <code>result</code>，<code>ClaudeCode::failure</code> 读这个 <code>result</code> 判断成败。</p>
 <pre><code class="language-typescript">interface ResultEvent extends EventBase {
   type: "result";
   subtype: "success" | "error_during_execution" | "error_max_turns" | "error_max_budget_usd";
