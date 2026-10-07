@@ -100,8 +100,6 @@ fn runs_use_and_remove_their_own_tempdirs(sandbox: &str) {
             ": > \"$PWD/ready\"\nwait_for \"$GO\"\n{TEXT_LINE} \"$TMPDIR\"\nif [ -d \"$TMPDIR-codex\" ]; then {TEXT_LINE} 'codex home'; fi\n"
         ),
     );
-    std::fs::create_dir(env.home().join(".codex")).unwrap();
-    std::fs::write(env.home().join(".codex/auth.json"), "{}").unwrap();
     let go = env.root().join("go");
     let before = env.leftovers();
     let works: Vec<PathBuf> = (0..RUNS).map(|index| work(&env, index)).collect();
