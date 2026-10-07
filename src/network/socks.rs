@@ -2,7 +2,9 @@ use std::io::{Read, Write};
 use std::net::Ipv4Addr;
 
 use super::address::{Target, normalize_host};
-use super::proxy::{Client, Decision, Server, admit, connect, relay, write_all};
+use super::proxy::{
+    Client, Decision, Server, UPSTREAM_IDLE_TIMEOUT, admit, connect, relay, write_all,
+};
 
 pub(super) const SOCKS_VERSION: u8 = 0x05;
 const SOCKS_NO_AUTH: u8 = 0x00;
@@ -95,7 +97,7 @@ pub(super) fn handle_socks(mut client: Client, server: &Server) {
             if write_all(&mut client, &socks_reply(SOCKS_SUCCEEDED))
                 && write_all(&mut client, &early)
             {
-                relay(client, stream, &[]);
+                relay(client, stream, &[], UPSTREAM_IDLE_TIMEOUT);
             }
         }
     }

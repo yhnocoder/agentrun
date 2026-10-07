@@ -1,4 +1,4 @@
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,11 +6,13 @@ use std::thread;
 use std::time::Duration;
 
 use super::address::{HTTP_DEFAULT_PORT, Target, authority_text, parse_host_port, target_text};
-use super::proxy::{Client, Decision, Route, Server, admit, connect, read_head, relay, write_all};
+use super::proxy::{
+    Client, Decision, Route, Server, UPSTREAM_IDLE_TIMEOUT, admit, connect, copy_until_idle,
+    read_head, relay, write_all,
+};
 use crate::output::NetworkReason;
 
 const UNRESOLVED: &str = "could not be resolved";
-const UPSTREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
     let Ok((head, leftover)) = read_head(&mut client, vec![first]) else {
@@ -59,7 +61,7 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
                 if write_all(&mut client, b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     && write_all(&mut client, &early)
                 {
-                    relay(client, stream, &leftover);
+                    relay(client, stream, &leftover, UPSTREAM_IDLE_TIMEOUT);
                 }
             }
         }
@@ -210,31 +212,6 @@ fn forward_request(
     let _ = downstream.join();
     let _ = client.shutdown(Shutdown::Both);
     let _ = server_stream.shutdown(Shutdown::Both);
-}
-
-fn copy_until_idle(
-    from_server: &mut TcpStream,
-    to_client: &mut Client,
-    client_closed: &AtomicBool,
-) {
-    let mut buffer = [0u8; 8192];
-    loop {
-        match from_server.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(count) => {
-                if to_client.write_all(&buffer[..count]).is_err() {
-                    return;
-                }
-            }
-            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                if client_closed.load(Ordering::SeqCst) {
-                    return;
-                }
-            }
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(_) => return,
-        }
-    }
 }
 
 fn respond(client: &mut Client, status: &str, body: &str) {
