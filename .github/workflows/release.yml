@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - about.toml
+      - about.hbs
+      - Cargo.toml
+      - Cargo.lock
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            target: aarch64-apple-darwin
+            runner: macos-15
+          - name: macos-x86_64
+            target: x86_64-apple-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$version" ]; then
+            echo "no version in Cargo.toml" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match version $version in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "file=agentrun-$version-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+
+      - name: Build
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/agentrun "${{ steps.version.outputs.file }}"
+          chmod 0755 "${{ steps.version.outputs.file }}"
+
+      - name: Check the executable
+        env:
+          FILE: ${{ steps.version.outputs.file }}
+          EXPECTED: agentrun ${{ steps.version.outputs.version }}
+        run: |
+          check_version() {
+            actual=$("$@")
+            echo "$*: $actual"
+            if [ "$actual" != "$EXPECTED" ]; then
+              echo "expected: $EXPECTED" >&2
+              exit 1
+            fi
+          }
+          description=$(file "$FILE")
+          echo "$description"
+          ls -l "$FILE"
+          case "$RUNNER_OS" in
+            Linux)
+              case "$description" in
+                *"statically linked"* | *"static-pie linked"*) ;;
+                *) echo "$FILE is not statically linked" >&2; exit 1 ;;
+              esac
+              check_version "./$FILE" --version
+              check_version docker run --rm -v "$PWD/$FILE:/agentrun:ro" alpine:3 /agentrun --version
+              ;;
+            macOS)
+              codesign --verify --verbose "$FILE"
+              echo "codesign --verify: ok"
+              if [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then
+                check_version "./$FILE" --version
+              elif arch -x86_64 /usr/bin/true 2>/dev/null; then
+                check_version arch -x86_64 "./$FILE" --version
+              else
+                echo "Rosetta is not available, skipped --version of $FILE"
+              fi
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.file }}
+          path: ${{ steps.version.outputs.file }}
+          retention-days: 14
+          if-no-files-found: error
+
+  licenses:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features cli
+
+      - name: Generate THIRD-PARTY-LICENSES.txt
+        run: |
+          cargo about generate --locked --fail about.hbs --output-file THIRD-PARTY-LICENSES.txt
+          head -n 40 THIRD-PARTY-LICENSES.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: THIRD-PARTY-LICENSES.txt
+          path: THIRD-PARTY-LICENSES.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [build, licenses]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum agentrun-* > SHA256SUMS
+          cat SHA256SUMS
+          ls -l
+
+      - name: Create the draft release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "agentrun ${GITHUB_REF_NAME#v}" --notes "" \
+            agentrun-* SHA256SUMS THIRD-PARTY-LICENSES.txt

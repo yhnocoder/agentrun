@@ -25,11 +25,18 @@
 <p class="lead">agentrun 用一条命令在沙箱里运行 claude-code、codex 和 pi，支持 macOS、Linux、Cloud Managed 容器和 docker 容器。这一页带你装好 agentrun，检查环境，在沙箱里运行第一个任务，再把它放进脚本。照着做一遍大约需要五分钟。</p>
 
 <h2 id="install">安装 agentrun</h2>
-<p>agentrun 是一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64。用 Rust 工具链安装：</p>
-<pre><code class="language-bash">cargo install --git https://github.com/yhnocoder/agentrun</code></pre>
+<p>agentrun 是一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64。从 <a href="https://github.com/yhnocoder/agentrun/releases">GitHub Releases</a> 下载与你的系统对应的文件，放进 PATH。把命令里的 <code>linux-x86_64</code> 换成 <code>linux-arm64</code>、<code>macos-arm64</code> 或 <code>macos-x86_64</code>：</p>
+<pre><code class="language-bash">VERSION=1.0.0
+curl -LO https://github.com/yhnocoder/agentrun/releases/download/v$VERSION/agentrun-$VERSION-linux-x86_64
+chmod +x agentrun-$VERSION-linux-x86_64
+mv agentrun-$VERSION-linux-x86_64 ~/.local/bin/agentrun</code></pre>
+<p>在 macOS 上用浏览器下载的文件带有 quarantine 属性，系统会拒绝运行它。先去掉这个属性：</p>
+<pre><code class="language-bash">xattr -d com.apple.quarantine agentrun-1.0.0-macos-arm64</code></pre>
+<p>装了 Rust 工具链时，也可以从 crates.io 安装：</p>
+<pre><code class="language-bash">cargo install agentrun --locked</code></pre>
 <p>确认它已经在 PATH 里：</p>
 <div class="term"><span class="prompt">$</span> agentrun --version
-agentrun 0.1.0</div>
+agentrun 1.0.0</div>
 
 <h2 id="runtimes">准备运行时</h2>
 <p>agentrun 负责启动和隔离 agent，agent 本身来自运行时。按各自的文档安装你要用的运行时并登录一次：</p>

@@ -1,8 +1,8 @@
 # agentrun
 
-Run claude-code, codex and pi in a sandbox with one command, on macOS, Linux, cloud containers and docker.
+[![CI](https://github.com/yhnocoder/agentrun/actions/workflows/ci.yml/badge.svg)](https://github.com/yhnocoder/agentrun/actions/workflows/ci.yml)
 
-No version has been released yet. Until 1.0.0, build agentrun from source with `cargo build --release`, as described in the Install section below.
+Run claude-code, codex and pi in a sandbox with one command, on macOS, Linux, cloud containers and docker.
 
 ## What agentrun does
 
@@ -34,7 +34,7 @@ agentrun is a single executable for macOS and Linux on x86_64 and arm64. Windows
 
 ## Install
 
-Download a release file (available from 1.0.0). Replace `linux-x86_64` with `linux-arm64`, `macos-arm64` or `macos-x86_64` to match your machine:
+Download a release file. Replace `linux-x86_64` with `linux-arm64`, `macos-arm64` or `macos-x86_64` to match your machine:
 
 ```sh
 VERSION=1.0.0
@@ -43,7 +43,7 @@ chmod +x agentrun-$VERSION-linux-x86_64
 mv agentrun-$VERSION-linux-x86_64 ~/.local/bin/agentrun
 ```
 
-Install from crates.io (available after 1.0.0 is published there):
+Install from crates.io:
 
 ```sh
 cargo install agentrun --locked

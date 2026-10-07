@@ -22,7 +22,7 @@
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
 <h1>测试与发布</h1>
-<p class="lead">改动 agentrun 的代码后怎么证明它还能用：<code>scripts/test.sh</code> 跑哪些检查，<code>tests/</code> 里的文件各负责什么，回放样本从哪里来、怎么更新，以及验收脚本在四种环境里怎么运行。<mark>单元与集成测试不需要任何运行时与账号</mark>，验收脚本需要真实的运行时与登录。</p>
+<p class="lead">改动 agentrun 的代码后怎么证明它还能用：<code>scripts/test.sh</code> 跑哪些检查，<code>tests/</code> 里的文件各负责什么，回放样本从哪里来、怎么更新，验收脚本在四种环境里怎么运行，以及 CI 与发布怎么进行。<mark>单元与集成测试不需要任何运行时与账号</mark>，验收脚本需要真实的运行时与登录。</p>
 
 <h2 id="code">代码位置</h2>
 <table>
@@ -37,12 +37,16 @@
     <tr><td><code>tests/fixtures/</code></td><td>回放样本：三个运行时的原始输出与期望的事件流</td><td>回放样本</td></tr>
     <tr><td><code>scripts/probe/</code></td><td>直接运行三个运行时并记录原始输出的脚本，回放样本的来源</td><td>回放样本</td></tr>
     <tr><td><code>scripts/accept/</code></td><td>验收脚本 <code>accept.sh</code>、<code>lib/util.sh</code>、<code>lib/scenarios.sh</code>、<code>lib/concurrent.sh</code> 与 docker 镜像的 <code>Dockerfile</code></td><td>验收脚本</td></tr>
+    <tr><td><code>.github/workflows/ci.yml</code></td><td>每个 PR 与 <code>main</code> 的推送在 Linux 与 macOS 上运行的检查</td><td>CI</td></tr>
+    <tr><td><code>.github/workflows/release.yml</code></td><td>四个可执行文件的构建与检查、第三方许可证文件、草稿 Release</td><td>发布</td></tr>
+    <tr><td><code>about.toml</code>、<code>about.hbs</code></td><td><code>cargo-about</code> 的配置（接受的许可证、构建目标）与 <code>THIRD-PARTY-LICENSES.txt</code> 的纯文本模板</td><td>发布</td></tr>
+    <tr><td><code>Cargo.toml</code></td><td>版本号与 <code>[profile.release]</code></td><td>发布</td></tr>
   </tbody>
 </table>
 <p><code>src/</code> 里每个文件末尾的 <code>#[cfg(test)] mod tests</code> 是该文件的单元测试，测试纯函数与适配器生成的参数。过滤代理的测试在 <code>src/network/tests.rs</code>，它们在测试进程内用多个线程在回环地址上启动真实的过滤代理与上游服务。跨模块的行为、真实的子进程与沙箱放在 <code>tests/</code>。</p>
 
 <h2>scripts/test.sh</h2>
-<p>一条命令运行全部检查，任何一步失败就停止并以非 0 退出。提交前在本机运行。</p>
+<p>一条命令运行全部检查，任何一步失败就停止并以非 0 退出。提交前在本机运行，CI 也运行它（见 <a href="#ci">CI</a>）。</p>
 <pre><code class="language-bash">cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -170,7 +174,59 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
     <tr><td>本机 macOS</td><td>用户</td><td>同本机 Linux</td><td>Seatbelt 路径只能在这里验证。本机开着代理软件的 fake-ip 模式时，codex 的 <code>network-custom</code> 场景会失败，见<a href="run.html#doctor_check">doctor 检查</a></td></tr>
   </tbody>
 </table>
-<p>验收结果写在对应 Task 的 issue 里，附 <code>summary.md</code>；失败的场景附该目录的 <code>stderr.txt</code> 与 <code>check.txt</code>。</p>
+<p>验收结果写在对应 Task 的 issue 里，附 <code>summary.md</code>；失败的场景附该目录的 <code>stderr.txt</code> 与 <code>check.txt</code>。发布前的验收用 <code>release.yml</code> 构建的文件，见<a href="#release">发布</a>。</p>
+
+<h2 id="ci">CI</h2>
+<p><code>.github/workflows/ci.yml</code> 在每个 pull request 与每次推送到 <code>main</code> 时运行。同一分支有新的推送时，正在运行的旧任务被取消。PR 在 CI 通过后才合并。</p>
+<table>
+  <thead>
+    <tr><th>步骤</th><th><code>ubuntu-24.04</code></th><th><code>macos-15</code></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>用 runner 自带的 <code>rustup</code> 安装 stable 工具链与 <code>rustfmt</code>、<code>clippy</code></td><td>运行</td><td>运行</td></tr>
+    <tr><td><code>apt-get install bubblewrap socat shellcheck</code></td><td>运行</td><td>不运行</td></tr>
+    <tr><td><code>sysctl -w kernel.apparmor_restrict_unprivileged_userns=0</code></td><td>运行</td><td>不运行</td></tr>
+    <tr><td><code>astral-sh/setup-uv</code></td><td>运行</td><td>运行</td></tr>
+    <tr><td><code>scripts/test.sh</code></td><td>运行</td><td>运行</td></tr>
+    <tr><td><code>cargo publish --dry-run --locked</code></td><td>运行</td><td>不运行</td></tr>
+  </tbody>
+</table>
+<p>Linux runner 上关闭 AppArmor 对用户命名空间的限制，理由：Ubuntu 24.04 默认禁止非特权进程创建用户命名空间，<code>bwrap</code> 启动失败，需要沙箱的测试都会跳过。<code>cargo publish --dry-run</code> 在 PR 上构建 crates.io 的包，理由：<code>Cargo.toml</code> 的 <code>include</code> 只列构建需要的文件，漏掉文件时 crates.io 上的包会构建失败。</p>
+<p>CI 不运行真实的 claude-code、codex 与 pi，也不调用模型，<code>scripts/test.sh</code> 只用假运行时与回放样本。工具链用 <code>rustup</code> 直接安装，不用第三方的工具链 action，也不加缓存。</p>
+
+<h2 id="release">发布</h2>
+<p><code>.github/workflows/release.yml</code> 在三种情况下运行：推送 <code>v*</code> tag；PR 改动 <code>release.yml</code>、<code>about.toml</code>、<code>about.hbs</code>、<code>Cargo.toml</code> 或 <code>Cargo.lock</code>；在 Actions 页面手动运行。它有三个任务。</p>
+<p><code>build</code> 构建四个可执行文件，<code>&lt;版本&gt;</code> 取 <code>Cargo.toml</code> 的 <code>version</code>。由 tag 触发时，tag 去掉 <code>v</code> 后必须等于这个版本，否则任务失败。</p>
+<table>
+  <thead>
+    <tr><th>文件名</th><th>目标</th><th>runner</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>agentrun-&lt;版本&gt;-linux-x86_64</code></td><td><code>x86_64-unknown-linux-musl</code></td><td><code>ubuntu-24.04</code></td></tr>
+    <tr><td><code>agentrun-&lt;版本&gt;-linux-arm64</code></td><td><code>aarch64-unknown-linux-musl</code></td><td><code>ubuntu-24.04-arm</code></td></tr>
+    <tr><td><code>agentrun-&lt;版本&gt;-macos-arm64</code></td><td><code>aarch64-apple-darwin</code></td><td><code>macos-15</code></td></tr>
+    <tr><td><code>agentrun-&lt;版本&gt;-macos-x86_64</code></td><td><code>x86_64-apple-darwin</code></td><td><code>macos-15</code></td></tr>
+  </tbody>
+</table>
+<p>Linux 的文件用 musl 静态链接，两个架构都在各自架构的 runner 上原生构建。理由：docker 镜像的 glibc 版本各不相同，静态链接的文件在 Alpine 与较旧的发行版上也能运行。现在的依赖都不需要 C 编译器；以后加入需要的依赖时，在 runner 上安装 <code>musl-tools</code>。macOS 的两个架构都在 arm64 的 <code>macos-15</code> 上构建，x86_64 由 Xcode 的工具链交叉编译。macOS 的文件只有链接器做的 ad-hoc 签名，没有 Developer ID 签名与公证，用浏览器下载的文件要先去掉 quarantine 属性。</p>
+<p>每个文件构建后检查，任何一项不通过时任务失败：</p>
+<ul>
+  <li>运行 <code>file</code> 并写进日志，Linux 的文件必须是 <code>statically linked</code> 或 <code>static-pie linked</code>。</li>
+  <li>运行 <code>--version</code>，输出必须是 <code>agentrun &lt;版本&gt;</code>。Linux 的文件另在 <code>alpine:3</code> 容器里运行一次。</li>
+  <li>macOS 的文件运行 <code>codesign --verify</code>。x86_64 的文件在 Rosetta 可用时用 <code>arch -x86_64</code> 运行 <code>--version</code>，不可用时在日志里写明跳过。</li>
+</ul>
+<p>每个文件上传为 Actions 的产物，保留 14 天。</p>
+<p><code>licenses</code> 用 <code>cargo-about</code> 按 <code>about.toml</code> 与 <code>about.hbs</code> 生成 <code>THIRD-PARTY-LICENSES.txt</code>，按许可证分组列出每个依赖的名字、版本与许可证全文。依赖的许可证不在 <code>about.toml</code> 的 <code>accepted</code> 列表里时任务失败。理由：发布的可执行文件静态链接了依赖，MIT 与 Apache-2.0 都要求随二进制分发附带许可声明。<code>about.toml</code> 的 <code>targets</code> 只列四个发布目标，只在 Windows 上使用的依赖不进入文件。</p>
+<p><code>release</code> 只在 tag 触发时运行，等 <code>build</code> 与 <code>licenses</code> 都通过后，对四个可执行文件写 <code>SHA256SUMS</code>（每行 <code>&lt;哈希&gt;  &lt;文件名&gt;</code>），用 <code>gh release create --draft</code> 建标题为 <code>agentrun &lt;版本&gt;</code> 的草稿 Release，上传四个可执行文件、<code>SHA256SUMS</code> 与 <code>THIRD-PARTY-LICENSES.txt</code>。正文为空，发布说明由维护者贴入后发布。</p>
+<p><code>Cargo.toml</code> 的 <code>[profile.release]</code> 设 <code>strip = true</code>、<code>lto = true</code> 与 <code>codegen-units = 1</code>，理由：发布的文件更小，代价是 release 构建更慢。</p>
+<p>发布一个版本的步骤：</p>
+<ol>
+  <li>在 PR 里修改 <code>Cargo.toml</code> 的 <code>version</code> 并更新 <code>Cargo.lock</code>。PR 上 <code>release.yml</code> 的 <code>build</code> 与 <code>licenses</code> 会运行。</li>
+  <li>从这个 PR 的 Actions 运行下载四个文件（<code>gh run download &lt;运行号&gt;</code>），用 <code>accept.sh --agentrun &lt;文件&gt;</code> 在<a href="#environments">四种环境</a>里验收，并运行 <code>agentrun doctor</code>。下载的文件先 <code>chmod +x</code>；macOS 上用浏览器下载的文件先运行 <code>xattr -d com.apple.quarantine &lt;文件&gt;</code>。</li>
+  <li>验收通过后合并 PR，在合并后的 <code>main</code> 上推送 tag：<code>git tag v&lt;版本&gt; &amp;&amp; git push origin v&lt;版本&gt;</code>。</li>
+  <li>等 <code>release.yml</code> 建好草稿 Release，把发布说明贴进草稿并发布。</li>
+  <li>在本机检出这个 tag，运行 <code>cargo publish --locked</code> 发布到 crates.io。crates.io 的令牌只在维护者本机，不放进仓库的 secrets。</li>
+</ol>
 </main>
 </body>
 </html>
