@@ -161,14 +161,7 @@ impl Adapter for Pi {
             None => None,
         };
         let user_dir = user_state_dir(&invocation.session, &invocation.cwd);
-        let state = match user_dir.as_deref() {
-            Some(dir) if invocation.args.dry_run => dir
-                .is_dir()
-                .then(|| state(dir).map_err(|error| read_error(dir, &error)))
-                .transpose()?,
-            Some(dir) => Some(prepare_state(dir)?),
-            None => None,
-        };
+        let state = session_state(user_dir.as_deref(), invocation.args.dry_run)?;
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
         argv.push(TOOLS.to_string());
@@ -186,13 +179,13 @@ impl Adapter for Pi {
         let mut env = Vec::new();
         let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
-            let provider = service_provider(self.expected.as_ref(), user_dir.as_deref());
-            match provider.as_deref().and_then(service_host) {
+            let service = model_service(invocation.args.model.as_deref(), user_dir.as_deref());
+            match service.host {
                 Some(host) => service_hosts.push(host.to_string()),
                 None if invocation.args.network == NetworkMode::None => {
                     return Err(format!(
                         "cannot tell which host pi's model service uses (provider: {}). Use --network custom --allow-host <host of the model service>",
-                        provider.as_deref().unwrap_or("unknown")
+                        service.provider.as_deref().unwrap_or("unknown")
                     ));
                 }
                 None => {}
@@ -286,7 +279,21 @@ pub(crate) fn user_state_dir(session: &Session, cwd: &Path) -> Option<PathBuf> {
     session.runtime_dir(cwd, STATE_DIR_VARIABLE, STATE_HOME_SUBDIR)
 }
 
-pub(crate) fn prepare_state(user_dir: &Path) -> Result<PiState, String> {
+pub(crate) fn session_state(
+    user_dir: Option<&Path>,
+    dry_run: bool,
+) -> Result<Option<PiState>, String> {
+    match user_dir {
+        Some(dir) if dry_run => dir
+            .is_dir()
+            .then(|| state(dir).map_err(|error| read_error(dir, &error)))
+            .transpose(),
+        Some(dir) => prepare_state(dir).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn prepare_state(user_dir: &Path) -> Result<PiState, String> {
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -346,10 +353,28 @@ pub(crate) fn default_model(settings: &Path) -> Option<Model> {
     })
 }
 
-pub(crate) fn service_provider(
-    expected: Option<&Model>,
-    user_dir: Option<&Path>,
-) -> Option<String> {
+pub(crate) struct ModelService {
+    pub provider: Option<String>,
+    pub host: Option<&'static str>,
+}
+
+pub(crate) fn model_service(model: Option<&str>, user_dir: Option<&Path>) -> ModelService {
+    let expected = match model.map(parse_model) {
+        Some(Ok(expected)) => Some(expected),
+        Some(Err(_)) => {
+            return ModelService {
+                provider: None,
+                host: None,
+            };
+        }
+        None => None,
+    };
+    let provider = service_provider(expected.as_ref(), user_dir);
+    let host = provider.as_deref().and_then(service_host);
+    ModelService { provider, host }
+}
+
+fn service_provider(expected: Option<&Model>, user_dir: Option<&Path>) -> Option<String> {
     match expected {
         Some(model) => Some(model.provider.clone()),
         None => {
@@ -368,7 +393,7 @@ pub(crate) fn assistant_model(message: &Value) -> Option<Model> {
     })
 }
 
-pub(crate) fn service_host(provider: &str) -> Option<&'static str> {
+fn service_host(provider: &str) -> Option<&'static str> {
     SERVICE_HOSTS
         .iter()
         .find(|(name, _)| *name == provider)
@@ -788,6 +813,51 @@ mod tests {
         }
         std::fs::remove_file(dir.join("settings.json")).unwrap();
         assert_eq!(service_provider(None, Some(&dir)), None);
+    }
+
+    fn service_of(
+        model: Option<&str>,
+        user_dir: Option<&Path>,
+    ) -> (Option<String>, Option<&'static str>) {
+        let service = model_service(model, user_dir);
+        (service.provider, service.host)
+    }
+
+    #[test]
+    fn model_service_takes_the_model_option_then_the_settings() {
+        let setup = Setup::new();
+        let dir = setup.user_state();
+        setup.write_user_file("settings.json", r#"{"defaultProvider":"openai"}"#);
+        assert_eq!(
+            service_of(Some("deepseek/deepseek-v4-flash"), Some(&dir)),
+            (Some("deepseek".to_string()), Some("api.deepseek.com"))
+        );
+        assert_eq!(
+            service_of(Some("unknown/model"), Some(&dir)),
+            (Some("unknown".to_string()), None)
+        );
+        assert_eq!(service_of(Some("deepseek"), Some(&dir)), (None, None));
+        assert_eq!(
+            service_of(None, Some(&dir)),
+            (Some("openai".to_string()), Some("api.openai.com"))
+        );
+        assert_eq!(service_of(None, None), (None, None));
+        std::fs::remove_file(dir.join("settings.json")).unwrap();
+        assert_eq!(service_of(None, Some(&dir)), (None, None));
+    }
+
+    #[test]
+    fn session_state_creates_the_dir_only_outside_dry_run() {
+        let setup = Setup::new();
+        let dir = setup.user_state();
+        assert_eq!(session_state(None, false), Ok(None));
+        assert_eq!(session_state(None, true), Ok(None));
+        assert_eq!(session_state(Some(&dir), true), Ok(None));
+        assert!(!dir.exists());
+        let created = session_state(Some(&dir), false).unwrap().unwrap();
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(created.dir, setup.real_user_state());
+        assert_eq!(session_state(Some(&dir), true), Ok(Some(created)));
     }
 
     #[test]

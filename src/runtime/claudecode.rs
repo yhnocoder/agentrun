@@ -12,6 +12,7 @@ use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
 
+pub(crate) const SERVICE_HOST: &str = "api.anthropic.com";
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
 const ALLOWED_WITH_SANDBOX: [&str; 3] = ["Read", "Glob", "Grep"];

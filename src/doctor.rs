@@ -21,9 +21,8 @@ use crate::network::{
 use crate::output::{Network, NetworkReason, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
 use crate::run::{Caller, create_tempdir, shell_quote};
-use crate::runtime::codex;
 use crate::runtime::pi::{self, Model, Pi};
-use crate::runtime::{Adapter, Invocation};
+use crate::runtime::{self, Adapter, Invocation, codex};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, Sandbox, UNAVAILABLE_PREFIX, Wrapped, Wrapper,
 };
@@ -52,8 +51,6 @@ const SERVICE_PORT: u16 = 443;
 const DENIED_HOST: &str = "doctor-check.invalid";
 const PRIVATE_HOST: &str = "169.254.169.254";
 const PRIVATE_PORT: u16 = 80;
-const CLAUDE_CODE_SERVICE_HOST: &str = "api.anthropic.com";
-const CODEX_SERVICE_HOST: &str = "chatgpt.com";
 const PI_FALLBACK_SERVICE_HOST: &str = "api.anthropic.com";
 const FAKE_IP_RANGE: (Ipv4Addr, u8) = (Ipv4Addr::new(198, 18, 0, 0), 15);
 const FAKE_IP_HINT: &str = "codex's network proxy treats this range as private; turn off the fake-ip mode of the local proxy software";
@@ -740,12 +737,7 @@ impl Doctor {
         network: NetworkMode,
         proxy: Option<&ProxyEndpoint>,
     ) -> Result<Wrap, String> {
-        let state = match target.runtime {
-            Runtime::Pi => pi::user_state_dir(&target.session, &self.cwd)
-                .map(|dir| pi::prepare_state(&dir))
-                .transpose()?,
-            _ => None,
-        };
+        let state = runtime::sandbox_state(target.runtime, &target.session, &self.cwd)?;
         match &sandbox.wrapper {
             Wrapper::Bubblewrap { .. } => Ok(Wrap::Bubblewrap(sandbox::wrap(
                 sandbox,
@@ -766,17 +758,9 @@ impl Doctor {
             Wrapper::Codex => {
                 let tmp = std::fs::canonicalize(&dirs.tmp)
                     .map_err(|error| format!("cannot resolve {}: {error}", dirs.tmp.display()))?;
-                let mut prefix = vec![
-                    "sandbox".to_string(),
-                    "-P".to_string(),
-                    codex::PROFILE.to_string(),
-                ];
-                prefix.extend(codex::config(codex::filesystem_setting(&tmp)));
-                prefix.extend(codex::network_settings(network, &self.allow_hosts));
-                prefix.push("-C".to_string());
-                prefix.push(dirs.work.to_string_lossy().into_owned());
-                prefix.push("--".to_string());
-                Ok(Wrap::Codex { prefix })
+                Ok(Wrap::Codex {
+                    prefix: codex::sandbox_command(&tmp, &dirs.work, network, &self.allow_hosts),
+                })
             }
             Wrapper::None => Err("sandbox not running".to_string()),
         }
@@ -887,27 +871,14 @@ impl Doctor {
             };
             return (host, rule.port.unwrap_or(SERVICE_PORT));
         }
-        let host = match target.runtime {
-            Runtime::ClaudeCode => CLAUDE_CODE_SERVICE_HOST,
-            Runtime::Codex => CODEX_SERVICE_HOST,
-            Runtime::Pi => self
-                .pi_provider(target)
-                .as_deref()
-                .and_then(pi::service_host)
-                .unwrap_or(PI_FALLBACK_SERVICE_HOST),
-        };
-        (host.to_string(), SERVICE_PORT)
-    }
-
-    fn pi_provider(&self, target: &Target) -> Option<String> {
-        let expected = match &self.args.model {
-            Some(model) => Some(pi::parse_model(model).ok()?),
-            None => None,
-        };
-        pi::service_provider(
-            expected.as_ref(),
-            pi::user_state_dir(&target.session, &self.cwd).as_deref(),
+        let host = runtime::model_service_host(
+            target.runtime,
+            self.args.model.as_deref(),
+            &target.session,
+            &self.cwd,
         )
+        .unwrap_or_else(|| PI_FALLBACK_SERVICE_HOST.to_string());
+        (host, SERVICE_PORT)
     }
 
     fn network_test(
@@ -933,19 +904,12 @@ impl Doctor {
         let mut endpoint = None;
         if network::proxy_needed(runtime, mode, sandbox.runs()) {
             let mut bound = FilterProxy::bind(&self.tempdir)?;
-            let service_hosts = match runtime {
-                Runtime::Pi => self
-                    .pi_provider(target)
-                    .as_deref()
-                    .and_then(pi::service_host)
-                    .map(|host| vec![host.to_string()])
-                    .unwrap_or_default(),
-                Runtime::Codex => codex::SERVICE_HOSTS
-                    .iter()
-                    .map(|host| host.to_string())
-                    .collect(),
-                Runtime::ClaudeCode => Vec::new(),
-            };
+            let service_hosts = runtime::service_hosts(
+                runtime,
+                self.args.model.as_deref(),
+                &target.session,
+                &self.cwd,
+            );
             let seen = Arc::clone(&records);
             bound.serve_session(
                 Policy {
@@ -1053,7 +1017,7 @@ impl Doctor {
         if target.runtime != Runtime::Codex || self.args.network != NetworkMode::Custom {
             return detail;
         }
-        for host in [allowed_host, CODEX_SERVICE_HOST] {
+        for host in [allowed_host, codex::SERVICE_HOST] {
             if let Some(address) = fake_ip(host) {
                 return format!("{detail}. {host} resolves to {address} (fake-ip). {FAKE_IP_HINT}");
             }
