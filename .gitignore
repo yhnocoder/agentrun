@@ -10,5 +10,4 @@ __pycache__/
 .ruff_cache/
 node_modules/
 /target
-probe-out/
 accept-out/
