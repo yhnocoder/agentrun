@@ -35,7 +35,6 @@
     <tr><td><code>scripts/check_docs.py</code></td><td>设计文档的截图与机械检查，改动 <code>docs/</code> 后运行</td><td>scripts/test.sh</td></tr>
     <tr><td><code>tests/*.rs</code>、<code>tests/support/</code></td><td>cargo 集成测试与共用的辅助代码：<code>support/mod.rs</code>（<code>Meta</code>、<code>invocation</code>、<code>replay</code>、<code>assert_replay</code>、<code>events</code>、<code>texts</code>、<code>network_events</code>、<code>WebServer</code>、<code>sandbox_available</code>、<code>system_bwrap</code>、<code>open_pty</code>）、<code>support/env.rs</code>（<code>Env</code>、<code>Env::with</code>、<code>Outcome</code>、<code>Agentrun</code>、<code>Finished</code>、<code>wait_until</code>、<code>poll_until</code>、<code>write_script</code>）、<code>support/fake.rs</code>（<code>FakeAdapter</code>）、<code>support/process.rs</code>（<code>take_over_if_spawned</code>、<code>spawn_role</code>、<code>spawn_lock</code>、<code>process_is_gone</code>、<code>wait_until_gone</code>）、<code>support/harness.rs</code>（<code>run_tests</code>、<code>test_list!</code>）</td><td>tests/ 的分工</td></tr>
     <tr><td><code>tests/fixtures/</code></td><td>回放样本：三个运行时的原始输出与期望的事件流</td><td>回放样本</td></tr>
-    <tr><td><code>scripts/probe/</code></td><td>直接运行三个运行时并记录原始输出的脚本，回放样本的来源</td><td>回放样本</td></tr>
     <tr><td><code>scripts/accept/</code></td><td>验收脚本 <code>accept.sh</code>、<code>lib/util.sh</code>、<code>lib/scenarios.sh</code>、<code>lib/concurrent.sh</code> 与 docker 镜像的 <code>Dockerfile</code></td><td>验收脚本</td></tr>
     <tr><td><code>.github/workflows/ci.yml</code></td><td>每个 PR 与 <code>main</code> 的推送在 Linux 与 macOS 上运行的检查</td><td>CI</td></tr>
     <tr><td><code>.github/workflows/release.yml</code></td><td>四个可执行文件的构建与检查、第三方许可证文件、草稿 Release</td><td>发布</td></tr>
@@ -91,10 +90,10 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
   </tbody>
 </table>
 <p><code>support::replay</code> 读 <code>raw.jsonl</code>，按 <code>meta.json</code> 构造 <code>Invocation</code> 与 <code>Exit</code>，以 dry-run 方式调用适配器的 <code>launch</code>（codex 另给 <code>AGENTRUN_CODEX_AUTH</code> 的内容使登录检查通过），再把每行交给 <code>translate_line</code>，最后调用 <code>conclude</code> 并传入 <code>Launch</code> 记录的包裹方式，得到的事件去掉 <code>time</code> 与 <code>duration_ms</code> 后与 <code>events.jsonl</code> 逐个比较。<code>tests/fixtures/fake/basic.*</code> 没有 <code>meta.json</code>，给 <code>FakeAdapter</code> 用。</p>
-<p>样本来源：<code>scripts/probe/probe.sh</code> 在 Cloud Managed 容器、docker 与 macOS 上直接运行三个运行时，每个场景一个目录，记录原始输出、退出码与标准错误；<code>meta.json</code> 里 <code>/tmp/agentrun-probe-&lt;随机&gt;/&lt;场景&gt;-&lt;运行时&gt;</code> 形式的 <code>cwd</code> 就是这些目录。<code>events.jsonl</code> 是写适配器时由当时的适配器生成、逐条核对后保存的。样本记录时的运行时版本见<a href="run.html">运行</a>页的「运行时版本」。</p>
+<p>样本来源：在 Cloud Managed 容器、docker 与 macOS 上直接运行三个运行时录制，每个场景一个工作目录，记录原始输出、退出码与标准错误；<code>meta.json</code> 里 <code>/tmp/agentrun-probe-&lt;随机&gt;/&lt;场景&gt;-&lt;运行时&gt;</code> 形式的 <code>cwd</code> 就是录制时的工作目录。<code>events.jsonl</code> 是写适配器时由当时的适配器生成、逐条核对后保存的。样本记录时的运行时版本见<a href="run.html">运行</a>页的「运行时版本」。</p>
 <p>更新样本的步骤：</p>
 <ol>
-  <li>在装有该运行时的环境里录制原始输出。claude-code 与 codex 运行 <code>scripts/probe/probe.sh --runtimes &lt;运行时&gt; --only &lt;场景&gt;</code>，或者直接用 <code>agentrun &lt;运行时&gt; --raw &lt;文件&gt; --format jsonl</code> 运行一次，<code>--raw</code> 文件就是新的 <code>raw.jsonl</code>。pi 只用 <code>agentrun pi --raw &lt;文件&gt; --format jsonl</code> 录制，因为 probe 为 pi 另建状态目录并只写默认服务商与默认模型，agentrun 直接使用用户的状态目录（见<a href="session.html#pi-state">pi 使用用户的状态目录</a>），用 probe 录制的样本与 agentrun 实际运行的环境不同。</li>
+  <li>在装有该运行时的环境里用 <code>agentrun &lt;运行时&gt; --raw &lt;文件&gt; --format jsonl</code> 运行一次，<code>--raw</code> 文件就是新的 <code>raw.jsonl</code>。</li>
   <li>把工作目录、退出码与标准错误写进 <code>meta.json</code>。</li>
   <li>运行 <code>cargo test --test &lt;运行时&gt; replay_&lt;场景&gt;</code>，失败输出里的实际事件与期望事件逐条比较，确认差异来自运行时的变化而不是适配器的错误，再把实际事件写进 <code>events.jsonl</code>。</li>
 </ol>
