@@ -34,7 +34,7 @@
     <tr><td><code>src/sandbox/bubblewrap.rs</code></td><td>Linux 的 <code>probe</code>、<code>wrap_bwrap</code>、<code>ProxyForward</code></td><td>判断沙箱能不能用、用 bubblewrap 包裹命令（由 <code>wrap</code> 调用）</td></tr>
     <tr><td><code>src/sandbox/seatbelt.rs</code></td><td>macOS 的 <code>probe</code>、<code>seatbelt_profile</code>、<code>write_seatbelt_profile</code>、<code>wrap_seatbelt</code></td><td>判断沙箱能不能用、用 Seatbelt 包裹命令（由 <code>wrap</code> 调用）</td></tr>
     <tr><td><code>src/network/</code></td><td><code>mod.rs</code> 的 <code>ProxyEndpoint</code>、<code>proxy_needed</code>、<code>proxy_environment</code>；<code>rule.rs</code> 的 <code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>；<code>address.rs</code> 的 <code>is_private</code>；<code>upstream.rs</code> 的 <code>Upstream</code>、<code>NoProxyRule</code>、<code>ProxyAddress</code>；<code>proxy.rs</code> 的 <code>FilterProxy</code>（<code>bind</code>、<code>serve</code>、<code>serve_session</code>）；<code>http.rs</code> 与 <code>socks.rs</code> 的两种代理协议</td><td>网络、过滤代理、不支持 IPv6</td></tr>
-    <tr><td><code>src/runtime/claudecode.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/runtime/pi.rs</code></td><td>各自 <code>launch</code> 里生成的沙箱与网络参数：claude-code 的 <code>--settings</code> 与放行列表，codex 的 <code>network_settings</code> 与 <code>filesystem_setting</code>，pi 的 <code>SERVICE_HOSTS</code> 表、<code>service_provider</code> 与对 <code>sandbox::wrap</code> 的调用</td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/runtime/pi.rs</code></td><td>各自 <code>launch</code> 里生成的沙箱与网络参数：claude-code 的 <code>--settings</code> 与放行列表，codex 的 <code>sandbox_permissions</code>，pi 的 <code>SERVICE_HOSTS</code> 表、<code>service_provider</code> 与对 <code>sandbox::wrap</code> 的调用</td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>sandbox</code>、<code>sandbox_test</code>、<code>network</code>、<code>network_test</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
   </tbody>
 </table>
@@ -109,6 +109,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>macOS：Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、状态目录里这五个条目的字面路径（<code>literal</code>，来自 <code>PiState</code> 的 <code>writable</code>，不存在的也写，pi 自己创建）、<code>auth.json</code> 是符号链接时的链接目标，以及 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。状态目录里的其他条目不能新建也不能改写。</li>
 </ul>
 <p>pi、doctor 的沙箱与网络检查、测试里的 FakeAdapter 都通过 <code>sandbox::wrap</code> 包裹，<code>--dry-run</code> 时不写 Seatbelt 配置。理由：包裹逻辑分开写时，改了 bwrap 参数、socat 转发或 Seatbelt 配置的一处，另外几处不会跟着变，doctor 与测试检查的就不再是运行时实际使用的包裹。</p>
+<p>doctor 的沙箱与网络检查通过 <code>runtime::model_service_host</code>、<code>runtime::service_hosts</code>、<code>runtime::sandbox_state</code> 与 <code>codex::sandbox_command</code> 取运行时的参数，不自己按运行时分支。理由：分开写时改了一个运行时的启动参数，doctor 检查的就不再是运行时实际使用的参数。</p>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
   <li>pi 只放行五个条目，不放行整个状态目录：状态目录里有 pi 的启动脚本、<code>bin/</code> 与扩展，沙箱里的 agent 能改写它们时，用户下次在沙箱外运行 pi 就会执行 agent 写进去的代码。放行的五个条目是 pi 刷新令牌、读写模型缓存与读设置文件时必须写的文件与锁目录，锁必须建在用户目录里才能与用户自己的 pi 互斥，理由见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
@@ -181,7 +182,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>claude-code 的沙箱运行时，三种取值下会话环境都设置 <code>SOCAT_DEFAULT_LISTEN_IP=4</code>。理由：claude-code 在断网的网络命名空间里用 <code>socat</code> 把沙箱里的端口转发到它的代理 socket，没有指定地址族；内核没有 IPv6 时（Cloud Managed 容器），socat 1.8 选了 IPv6 而启动失败，claude-code 丢弃它的输出，沙箱里的命令连不上任何代理。这个变量让 socat 改用 IPv4 监听。</p>
 
 <h3>模型服务的主机</h3>
-<p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>。doctor 的网络检查用同一个函数 <code>pi::service_provider</code> 得到服务商。模型服务的主机只在 443 端口放行，并且跳过私有地址检查：</p>
+<p>pi 的进程整个在沙箱里，它访问模型服务也要经过代理。pi 不输出服务商的地址（<code>--list-models</code> 与 <code>auth check</code> 都没有，pi 1.0.1），所以 agentrun 自带一张表，按 <code>--model</code> 的前缀判断服务商，没给 <code>--model</code> 时读 pi 设置里的 <code>defaultProvider</code>。pi 的 <code>launch</code> 与 doctor 的网络检查用同一个函数 <code>pi::model_service</code> 得到服务商与主机。模型服务的主机只在 443 端口放行，并且跳过私有地址检查：</p>
 <table>
   <thead>
     <tr><th>pi 的服务商</th><th>放行的主机</th></tr>
