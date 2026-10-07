@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::cli::{Format, RunArgs, Runtime};
 use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{Record, SandboxKind};
-use crate::sandbox::Sandbox;
+use crate::sandbox::{PiState, Sandbox};
 use crate::session::Session;
 use claudecode::ClaudeCode;
 use codex::Codex;
@@ -33,6 +33,47 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+    }
+}
+
+pub(crate) fn model_service_host(
+    runtime: Runtime,
+    model: Option<&str>,
+    session: &Session,
+    cwd: &Path,
+) -> Option<String> {
+    match runtime {
+        Runtime::ClaudeCode => Some(claudecode::SERVICE_HOST.to_string()),
+        Runtime::Codex => Some(codex::SERVICE_HOST.to_string()),
+        Runtime::Pi => pi::model_service(model, pi::user_state_dir(session, cwd).as_deref())
+            .host
+            .map(str::to_string),
+    }
+}
+
+pub(crate) fn service_hosts(
+    runtime: Runtime,
+    model: Option<&str>,
+    session: &Session,
+    cwd: &Path,
+) -> Vec<String> {
+    match runtime {
+        Runtime::ClaudeCode => Vec::new(),
+        Runtime::Codex => codex::SERVICE_HOSTS.map(str::to_string).to_vec(),
+        Runtime::Pi => model_service_host(runtime, model, session, cwd)
+            .into_iter()
+            .collect(),
+    }
+}
+
+pub(crate) fn sandbox_state(
+    runtime: Runtime,
+    session: &Session,
+    cwd: &Path,
+) -> Result<Option<PiState>, String> {
+    match runtime {
+        Runtime::Pi => pi::session_state(pi::user_state_dir(session, cwd).as_deref(), false),
+        Runtime::ClaudeCode | Runtime::Codex => Ok(None),
     }
 }
 
@@ -101,6 +142,97 @@ pub struct Launch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn session(runtime: Runtime, state_dir: Option<&Path>) -> Session {
+        let env: Vec<(OsString, OsString)> = state_dir
+            .map(|dir| {
+                (
+                    OsString::from("PI_CODING_AGENT_DIR"),
+                    dir.as_os_str().to_owned(),
+                )
+            })
+            .into_iter()
+            .collect();
+        Session::assemble(runtime, &env, &[], &[], &[])
+    }
+
+    #[test]
+    fn model_service_host_and_service_hosts_per_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path();
+        let claude_code = session(Runtime::ClaudeCode, None);
+        let codex = session(Runtime::Codex, None);
+        assert_eq!(
+            model_service_host(Runtime::ClaudeCode, None, &claude_code, cwd),
+            Some("api.anthropic.com".to_string())
+        );
+        assert!(service_hosts(Runtime::ClaudeCode, None, &claude_code, cwd).is_empty());
+        assert_eq!(
+            model_service_host(Runtime::Codex, None, &codex, cwd),
+            Some("chatgpt.com".to_string())
+        );
+        assert_eq!(
+            service_hosts(Runtime::Codex, None, &codex, cwd),
+            [
+                "chatgpt.com",
+                "ab.chatgpt.com",
+                "auth.openai.com",
+                "api.openai.com"
+            ]
+        );
+
+        let state_dir = root.path().join("pi");
+        std::fs::create_dir(&state_dir).unwrap();
+        let pi = session(Runtime::Pi, Some(&state_dir));
+        let cases = [
+            (Some("deepseek/deepseek-v4-flash"), Some("api.deepseek.com")),
+            (Some("deepseek"), None),
+            (None, None),
+        ];
+        for (model, host) in cases {
+            assert_eq!(
+                model_service_host(Runtime::Pi, model, &pi, cwd),
+                host.map(str::to_string),
+                "{model:?}"
+            );
+            assert_eq!(
+                service_hosts(Runtime::Pi, model, &pi, cwd),
+                host.map(str::to_string).into_iter().collect::<Vec<_>>(),
+                "{model:?}"
+            );
+        }
+        std::fs::write(
+            state_dir.join("settings.json"),
+            r#"{"defaultProvider":"openrouter"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            model_service_host(Runtime::Pi, None, &pi, cwd),
+            Some("openrouter.ai".to_string())
+        );
+        assert_eq!(
+            service_hosts(Runtime::Pi, None, &pi, cwd),
+            ["openrouter.ai"]
+        );
+    }
+
+    #[test]
+    fn sandbox_state_prepares_only_the_pi_state_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path();
+        let state_dir = root.path().join("pi");
+        for runtime in [Runtime::ClaudeCode, Runtime::Codex] {
+            assert_eq!(
+                sandbox_state(runtime, &session(runtime, Some(&state_dir)), cwd),
+                Ok(None)
+            );
+        }
+        assert!(!state_dir.exists());
+        let state = sandbox_state(Runtime::Pi, &session(Runtime::Pi, Some(&state_dir)), cwd)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.dir, std::fs::canonicalize(&state_dir).unwrap());
+    }
 
     #[test]
     fn detail_head_and_tail_keep_500_characters() {

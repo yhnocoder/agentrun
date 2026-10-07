@@ -24,6 +24,7 @@ pub(crate) const SERVICE_HOSTS: [&str; 4] = [
     "auth.openai.com",
     "api.openai.com",
 ];
+pub(crate) const SERVICE_HOST: &str = SERVICE_HOSTS[0];
 const FIXED_ARGS: [&str; 6] = [
     "exec",
     "--json",
@@ -32,7 +33,7 @@ const FIXED_ARGS: [&str; 6] = [
     "--ignore-rules",
     "-C",
 ];
-pub(crate) const PROFILE: &str = "agentrun";
+const PROFILE: &str = "agentrun";
 const FULL_ACCESS_PROFILE: &str = "\":danger-full-access\"";
 const SETTINGS: [&str; 5] = [
     "approval_policy=\"never\"",
@@ -178,8 +179,11 @@ impl Adapter for Codex {
                 })?
             };
             argv.extend(config(format!("default_permissions={PROFILE}")));
-            argv.extend(config(filesystem_setting(&tempdir)));
-            argv.extend(network_settings(network, &invocation.allow_hosts));
+            argv.extend(sandbox_permissions(
+                &tempdir,
+                network,
+                &invocation.allow_hosts,
+            ));
         } else {
             argv.extend(config(format!("default_permissions={FULL_ACCESS_PROFILE}")));
         }
@@ -334,18 +338,42 @@ pub(crate) fn create_home(home: &Path, login: &Path) -> Result<(), String> {
         })
 }
 
-pub(crate) fn config(value: String) -> [String; 2] {
+pub(crate) fn sandbox_permissions(
+    tempdir: &Path,
+    network: NetworkMode,
+    allow_hosts: &[HostRule],
+) -> Vec<String> {
+    let mut permissions = config(filesystem_setting(tempdir)).to_vec();
+    permissions.extend(network_settings(network, allow_hosts));
+    permissions
+}
+
+pub(crate) fn sandbox_command(
+    tempdir: &Path,
+    cwd: &Path,
+    network: NetworkMode,
+    allow_hosts: &[HostRule],
+) -> Vec<String> {
+    let mut command = ["sandbox", "-P", PROFILE].map(str::to_string).to_vec();
+    command.extend(sandbox_permissions(tempdir, network, allow_hosts));
+    command.push("-C".to_string());
+    command.push(cwd.to_string_lossy().into_owned());
+    command.push("--".to_string());
+    command
+}
+
+fn config(value: String) -> [String; 2] {
     ["-c".to_string(), value]
 }
 
-pub(crate) fn filesystem_setting(tempdir: &Path) -> String {
+fn filesystem_setting(tempdir: &Path) -> String {
     format!(
         "permissions.{PROFILE}.filesystem={{\":root\"=\"read\", \":workspace_roots\"={{\".\"=\"write\"}}, {}=\"write\"}}",
         toml_string(&tempdir.to_string_lossy())
     )
 }
 
-pub(crate) fn network_settings(network: NetworkMode, allow_hosts: &[HostRule]) -> Vec<String> {
+fn network_settings(network: NetworkMode, allow_hosts: &[HostRule]) -> Vec<String> {
     match network {
         NetworkMode::None => {
             config(format!("permissions.{PROFILE}.network.enabled=false")).to_vec()
@@ -815,6 +843,34 @@ mod tests {
             "{detail}"
         );
         assert!(!home_path(&setup.tempdir()).exists());
+    }
+
+    #[test]
+    fn sandbox_command_wraps_the_permissions_with_the_profile_and_cwd() {
+        let tempdir = Path::new("/tmp/session");
+        let cwd = Path::new("/work/repo");
+        let allow_hosts =
+            network::check_usage(NetworkMode::Custom, &["example.com".to_string()]).unwrap();
+        for (mode, rules) in [
+            (NetworkMode::None, &[][..]),
+            (NetworkMode::Full, &[][..]),
+            (NetworkMode::Custom, &allow_hosts[..]),
+        ] {
+            let command = sandbox_command(tempdir, cwd, mode, rules);
+            let permissions = super::sandbox_permissions(tempdir, mode, rules);
+            assert_eq!(command[..3], strings(&["sandbox", "-P", "agentrun"]));
+            assert_eq!(command[3..command.len() - 3], permissions);
+            assert_eq!(
+                command[command.len() - 3..],
+                strings(&["-C", "/work/repo", "--"])
+            );
+            assert_eq!(
+                permissions
+                    .windows(2)
+                    .any(|pair| pair == ["--enable", "network_proxy"]),
+                mode == NetworkMode::Custom
+            );
+        }
     }
 
     #[test]
