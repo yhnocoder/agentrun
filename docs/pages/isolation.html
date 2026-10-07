@@ -30,7 +30,7 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/sandbox/mod.rs</code></td><td><code>Sandbox</code>、<code>Wrapper</code>、<code>resolve_mode</code>、<code>check</code>、<code>PiState</code>、<code>Wrapped</code>、<code>wrap</code>、<code>wrapper_failure</code>、<code>start_failure</code>、<code>exit_text</code></td><td>沙箱模式、判断沙箱能不能用</td></tr>
+    <tr><td><code>src/sandbox/mod.rs</code></td><td><code>Sandbox</code>（<code>new</code>）、<code>Wrapper</code>、<code>resolve_mode</code>、<code>check</code>、<code>PiState</code>、<code>Wrapped</code>、<code>wrap</code>、<code>wrapper_failure</code>、<code>start_failure</code>、<code>exit_text</code></td><td>沙箱模式、判断沙箱能不能用</td></tr>
     <tr><td><code>src/sandbox/bubblewrap.rs</code></td><td><code>probe</code>、<code>wrap_bwrap</code>、<code>ProxyForward</code></td><td>判断沙箱能不能用、用 bubblewrap 包裹命令（由 <code>wrap</code> 调用）</td></tr>
     <tr><td><code>src/sandbox/seatbelt.rs</code></td><td><code>probe</code>、<code>write_seatbelt_profile</code>、<code>wrap_seatbelt</code></td><td>判断沙箱能不能用、用 Seatbelt 包裹命令（由 <code>wrap</code> 调用）</td></tr>
     <tr><td><code>src/network/</code></td><td><code>mod.rs</code> 的 <code>ProxyEndpoint</code>、<code>proxy_needed</code>、<code>proxy_environment</code>；<code>rule.rs</code> 的 <code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>；<code>address.rs</code> 的 <code>is_private</code>；<code>upstream.rs</code> 的 <code>Upstream</code>、<code>ProxyAddress</code>；<code>proxy.rs</code> 的 <code>FilterProxy</code>（<code>bind</code>、<code>endpoint</code>、<code>serve_session</code>）；<code>http.rs</code> 的 <code>handle_http</code>；<code>socks.rs</code> 的 <code>handle_socks</code></td><td>网络、过滤代理、不支持 IPv6</td></tr>
