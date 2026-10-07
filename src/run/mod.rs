@@ -333,16 +333,10 @@ fn prepare(
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
     let invocation = Invocation {
-        runtime,
-        args,
-        cwd,
-        prompt,
         format,
         sandbox,
-        tempdir: PathBuf::new(),
-        session,
         allow_hosts,
-        proxy: None,
+        ..Invocation::new(runtime, args, cwd, prompt, session)
     };
     Ok(Ready {
         invocation,

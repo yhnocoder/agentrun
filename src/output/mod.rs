@@ -9,12 +9,12 @@ use std::io::Write;
 use crate::cli::{Format, SandboxMode};
 
 pub use aggregate::{Aggregator, OpenTools, Record, Translated};
-pub use event::{Event, Network, NetworkReason, SandboxKind, SubagentStatus};
+pub use event::{Event, SandboxKind, SubagentStatus};
 pub use rich::Rich;
 pub use text::TextFormatter;
 pub use usage::{TokenCounts, Usage};
 
-pub(crate) use event::{Body, End, EndStatus, NetworkInfo, Signal, Start};
+pub(crate) use event::{Body, End, EndStatus, Network, NetworkInfo, NetworkReason, Signal, Start};
 pub(crate) use rich::REFRESH_PERIOD;
 
 pub(crate) enum Output {

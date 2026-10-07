@@ -602,21 +602,14 @@ impl Doctor {
     fn pi_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
         let (expected, source) = self.pi_expected_model(target)?;
         let invocation = Invocation {
-            runtime: Runtime::Pi,
-            args: self.run_args(),
-            cwd: self.cwd.clone(),
-            prompt: PROMPT.to_string(),
-            format: Format::Jsonl,
-            sandbox: Sandbox {
-                mode: SandboxMode::Off,
-                wrapper: Wrapper::None,
-                reason: String::new(),
-                description: String::new(),
-            },
             tempdir: self.tempdir.clone(),
-            session: target.session.clone(),
-            allow_hosts: Vec::new(),
-            proxy: None,
+            ..Invocation::new(
+                Runtime::Pi,
+                self.run_args(),
+                self.cwd.clone(),
+                PROMPT.to_string(),
+                target.session.clone(),
+            )
         };
         let launch = Pi::new().launch(executable, &invocation)?;
         let finished = self.execute(

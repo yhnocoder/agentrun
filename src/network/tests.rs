@@ -6,10 +6,56 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use agentrun::cli::NetworkMode;
-use agentrun::network::{FilterProxy, HostRule, Policy, ProxyAddress, Upstream, parse_no_proxy};
-use agentrun::output::{Network, NetworkReason};
 use tempfile::TempDir;
+
+use super::upstream::{Upstream, parse_no_proxy};
+use super::*;
+use crate::output::{Network, NetworkReason};
+
+#[test]
+fn proxy_runs_only_with_a_sandbox_and_depends_on_the_runtime() {
+    for mode in [NetworkMode::None, NetworkMode::Full, NetworkMode::Custom] {
+        assert!(proxy_needed(Runtime::Pi, mode, true), "{mode:?}");
+        assert!(!proxy_needed(Runtime::Pi, mode, false), "{mode:?}");
+        assert!(!proxy_needed(Runtime::ClaudeCode, mode, false), "{mode:?}");
+        assert!(!proxy_needed(Runtime::Codex, mode, false), "{mode:?}");
+    }
+    assert!(!proxy_needed(Runtime::ClaudeCode, NetworkMode::None, true));
+    assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Full, true));
+    assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Custom, true));
+    assert!(!proxy_needed(Runtime::Codex, NetworkMode::None, true));
+    assert!(!proxy_needed(Runtime::Codex, NetworkMode::Full, true));
+    assert!(proxy_needed(Runtime::Codex, NetworkMode::Custom, true));
+}
+
+#[test]
+fn proxy_environment_sets_both_cases_and_clears_no_proxy() {
+    let env = proxy_environment("4321");
+    let names: Vec<String> = env
+        .iter()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "ALL_PROXY",
+            "https_proxy",
+            "http_proxy",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy"
+        ]
+    );
+    for (name, value) in &env {
+        if name.to_string_lossy().to_lowercase() == "no_proxy" {
+            assert!(value.is_empty());
+        } else {
+            assert_eq!(value, "http://127.0.0.1:4321");
+        }
+    }
+}
 
 const BASIC_USER_PASS: &str = "Basic dXNlcjpwYXNz";
 

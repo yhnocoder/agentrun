@@ -558,11 +558,10 @@ fn model_usage_counts(usage: &Value) -> TokenCounts {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
     use serde_json::json;
 
     use super::*;
-    use crate::cli::{Cli, Format, Parsed, SandboxMode};
+    use crate::cli::{SandboxMode, parse_run};
     use crate::network;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::Session;
@@ -570,33 +569,25 @@ mod tests {
     fn invocation(sandboxed: bool, extra: &[&str]) -> Invocation {
         let mut args = vec!["agentrun", "claude-code", "--prompt", "hi"];
         args.extend(extra);
-        let (runtime, args) = match Cli::try_parse_from(args).unwrap().command.into_parsed() {
-            Parsed::Run(runtime, args) => (runtime, args),
-            _ => unreachable!("the tests parse runtime subcommands"),
+        let (runtime, args) = parse_run(&args);
+        let wrapper = if sandboxed {
+            Wrapper::Bubblewrap {
+                bwrap: PathBuf::from("/usr/bin/bwrap"),
+                socat: PathBuf::from("/usr/bin/socat"),
+            }
+        } else {
+            Wrapper::None
         };
         Invocation {
-            runtime,
-            args,
-            cwd: PathBuf::from("/work/repo"),
-            prompt: "hi".to_string(),
-            format: Format::Jsonl,
-            sandbox: Sandbox {
-                mode: SandboxMode::On,
-                wrapper: if sandboxed {
-                    Wrapper::Bubblewrap {
-                        bwrap: PathBuf::from("/usr/bin/bwrap"),
-                        socat: PathBuf::from("/usr/bin/socat"),
-                    }
-                } else {
-                    Wrapper::None
-                },
-                reason: String::new(),
-                description: String::new(),
-            },
+            sandbox: Sandbox::new(SandboxMode::On, wrapper),
             tempdir: PathBuf::from("/tmp/agentrun-abc"),
-            session: Session::assemble(runtime, &[], &[], &[], &[]),
-            allow_hosts: Vec::new(),
-            proxy: None,
+            ..Invocation::new(
+                runtime,
+                args,
+                PathBuf::from("/work/repo"),
+                "hi".to_string(),
+                Session::assemble(runtime, &[], &[], &[], &[]),
+            )
         }
     }
 

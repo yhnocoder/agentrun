@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Instant;
 
-use agentrun::cli::{Cli, Format, Parsed, Runtime, SandboxMode};
+use agentrun::cli::{Cli, Parsed, Runtime, SandboxMode};
 use agentrun::output::{Aggregator, SandboxKind};
 use agentrun::run::{Exit, conclude, stderr_tail, translate_line};
 use agentrun::runtime::{Adapter, Invocation};
@@ -38,29 +38,23 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
     let Parsed::Run(runtime, args) = cli.command.into_parsed() else {
         unreachable!("the tests parse runtime subcommands");
     };
+    let wrapper = if sandboxed {
+        Wrapper::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            socat: PathBuf::from("/usr/bin/socat"),
+        }
+    } else {
+        Wrapper::None
+    };
     Invocation {
-        runtime,
-        args,
-        cwd: cwd.to_path_buf(),
-        prompt: prompt.to_string(),
-        format: Format::Jsonl,
-        sandbox: Sandbox {
-            mode: SandboxMode::On,
-            wrapper: if sandboxed {
-                Wrapper::Bubblewrap {
-                    bwrap: PathBuf::from("/usr/bin/bwrap"),
-                    socat: PathBuf::from("/usr/bin/socat"),
-                }
-            } else {
-                Wrapper::None
-            },
-            reason: String::new(),
-            description: String::new(),
-        },
-        tempdir: PathBuf::new(),
-        session: Session::assemble(runtime, &[], &[], &[], &[]),
-        allow_hosts: Vec::new(),
-        proxy: None,
+        sandbox: Sandbox::new(SandboxMode::On, wrapper),
+        ..Invocation::new(
+            runtime,
+            args,
+            cwd.to_path_buf(),
+            prompt.to_string(),
+            Session::assemble(runtime, &[], &[], &[], &[]),
+        )
     }
 }
 
