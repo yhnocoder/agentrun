@@ -34,7 +34,7 @@
     <tr><th>位置</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>：<code>launch</code> 生成本页「怎样产生这条流」的命令，<code>translate</code> 处理 <code>message_start</code>、<code>message_end</code> 与 <code>tool_execution_*</code>，<code>failure</code> 读最后一条 assistant 消息的 <code>stopReason</code>；<code>Model</code>、<code>parse_model</code>、<code>SERVICE_HOSTS</code></td></tr>
+    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>（<code>launch</code>、<code>translate</code>、<code>failure</code>）</td></tr>
     <tr><td><code>tests/fixtures/pi/</code></td><td>本页样本的原始输出 <code>*.raw.jsonl</code> 与对应的统一事件 <code>*.events.jsonl</code>，格式见<a href="testing.html#fixtures">测试与发布</a></td></tr>
     <tr><td><code>tests/pi.rs</code></td><td>回放这些样本的 <code>replay_*</code> 测试与用假 <code>pi</code> 脚本做的适配器测试</td></tr>
   </tbody>
@@ -46,6 +46,7 @@
   --offline --tools read,bash,edit,write,grep,find,ls \
   -- "提示词"</code></pre>
 <p><code>--mode json</code> 选择逐行 JSON 输出，处理完命令行给出的全部提示词后退出，运行中不接受新的输入。<code>-p</code>（<code>--print</code>）在 <code>--mode json</code> 下可以省略，加上它的效果相同。提示词也可以从标准输入管道传入。标准输出里只有 JSON 行，诊断信息写到标准错误。</p>
+<p>agentrun 的 <code>Pi::launch</code> 生成的命令以上面这组选项为基础。</p>
 <p>以下选项改变流的内容：</p>
 <table>
   <thead>
@@ -227,7 +228,7 @@ interface AgentSettled { type: "agent_settled"; }  // pi 不会再自动继续�
 { "type": "agent_settled" }</code></pre>
 
 <h2>message 事件</h2>
-<p><code>message_start</code> 与 <code>message_end</code> 只有一个字段 <code>message</code>。<code>message.role</code> 决定对象的其余字段。观测到四种角色：<code>system</code>、<code>user</code>、<code>assistant</code>、<code>toolResult</code>。文档另外定义了 <code>bashExecution</code>（RPC 的直接 shell 命令）、<code>custom</code>（扩展注入的上下文）、<code>branchSummary</code> 与 <code>compactionSummary</code>（压缩产生的摘要），解析器应容忍未知角色。</p>
+<p><code>message_start</code> 与 <code>message_end</code> 只有一个字段 <code>message</code>。<code>message.role</code> 决定对象的其余字段。观测到四种角色：<code>system</code>、<code>user</code>、<code>assistant</code>、<code>toolResult</code>。文档另外定义了 <code>bashExecution</code>（RPC 的直接 shell 命令）、<code>custom</code>（扩展注入的上下文）、<code>branchSummary</code> 与 <code>compactionSummary</code>（压缩产生的摘要），解析器应容忍未知角色。agentrun 中处理这两种事件的是 <code>Pi::translate</code> 里 <code>type</code> 为 <code>message_start</code> 与 <code>message_end</code> 的分支。</p>
 <pre><code class="language-typescript">interface MessageStart { type: "message_start"; message: Message; }
 interface MessageEnd { type: "message_end"; message: Message; }      // message 是权威的完整消息
 
@@ -546,6 +547,7 @@ interface ImageContent {                // 文档：只出现在 user 与 toolRe
 }</code></pre>
 
 <h2>tool_execution 事件</h2>
+<p>agentrun 中处理这两种事件的是 <code>Pi::translate</code> 里 <code>type</code> 为 <code>tool_execution_start</code> 与 <code>tool_execution_end</code> 的分支。</p>
 <pre><code class="language-typescript">interface ToolExecutionStart {
   type: "tool_execution_start";
   toolCallId: string;                   // 对应 ToolCall 的 id
@@ -686,6 +688,7 @@ interface SessionInfoChanged { type: "session_info_changed"; name?: string; }   
 interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; }</code></pre>
 
 <h2>错误、中断与退出码</h2>
+<p>agentrun 的 <code>Pi::failure</code> 读最后一条 assistant 消息的 <code>stopReason</code> 判断成败。</p>
 <table>
   <thead>
     <tr><th>情形</th><th>退出码</th><th>流里的表现</th></tr>

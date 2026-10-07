@@ -30,12 +30,12 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/output/event.rs</code></td><td><code>SCHEMA</code>、<code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code> 构造启动前或启动失败时的 <code>end</code>）、<code>EndStatus</code> 与 <code>Signal</code>（含退出码）</td><td>统一事件流、end.status</td></tr>
+    <tr><td><code>src/output/event.rs</code></td><td><code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code>）、<code>EndStatus</code>、<code>Signal</code></td><td>统一事件流、end.status</td></tr>
     <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
-    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>（处理一行的全部记录，返回 <code>Translated</code>）、<code>finish</code>、<code>open_tools</code>）、<code>Record</code>、<code>Translated</code>、<code>OpenTools</code>、<code>Summary</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
-    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code> 按格式与标准输出是否为终端选择输出、<code>set_open_tools</code>）、<code>write_end</code>（只输出一个 <code>end</code>，用于被拒绝与启动前收到信号）</td><td>text 格式、rich 格式</td></tr>
+    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tools</code>）、<code>Record</code>、<code>Translated</code>、<code>OpenTools</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
+    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>、<code>set_open_tools</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
     <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
-    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>Panel</code>（subagent 的标签与模型读 <code>TextFormatter</code> 记下的值）、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
+    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
 <p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，运行框架每处理完一行原始输出，把 <code>Aggregator::open_tools</code> 的快照交给 rich，用来显示正在执行的工具。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
@@ -384,7 +384,7 @@ subagent  2 running <span class="ref">2</span>
 ⠸ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 54.2k  cached 78%  ctx 61.3k <span class="ref">3</span></div>
 <ol class="callouts">
   <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
-  <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。</li>
+  <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。标签与模型取自 <code>TextFormatter</code> 记下的值，与 text 格式显示的相同。</li>
   <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
 <p>「正在执行的工具」在调用开始时就要显示，而 <code>tool</code> 事件在调用结束时才输出，所以 rich 从解析器内部记录的「已开始、未结束的调用」取这一项，不从事件流取。</p>
