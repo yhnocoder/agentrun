@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::event::{Body, EndStatus, Event, SandboxKind};
 use super::usage::TokenCounts;
 use crate::cli::SandboxMode;
+use crate::json::first_line;
 
 pub struct TextFormatter {
     sandbox: SandboxMode,
@@ -46,7 +47,7 @@ impl TextFormatter {
                 Vec::new()
             }
             Body::SubagentStart(start) => {
-                let label = subagent_label(&start.kind, start.number);
+                let label = label_for(&start.kind, start.number);
                 self.labels.insert(start.id.clone(), label.clone());
                 if let Some(model) = &start.model {
                     self.subagent_models
@@ -117,6 +118,14 @@ impl TextFormatter {
         ))
     }
 
+    pub fn subagent_label(&self, id: &str) -> Option<&str> {
+        self.labels.get(id).map(String::as_str)
+    }
+
+    pub fn subagent_model(&self, id: &str) -> Option<&str> {
+        self.subagent_models.get(id).map(String::as_str)
+    }
+
     fn label(&self, agent: Option<&str>) -> String {
         agent
             .and_then(|id| self.labels.get(id))
@@ -125,15 +134,13 @@ impl TextFormatter {
     }
 }
 
-pub fn first_line(text: &str) -> &str {
-    text.lines().next().unwrap_or("")
-}
-
 fn single_line(text: &str) -> String {
-    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
+    text.trim_end_matches(['\r', '\n'])
+        .replace("\r\n", " ")
+        .replace(['\n', '\r'], " ")
 }
 
-pub fn subagent_label(kind: &str, number: u64) -> String {
+fn label_for(kind: &str, number: u64) -> String {
     format!("{}#{}", kind.to_lowercase(), number)
 }
 
@@ -399,7 +406,7 @@ mod tests {
                 "cannot start\r\nsee above\n",
                 TokenCounts::default()
             )),
-            vec!["[end] rejected cannot start see above "]
+            vec!["[end] rejected cannot start see above"]
         );
     }
 }

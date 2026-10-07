@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record};
-use crate::cli::{NetworkMode, Runtime};
+use super::{Adapter, Failure, Invocation, Launch};
+use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
-use crate::output::{SubagentStatus, TokenCounts, Usage};
+use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
 
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
@@ -36,7 +36,13 @@ pub struct ClaudeCode {
     subagents: HashSet<String>,
     denied: HashSet<String>,
     pending_usages: Vec<PendingUsage>,
-    last_result: Option<Value>,
+    last_result: Option<LastResult>,
+}
+
+struct LastResult {
+    is_error: bool,
+    text: Option<String>,
+    by_model: Option<Vec<(String, TokenCounts)>>,
 }
 
 struct PendingUsage {
@@ -170,7 +176,8 @@ impl ClaudeCode {
                     .unwrap_or(DEFAULT_SUBAGENT_KIND)
                     .to_string(),
                 model: optional_string(&input["model"]),
-                description: first_line(input["description"].as_str().unwrap_or_default()),
+                description: first_line(input["description"].as_str().unwrap_or_default())
+                    .to_string(),
             });
         }
         if name == HANDBACK_TOOL {
@@ -262,6 +269,10 @@ impl ClaudeCode {
 impl Adapter for ClaudeCode {
     fn runtime(&self) -> Runtime {
         Runtime::ClaudeCode
+    }
+
+    fn check_args(&self, _args: &RunArgs) -> Result<(), String> {
+        Ok(())
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
@@ -362,6 +373,8 @@ impl Adapter for ClaudeCode {
             env,
             signal_wrapped_child: false,
             service_hosts: Vec::new(),
+            wrapped: SandboxKind::None,
+            private_dirs: Vec::new(),
         })
     }
 
@@ -375,7 +388,16 @@ impl Adapter for ClaudeCode {
             Some("user") => self.translate_user(line),
             Some("system") => self.translate_system(line),
             Some("result") => {
-                self.last_result = Some(line.clone());
+                self.last_result = Some(LastResult {
+                    is_error: line["is_error"] == Value::Bool(true),
+                    text: optional_string(&line["result"]),
+                    by_model: line["modelUsage"].as_object().map(|models| {
+                        models
+                            .iter()
+                            .map(|(model, usage)| (model.clone(), model_usage_counts(usage)))
+                            .collect()
+                    }),
+                });
                 Vec::new()
             }
             _ => Vec::new(),
@@ -385,16 +407,10 @@ impl Adapter for ClaudeCode {
     fn after_exit(&mut self) -> Vec<Record> {
         let mut records = self.flush_usages();
         if let Some(result) = &self.last_result {
-            if let Some(text) = result["result"].as_str() {
-                records.push(Record::Result {
-                    text: text.to_string(),
-                });
+            if let Some(text) = &result.text {
+                records.push(Record::Result { text: text.clone() });
             }
-            if let Some(models) = result["modelUsage"].as_object() {
-                let by_model: Vec<(String, TokenCounts)> = models
-                    .iter()
-                    .map(|(model, usage)| (model.clone(), model_usage_counts(usage)))
-                    .collect();
+            if let Some(by_model) = &result.by_model {
                 records.push(Record::RunUsage(Usage::sum(
                     by_model
                         .iter()
@@ -405,13 +421,13 @@ impl Adapter for ClaudeCode {
         records
     }
 
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
         match &self.last_result {
-            Some(result) if result["is_error"] == Value::Bool(true) => {
-                Some(result["result"].as_str().unwrap_or_default().to_string())
-            }
-            _ if exit_code != Some(0) => Some(String::new()),
-            None => Some(NO_RESULT_DETAIL.to_string()),
+            Some(result) if result.is_error => Some(Failure::from_detail(
+                result.text.clone().unwrap_or_default(),
+            )),
+            _ if exit_code != Some(0) => Some(Failure::Unexplained),
+            None => Some(Failure::Message(NO_RESULT_DETAIL.to_string())),
             Some(_) => None,
         }
     }
@@ -489,7 +505,9 @@ fn format_uuid_v4(mut bytes: [u8; 16]) -> String {
 
 fn tool_summary(name: &str, input: &Value, cwd: &Path) -> String {
     let value = match name {
-        "Bash" => input["command"].as_str().map(first_line),
+        "Bash" => input["command"]
+            .as_str()
+            .map(|command| first_line(command).to_string()),
         "Read" | "Edit" | "Write" => input["file_path"]
             .as_str()
             .map(|path| display_path(Path::new(path), cwd)),
@@ -578,7 +596,6 @@ mod tests {
             session: Session::assemble(runtime, &[], &[], &[], &[]),
             allow_hosts: Vec::new(),
             proxy: None,
-            codex_home: None,
         }
     }
 
@@ -1107,21 +1124,35 @@ mod tests {
     }
 
     #[test]
+    fn check_args_accepts_max_turns() {
+        let invocation = invocation(false, &["--max-turns", "3"]);
+        assert_eq!(ClaudeCode::new().check_args(&invocation.args), Ok(()));
+    }
+
+    #[test]
     fn failure_cases_in_order() {
         let mut adapter = ClaudeCode::new();
         assert_eq!(
-            adapter.failure(Some(0), ""),
-            Some(NO_RESULT_DETAIL.to_string())
+            adapter.failure(Some(0)),
+            Some(Failure::Message(NO_RESULT_DETAIL.to_string()))
         );
-        assert_eq!(adapter.failure(Some(1), "err"), Some(String::new()));
-        assert_eq!(adapter.failure(None, "err"), Some(String::new()));
+        assert_eq!(adapter.failure(Some(1)), Some(Failure::Unexplained));
+        assert_eq!(adapter.failure(None), Some(Failure::Unexplained));
         adapter.translate(&json!({"type": "result", "is_error": false, "result": "ok"}));
-        assert_eq!(adapter.failure(Some(0), ""), None);
-        assert_eq!(adapter.failure(Some(2), ""), Some(String::new()));
+        assert_eq!(adapter.failure(Some(0)), None);
+        assert_eq!(adapter.failure(Some(2)), Some(Failure::Unexplained));
         adapter.translate(&json!({"type": "result", "is_error": true, "result": "bad model"}));
-        assert_eq!(adapter.failure(Some(0), ""), Some("bad model".to_string()));
-        assert_eq!(adapter.failure(Some(1), "x"), Some("bad model".to_string()));
+        assert_eq!(
+            adapter.failure(Some(0)),
+            Some(Failure::Message("bad model".to_string()))
+        );
+        assert_eq!(
+            adapter.failure(Some(1)),
+            Some(Failure::Message("bad model".to_string()))
+        );
         adapter.translate(&json!({"type": "result", "is_error": true}));
-        assert_eq!(adapter.failure(Some(0), ""), Some(String::new()));
+        assert_eq!(adapter.failure(Some(0)), Some(Failure::Unexplained));
+        adapter.translate(&json!({"type": "result", "is_error": true, "result": ""}));
+        assert_eq!(adapter.failure(Some(0)), Some(Failure::Unexplained));
     }
 }

@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
-use agentrun::run::{Caller, Signals, claim_orphans, run};
+use agentrun::claim_orphans;
+use agentrun::run::{Caller, Signals, run};
 use agentrun::runtime::Adapter;
 
 use super::env::poll_until;

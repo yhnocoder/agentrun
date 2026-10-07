@@ -3,10 +3,12 @@ use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use super::aggregate::OpenTools;
 use super::event::{Body, Event};
-use super::text::{TextFormatter, first_line, subagent_label};
+use super::text::TextFormatter;
 use super::usage::{TokenCounts, tokens};
 use crate::cli::SandboxMode;
+use crate::json::first_line;
 
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -18,8 +20,6 @@ const RESET: &str = "\x1b[0m";
 const CLEAR_TO_END: &str = "\x1b[J";
 const HIDE_CURSOR: &str = "\x1b[?25l";
 const SHOW_CURSOR: &str = "\x1b[?25h";
-
-pub type OpenTool<'a> = &'a dyn Fn(Option<&str>) -> Option<String>;
 
 pub fn terminal_size() -> (usize, usize) {
     let mut size: libc::winsize = unsafe { std::mem::zeroed() };
@@ -43,8 +43,6 @@ struct Panel {
 
 struct Subagent {
     id: String,
-    label: String,
-    model: Option<String>,
     description: String,
     started: Instant,
     context: Option<u64>,
@@ -69,24 +67,24 @@ impl Panel {
             Body::Usage(usage) => {
                 self.totals.add(&usage.counts);
                 self.any_usage = true;
-                let (model, context) = match &usage.parent {
-                    None => (&mut self.main_model, &mut self.main_context),
-                    Some(id) => match self.subagents.iter_mut().find(|s| s.id == *id) {
-                        Some(subagent) => (&mut subagent.model, &mut subagent.context),
-                        None => return,
-                    },
-                };
-                if usage.model.is_some() {
-                    *model = usage.model.clone();
+                match &usage.parent {
+                    None => {
+                        if usage.model.is_some() {
+                            self.main_model = usage.model.clone();
+                        }
+                        self.main_context = usage.context_tokens;
+                    }
+                    Some(id) => {
+                        if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == *id) {
+                            subagent.context = usage.context_tokens;
+                        }
+                    }
                 }
-                *context = usage.context_tokens;
             }
             Body::SubagentStart(start) => {
                 self.seen_subagent = true;
                 self.subagents.push(Subagent {
                     id: start.id.clone(),
-                    label: subagent_label(&start.kind, start.number),
-                    model: start.model.clone(),
                     description: first_line(&start.description).to_string(),
                     started: now,
                     context: None,
@@ -99,7 +97,8 @@ impl Panel {
 
     fn lines(
         &self,
-        open_tool: OpenTool,
+        text: &TextFormatter,
+        open_tools: &OpenTools,
         width: usize,
         height: usize,
         now: Instant,
@@ -119,10 +118,17 @@ impl Panel {
                 .take(shown)
                 .map(|subagent| {
                     vec![
-                        subagent.label.clone(),
-                        subagent.model.clone().unwrap_or_default(),
+                        text.subagent_label(&subagent.id)
+                            .unwrap_or_default()
+                            .to_string(),
+                        text.subagent_model(&subagent.id)
+                            .unwrap_or_default()
+                            .to_string(),
                         subagent.description.clone(),
-                        open_tool(Some(&subagent.id)).unwrap_or_default(),
+                        open_tools
+                            .get(Some(&subagent.id))
+                            .unwrap_or_default()
+                            .to_string(),
                         clock(now.duration_since(subagent.started)),
                         context(subagent.context),
                     ]
@@ -137,7 +143,7 @@ impl Panel {
         let status = vec![
             "main".to_string(),
             self.main_model.clone().unwrap_or_default(),
-            open_tool(None).unwrap_or_default(),
+            open_tools.get(None).unwrap_or_default().to_string(),
             clock(now.duration_since(self.started)),
             self.usage(),
             context(self.main_context),
@@ -255,6 +261,7 @@ fn dim_label(line: &str, color: bool) -> String {
 pub struct Rich {
     text: TextFormatter,
     panel: Panel,
+    open_tools: OpenTools,
     size: Box<dyn Fn() -> (usize, usize)>,
     color: bool,
     drawn: usize,
@@ -273,6 +280,7 @@ impl Rich {
         Rich {
             text: TextFormatter::new(sandbox, sandbox_reason),
             panel: Panel::new(Instant::now()),
+            open_tools: OpenTools::default(),
             size,
             color,
             drawn: 0,
@@ -282,7 +290,11 @@ impl Rich {
         }
     }
 
-    pub fn event(&mut self, out: &mut dyn Write, event: &Event, open_tool: OpenTool) {
+    pub fn set_open_tools(&mut self, open_tools: OpenTools) {
+        self.open_tools = open_tools;
+    }
+
+    pub fn event(&mut self, out: &mut dyn Write, event: &Event) {
         let now = Instant::now();
         let lines: Vec<String> = self
             .text
@@ -292,7 +304,7 @@ impl Rich {
             .collect();
         self.panel.observe(event, now);
         if !matches!(event.body, Body::End(_)) {
-            self.paint(out, &lines, open_tool, now);
+            self.paint(out, &lines, now);
             return;
         }
         let mut bytes = self.erase();
@@ -312,11 +324,11 @@ impl Rich {
         let _ = out.flush();
     }
 
-    pub fn refresh(&mut self, out: &mut dyn Write, open_tool: OpenTool) {
-        self.paint(out, &[], open_tool, Instant::now());
+    pub fn refresh(&mut self, out: &mut dyn Write) {
+        self.paint(out, &[], Instant::now());
     }
 
-    pub fn stderr(&mut self, out: &mut dyn Write, bytes: &[u8], open_tool: OpenTool) {
+    pub fn stderr(&mut self, out: &mut dyn Write, bytes: &[u8]) {
         self.stderr_pending.extend_from_slice(bytes);
         let mut lines = Vec::new();
         while let Some(end) = self.stderr_pending.iter().position(|b| *b == b'\n') {
@@ -324,11 +336,11 @@ impl Rich {
             lines.push(String::from_utf8_lossy(&line[..end]).into_owned());
         }
         if !lines.is_empty() {
-            self.paint(out, &lines, open_tool, Instant::now());
+            self.paint(out, &lines, Instant::now());
         }
     }
 
-    fn paint(&mut self, out: &mut dyn Write, lines: &[String], open_tool: OpenTool, now: Instant) {
+    fn paint(&mut self, out: &mut dyn Write, lines: &[String], now: Instant) {
         if self.finished {
             return;
         }
@@ -342,7 +354,9 @@ impl Rich {
             bytes.push(b'\n');
         }
         let (width, height) = (self.size)();
-        let panel = self.panel.lines(open_tool, width, height, now, self.color);
+        let panel = self
+            .panel
+            .lines(&self.text, &self.open_tools, width, height, now, self.color);
         bytes.extend_from_slice(panel.join("\n").as_bytes());
         self.drawn = panel.len();
         let _ = out.write_all(&bytes);
@@ -365,8 +379,6 @@ impl Rich {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
     use crate::output::event::{
@@ -425,16 +437,48 @@ mod tests {
         }
     }
 
-    fn no_tools(_: Option<&str>) -> Option<String> {
-        None
+    struct Board {
+        panel: Panel,
+        text: TextFormatter,
     }
 
-    fn tools(map: &[(&str, &str)]) -> impl Fn(Option<&str>) -> Option<String> {
-        let map: HashMap<String, String> = map
-            .iter()
-            .map(|(agent, tool)| (agent.to_string(), tool.to_string()))
-            .collect();
-        move |agent| map.get(agent.unwrap_or("main")).cloned()
+    impl Board {
+        fn new(started: Instant) -> Board {
+            Board {
+                panel: Panel::new(started),
+                text: TextFormatter::new(SandboxMode::On, ""),
+            }
+        }
+
+        fn observe(&mut self, event: &Event, now: Instant) {
+            self.text.lines(event);
+            self.panel.observe(event, now);
+        }
+
+        fn lines(
+            &self,
+            open_tools: &OpenTools,
+            width: usize,
+            height: usize,
+            now: Instant,
+            color: bool,
+        ) -> Vec<String> {
+            self.panel
+                .lines(&self.text, open_tools, width, height, now, color)
+        }
+    }
+
+    fn no_tools() -> OpenTools {
+        OpenTools::default()
+    }
+
+    fn tools(map: &[(&str, &str)]) -> OpenTools {
+        let mut open_tools = OpenTools::default();
+        for (agent, tool) in map {
+            let agent = (*agent != "main").then(|| agent.to_string());
+            open_tools.insert(agent, tool.to_string());
+        }
+        open_tools
     }
 
     fn at(started: Instant, seconds: u64) -> Instant {
@@ -444,9 +488,9 @@ mod tests {
     #[test]
     fn only_rule_and_status_before_any_subagent() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         panel.observe(&start(Some("sonnet")), started);
-        let lines = panel.lines(&no_tools, 40, 24, at(started, 24), false);
+        let lines = panel.lines(&no_tools(), 40, 24, at(started, 24), false);
         assert_eq!(
             lines,
             vec!["─".repeat(39), "⠋ main  sonnet  0:24".to_string()]
@@ -456,7 +500,7 @@ mod tests {
     #[test]
     fn structure_after_subagents_and_zero_running() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         panel.observe(&start(None), started);
         panel.observe(
             &subagent_start("s1", 1, "Explore", Some("haiku"), "look\nsecond"),
@@ -488,7 +532,7 @@ mod tests {
             })),
             at(started, 30),
         );
-        let lines = panel.lines(&no_tools, 80, 24, at(started, 30), false);
+        let lines = panel.lines(&no_tools(), 80, 24, at(started, 30), false);
         assert_eq!(
             lines,
             vec![
@@ -503,7 +547,7 @@ mod tests {
     #[test]
     fn columns_align_and_chinese_counts_two_cells() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         panel.observe(
             &subagent_start("s1", 1, "Explore", None, "查找调用"),
             started,
@@ -526,7 +570,7 @@ mod tests {
             ),
             started,
         );
-        let lines = panel.lines(&no_tools, 120, 24, at(started, 65), false);
+        let lines = panel.lines(&no_tools(), 120, 24, at(started, 65), false);
         assert_eq!(
             lines[2],
             "  ⠋ explore#1          claude-haiku-4-5   查找调用  1:05  ctx 14.1k"
@@ -551,13 +595,13 @@ mod tests {
     #[test]
     fn narrow_terminal_truncates_description_then_tool_then_line() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         panel.observe(
             &subagent_start("s1", 1, "Explore", None, "这是一个很长的中文描述需要被截断"),
             started,
         );
         let tool = tools(&[("s1", "Read: src/some/very/long/path/to/file.rs")]);
-        let full = panel.lines(&no_tools, 200, 24, started, false)[2].clone();
+        let full = panel.lines(&no_tools(), 200, 24, started, false)[2].clone();
         assert_eq!(
             full,
             "  ⠋ explore#1  这是一个很长的中文描述需要被截断  0:00"
@@ -606,7 +650,7 @@ mod tests {
     #[test]
     fn status_bar_truncates_tool_then_line() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         panel.observe(&start(Some("claude-sonnet-5-5")), started);
         let tool = tools(&[("main", "Bash: cargo test --workspace --all-features")]);
         let lines = panel.lines(&tool, 50, 24, started, false);
@@ -621,19 +665,19 @@ mod tests {
     #[test]
     fn short_terminal_shows_first_rows_and_more_count() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         for n in 1..=5 {
             panel.observe(
                 &subagent_start(&format!("s{n}"), n, "Explore", None, "x"),
                 started,
             );
         }
-        let lines = panel.lines(&no_tools, 80, 9, started, false);
+        let lines = panel.lines(&no_tools(), 80, 9, started, false);
         assert_eq!(lines.len(), 8);
         assert_eq!(lines[2], "  ⠋ explore#1  x  0:00");
         assert_eq!(lines[4], "  ⠋ explore#3  x  0:00");
         assert_eq!(lines[5], "  … and 2 more");
-        let lines = panel.lines(&no_tools, 80, 5, started, false);
+        let lines = panel.lines(&no_tools(), 80, 5, started, false);
         assert_eq!(lines[2], "  ⠋ explore#1  x  0:00");
         assert_eq!(lines[3], "  … and 4 more");
         assert_eq!(lines.len(), 6);
@@ -655,10 +699,10 @@ mod tests {
     #[test]
     fn status_bar_omits_missing_items() {
         let started = Instant::now();
-        let mut panel = Panel::new(started);
+        let mut panel = Board::new(started);
         panel.observe(&start(None), started);
         assert_eq!(
-            panel.lines(&no_tools, 80, 24, at(started, 24), false)[1],
+            panel.lines(&no_tools(), 80, 24, at(started, 24), false)[1],
             "⠋ main  0:24"
         );
         panel.observe(
@@ -675,7 +719,7 @@ mod tests {
             started,
         );
         assert_eq!(
-            panel.lines(&no_tools, 80, 24, at(started, 24), false)[1],
+            panel.lines(&no_tools(), 80, 24, at(started, 24), false)[1],
             "⠋ main  claude-sonnet-5-5  0:24  in 60.2k  cached 70%"
         );
         panel.observe(
@@ -698,10 +742,10 @@ mod tests {
     #[test]
     fn animation_frame_follows_time() {
         let started = Instant::now();
-        let panel = Panel::new(started);
+        let panel = Board::new(started);
         let frame = |ms| {
             panel.lines(
-                &no_tools,
+                &no_tools(),
                 80,
                 24,
                 started + Duration::from_millis(ms),
@@ -720,10 +764,10 @@ mod tests {
     #[test]
     fn color_dims_rule_and_labels_unless_disabled() {
         let started = Instant::now();
-        let panel = Panel::new(started);
-        let colored = panel.lines(&no_tools, 10, 24, started, true);
+        let panel = Board::new(started);
+        let colored = panel.lines(&no_tools(), 10, 24, started, true);
         assert_eq!(colored[0], format!("\x1b[2m{}\x1b[0m", "─".repeat(9)));
-        let plain = panel.lines(&no_tools, 10, 24, started, false);
+        let plain = panel.lines(&no_tools(), 10, 24, started, false);
         assert!(!plain.concat().contains('\x1b'));
         assert_eq!(
             dim_label("[explore#1] tool Grep: x", true),

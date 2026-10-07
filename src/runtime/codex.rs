@@ -5,17 +5,18 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Invocation, Launch, Record, detail_head};
-use crate::cli::{NetworkMode, Runtime};
+use super::{Adapter, Failure, Invocation, Launch, PrivateDir, detail_head, reject_max_turns};
+use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
-use crate::output::TokenCounts;
+use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
 pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
+const HOME_LABEL: &str = "codex home";
 pub(crate) const LOGIN_FILE: &str = "auth.json";
 pub(crate) const SERVICE_HOSTS: [&str; 4] = [
     "chatgpt.com",
@@ -118,7 +119,9 @@ impl Codex {
         if !self.sandboxed || self.sandbox_failure.is_some() {
             return;
         }
-        if let Some(reason) = first_line(&string(output)).strip_prefix(BWRAP_PREFIX) {
+        if let Some(reason) =
+            first_line(output.as_str().unwrap_or_default()).strip_prefix(BWRAP_PREFIX)
+        {
             self.sandbox_failure = Some(start_failure(reason));
         }
     }
@@ -148,14 +151,17 @@ impl Adapter for Codex {
         Runtime::Codex
     }
 
+    fn check_args(&self, args: &RunArgs) -> Result<(), String> {
+        reject_max_turns(args)
+    }
+
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
+        let login = login_file(&invocation.session, &invocation.cwd);
+        check_login(&invocation.session, &login)?;
         self.cwd = invocation.cwd.clone();
         self.model = invocation.args.model.clone();
         self.sandboxed = invocation.sandbox.runs();
-        let home = invocation
-            .codex_home
-            .as_ref()
-            .ok_or_else(|| "the codex home directory is not prepared".to_string())?;
+        let home = home_path(&invocation.tempdir);
         let network = invocation.args.network;
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
@@ -212,12 +218,23 @@ impl Adapter for Codex {
             env.extend(proxy_environment(&proxy.port_text()));
             service_hosts.extend(SERVICE_HOSTS.iter().map(|host| host.to_string()));
         }
+        let private_dirs = if invocation.args.dry_run {
+            Vec::new()
+        } else {
+            create_home(&home, &login)?;
+            vec![PrivateDir {
+                label: HOME_LABEL,
+                path: home,
+            }]
+        };
         Ok(Launch {
             argv,
             stdin: invocation.prompt.clone().into_bytes(),
             env,
             signal_wrapped_child: false,
             service_hosts,
+            wrapped: SandboxKind::None,
+            private_dirs,
         })
     }
 
@@ -252,20 +269,20 @@ impl Adapter for Codex {
         Vec::new()
     }
 
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
         if let Some(detail) = &self.sandbox_failure {
-            return Some(detail.clone());
+            return Some(Failure::Message(detail.clone()));
         }
         if let Some(message) = &self.turn_failed {
-            return Some(detail_head(message));
+            return Some(Failure::from_detail(detail_head(message)));
         }
         if let (false, Some(message)) = (self.turn_completed, &self.last_error) {
-            return Some(detail_head(message));
+            return Some(Failure::from_detail(detail_head(message)));
         }
         if exit_code != Some(0) {
-            return Some(String::new());
+            return Some(Failure::Unexplained);
         }
-        (!self.turn_completed).then(|| NO_TURN_DETAIL.to_string())
+        (!self.turn_completed).then(|| Failure::Message(NO_TURN_DETAIL.to_string()))
     }
 }
 
@@ -413,11 +430,21 @@ mod tests {
             };
             std::fs::create_dir(setup.work()).unwrap();
             std::fs::create_dir(setup.tempdir()).unwrap();
+            std::fs::create_dir(setup.user_home()).unwrap();
+            std::fs::write(setup.login(), "{}").unwrap();
             setup
         }
 
         fn work(&self) -> PathBuf {
             self.root.path().join("work")
+        }
+
+        fn user_home(&self) -> PathBuf {
+            self.root.path().join("codex-user")
+        }
+
+        fn login(&self) -> PathBuf {
+            self.user_home().join("auth.json")
         }
 
         fn tempdir(&self) -> PathBuf {
@@ -437,6 +464,10 @@ mod tests {
                 socket: self.tempdir().join("proxy.sock"),
             });
             let dry_run = args.dry_run;
+            let env = vec![(
+                OsString::from("CODEX_HOME"),
+                self.user_home().into_os_string(),
+            )];
             Invocation {
                 runtime,
                 args,
@@ -458,19 +489,15 @@ mod tests {
                 } else {
                     self.tempdir()
                 },
-                session: Session::assemble(runtime, &[], &[], &[], &[]),
+                session: Session::assemble(runtime, &env, &[], &[], &[]),
                 allow_hosts,
                 proxy,
-                codex_home: Some(if dry_run {
-                    PathBuf::from("<tempdir>-codex")
-                } else {
-                    home_path(&self.tempdir())
-                }),
             }
         }
     }
 
     fn launch(setup: &Setup, sandboxed: bool, extra: &[&str]) -> Launch {
+        let _ = std::fs::remove_dir_all(home_path(&setup.tempdir()));
         Codex::new()
             .launch(
                 Path::new("/opt/bin/codex"),
@@ -710,6 +737,99 @@ mod tests {
     }
 
     #[test]
+    fn launch_creates_the_private_home_with_the_login_link() {
+        let setup = Setup::new();
+        let home = home_path(&setup.tempdir());
+        let launch = launch(&setup, true, &[]);
+        assert_eq!(
+            launch.private_dirs,
+            vec![PrivateDir {
+                label: "codex home",
+                path: home.clone(),
+            }]
+        );
+        assert_eq!(
+            launch.env[0],
+            (OsString::from("CODEX_HOME"), home.clone().into_os_string())
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(&home)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        let entries: Vec<_> = std::fs::read_dir(&home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, [OsString::from("auth.json")]);
+        assert_eq!(
+            std::fs::read_link(home.join("auth.json")).unwrap(),
+            setup.login()
+        );
+    }
+
+    #[test]
+    fn dry_run_launch_creates_no_private_home() {
+        let setup = Setup::new();
+        let launch = launch(&setup, true, &["--dry-run"]);
+        assert!(launch.private_dirs.is_empty());
+        assert_eq!(launch.env[0].1, OsString::from("<tempdir>-codex"));
+        assert!(!Path::new("<tempdir>-codex").exists());
+        assert!(!home_path(&setup.tempdir()).exists());
+    }
+
+    #[test]
+    fn missing_login_file_fails_the_launch_without_a_private_home() {
+        let setup = Setup::new();
+        std::fs::remove_file(setup.login()).unwrap();
+        for extra in [&[][..], &["--dry-run"]] {
+            let detail = Codex::new()
+                .launch(Path::new("/opt/bin/codex"), &setup.invocation(true, extra))
+                .unwrap_err();
+            assert_eq!(
+                detail,
+                format!(
+                    "codex login file {} not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH",
+                    setup.login().display()
+                )
+            );
+        }
+        assert!(!home_path(&setup.tempdir()).exists());
+    }
+
+    #[test]
+    fn unresolvable_tempdir_fails_the_launch_without_a_private_home() {
+        let setup = Setup::new();
+        std::fs::remove_dir(setup.tempdir()).unwrap();
+        let detail = Codex::new()
+            .launch(Path::new("/opt/bin/codex"), &setup.invocation(true, &[]))
+            .unwrap_err();
+        assert!(
+            detail.starts_with(&format!(
+                "cannot resolve the session temporary directory {}: ",
+                setup.tempdir().display()
+            )),
+            "{detail}"
+        );
+        assert!(!home_path(&setup.tempdir()).exists());
+    }
+
+    #[test]
+    fn check_args_rejects_max_turns() {
+        let setup = Setup::new();
+        let invocation = setup.invocation(false, &["--max-turns", "3"]);
+        assert_eq!(
+            Codex::new().check_args(&invocation.args),
+            Err("--max-turns is only supported by claude-code".to_string())
+        );
+        let invocation = setup.invocation(false, &[]);
+        assert_eq!(Codex::new().check_args(&invocation.args), Ok(()));
+    }
+
+    #[test]
     fn toml_strings_escape_quotes_backslashes_and_control_characters() {
         assert_eq!(toml_string("plain"), "\"plain\"");
         assert_eq!(toml_string("a\\b\"c"), "\"a\\\\b\\\"c\"");
@@ -842,23 +962,36 @@ mod tests {
             &mut codex,
             json!({"type":"turn.failed","error":{"message":long.clone()}}),
         );
-        assert_eq!(codex.failure(Some(0), ""), Some("e".repeat(500)));
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message("e".repeat(500)))
+        );
 
         let mut codex = Codex::new();
         translate(&mut codex, json!({"type":"error","message":"first"}));
         translate(&mut codex, json!({"type":"error","message":long}));
-        assert_eq!(codex.failure(Some(0), ""), Some("e".repeat(500)));
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message("e".repeat(500)))
+        );
 
         let mut codex = Codex::new();
         translate(&mut codex, json!({"type":"error","message":"retry"}));
         translate(&mut codex, json!({"type":"turn.completed","usage":{}}));
-        assert_eq!(codex.failure(Some(0), ""), None);
-        assert_eq!(codex.failure(Some(1), "stderr"), Some(String::new()));
+        assert_eq!(codex.failure(Some(0)), None);
+        assert_eq!(codex.failure(Some(1)), Some(Failure::Unexplained));
 
         let codex = Codex::new();
-        assert_eq!(codex.failure(Some(2), "usage"), Some(String::new()));
-        assert_eq!(codex.failure(Some(0), ""), Some(NO_TURN_DETAIL.to_string()));
-        assert_eq!(codex.failure(None, ""), Some(String::new()));
+        assert_eq!(codex.failure(Some(2)), Some(Failure::Unexplained));
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message(NO_TURN_DETAIL.to_string()))
+        );
+        assert_eq!(codex.failure(None), Some(Failure::Unexplained));
+
+        let mut codex = Codex::new();
+        translate(&mut codex, json!({"type":"turn.failed","error":{}}));
+        assert_eq!(codex.failure(Some(0)), Some(Failure::Unexplained));
     }
 
     fn bwrap_output(id: &str, output: &str) -> Value {
@@ -888,15 +1021,17 @@ mod tests {
             json!({"type":"turn.failed","error":{"message":"later"}}),
         );
         assert_eq!(
-            codex.failure(Some(0), ""),
-            Some("sandbox failed to start: setting up uid map: Permission denied".to_string())
+            codex.failure(Some(0)),
+            Some(Failure::Message(
+                "sandbox failed to start: setting up uid map: Permission denied".to_string()
+            ))
         );
 
         let mut codex = Codex::new();
         codex.sandboxed = true;
         translate(&mut codex, bwrap_output("item_1", "bwrap:no space"));
         translate(&mut codex, json!({"type":"turn.completed","usage":{}}));
-        assert_eq!(codex.failure(Some(0), ""), None);
+        assert_eq!(codex.failure(Some(0)), None);
 
         let mut codex = Codex::new();
         translate(
@@ -904,7 +1039,7 @@ mod tests {
             bwrap_output("item_1", "bwrap: setting up uid map: Permission denied"),
         );
         translate(&mut codex, json!({"type":"turn.completed","usage":{}}));
-        assert_eq!(codex.failure(Some(0), ""), None);
+        assert_eq!(codex.failure(Some(0)), None);
     }
 
     #[test]

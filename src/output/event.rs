@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use serde::{Serialize, Serializer};
 use time::OffsetDateTime;
@@ -148,8 +148,7 @@ pub struct SubagentStart {
     pub description: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubagentStatus {
     Finished,
     Failed,
@@ -161,6 +160,12 @@ impl SubagentStatus {
             SubagentStatus::Finished => "finished",
             SubagentStatus::Failed => "failed",
         }
+    }
+}
+
+impl Serialize for SubagentStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
     }
 }
 
@@ -180,8 +185,7 @@ pub struct Network {
     pub reason: Option<NetworkReason>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkReason {
     NotAllowed,
     PrivateAddress,
@@ -193,6 +197,12 @@ impl NetworkReason {
             NetworkReason::NotAllowed => "not_allowed",
             NetworkReason::PrivateAddress => "private_address",
         }
+    }
+}
+
+impl Serialize for NetworkReason {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
     }
 }
 
@@ -258,6 +268,19 @@ pub struct End {
     pub result: Option<String>,
 }
 
+impl End {
+    pub fn early(status: EndStatus, detail: String, started: Instant) -> End {
+        End {
+            status,
+            exit_code: None,
+            detail,
+            duration_ms: started.elapsed().as_millis() as u64,
+            usage: Usage::default(),
+            result: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, UNIX_EPOCH};
@@ -269,6 +292,16 @@ mod tests {
             time: "2026-10-04T13:00:00.000Z".to_string(),
             body,
         }
+    }
+
+    #[test]
+    fn early_end_has_no_exit_code_usage_or_result() {
+        let end = End::early(EndStatus::Rejected, "bad".to_string(), Instant::now());
+        assert_eq!(end.status, EndStatus::Rejected);
+        assert_eq!(end.exit_code, None);
+        assert_eq!(end.detail, "bad");
+        assert_eq!(end.usage, Usage::default());
+        assert_eq!(end.result, None);
     }
 
     #[test]

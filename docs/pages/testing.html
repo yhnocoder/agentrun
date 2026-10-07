@@ -72,7 +72,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 </table>
 <p><code>signals.rs</code>、<code>concurrency.rs</code> 与 <code>rich.rs</code> 在 <code>Cargo.toml</code> 里声明 <code>harness = false</code>，理由：cargo 的测试 harness 会安装自己的信号处理，这些主题需要测试程序本身就是收信号、拥有终端、能把自己重新启动成 agentrun 的那个进程。它们用 <code>support/harness.rs</code> 的 <code>run_tests</code> 运行 <code>test_list!</code> 列出的测试函数，输出格式与 cargo 相同。所有测试同时开始，每个测试最多运行 60 秒，超时的测试打印测试名并判为失败。<code>run_tests</code> 支持 <code>--list</code>（输出与 cargo 相同）、<code>--exact</code>、<code>--quiet</code> 与 <code>--ignored</code>（选中的测试为空），接受并忽略 <code>--nocapture</code>、<code>--show-output</code>、<code>--include-ignored</code> 与 <code>--test-threads</code>，其他选项报错并以 101 退出。</p>
 <p>写假运行时脚本一律用 <code>support/env.rs</code> 的 <code>write_script</code>，它让 <code>/bin/sh</code> 写文件并设权限，测试进程自己不持有脚本的写描述符，所以 fork 发生在 <code>run::run</code> 里的 <code>framework.rs</code> 与 <code>session.rs</code> 也不会在执行脚本时得到 ETXTBSY。<code>harness = false</code> 的测试程序里，每一次 fork（启动子进程、调用 <code>ps</code>、<code>write_script</code> 启动的 <code>/bin/sh</code>）仍先拿 <code>support/process.rs</code> 的 <code>spawn_lock</code>，理由：<code>open_pty</code> 在 <code>openpty</code> 返回到两个描述符设好 <code>FD_CLOEXEC</code> 之间，另一个线程 fork 出的子进程会继承伪终端的描述符，读 master 要等那个子进程退出才读到结束。<code>spawn_lock</code> 不可重入，<code>support/env.rs</code> 的 <code>write_script</code> 与 <code>Agentrun::spawn</code>、<code>support/mod.rs</code> 的 <code>open_pty</code> 与 <code>sandbox_available</code>、<code>support/process.rs</code> 里调用 <code>ps</code> 的 <code>process_is_gone</code> 自己拿锁，持有锁时不能调用它们。</p>
-<p><code>Agentrun</code> 被丢弃时，如果子进程还没被回收，先发 SIGTERM，最多等 <code>TERMINATE_LIMIT</code>（10 s），再发 SIGKILL 并回收。理由：只发 SIGKILL 时 agentrun 来不及结束它启动的假运行时，测试 panic 后会留下进程。</p>
+<p><code>Agentrun</code> 被丢弃时，如果子进程还没退出，先发 SIGTERM，最多等 <code>TERMINATE_LIMIT</code>（10 s），再发 SIGKILL 并回收。理由：只发 SIGKILL 时 agentrun 来不及结束它启动的假运行时，测试 panic 后会留下进程。</p>
 
 <h2 id="fixtures">回放样本</h2>
 <p><code>tests/fixtures/&lt;运行时&gt;/&lt;场景&gt;.*</code> 每个场景三个文件：</p>
@@ -86,7 +86,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
     <tr><td><code>&lt;场景&gt;.events.jsonl</code></td><td>期望的统一事件流，不含 <code>start</code> 与 <code>end</code> 之前的启动过程，含 <code>end</code></td></tr>
   </tbody>
 </table>
-<p><code>support::replay</code> 读 <code>raw.jsonl</code>，按 <code>meta.json</code> 构造 <code>Invocation</code> 与 <code>Exit</code>，调用适配器的 <code>launch</code>，再把每行交给 <code>translate_line</code>，最后 <code>conclude</code>，得到的事件去掉 <code>time</code> 与 <code>duration_ms</code> 后与 <code>events.jsonl</code> 逐个比较。<code>tests/fixtures/fake/basic.*</code> 没有 <code>meta.json</code>，给 <code>FakeAdapter</code> 用。</p>
+<p><code>support::replay</code> 读 <code>raw.jsonl</code>，按 <code>meta.json</code> 构造 <code>Invocation</code> 与 <code>Exit</code>，以 dry-run 方式调用适配器的 <code>launch</code>（codex 另给 <code>AGENTRUN_CODEX_AUTH</code> 的内容使登录检查通过），再把每行交给 <code>translate_line</code>，最后调用 <code>conclude</code> 并传入 <code>Launch</code> 记录的包裹方式，得到的事件去掉 <code>time</code> 与 <code>duration_ms</code> 后与 <code>events.jsonl</code> 逐个比较。<code>tests/fixtures/fake/basic.*</code> 没有 <code>meta.json</code>，给 <code>FakeAdapter</code> 用。</p>
 <p>样本来源：<code>scripts/probe/probe.sh</code> 在 Cloud Managed 容器、docker 与 macOS 上直接运行三个运行时，每个场景一个目录，记录原始输出、退出码与标准错误；<code>meta.json</code> 里 <code>/tmp/agentrun-probe-&lt;随机&gt;/&lt;场景&gt;-&lt;运行时&gt;</code> 形式的 <code>cwd</code> 就是这些目录。<code>events.jsonl</code> 是写适配器时由当时的适配器生成、逐条核对后保存的。样本记录时的运行时版本见<a href="run.html">运行</a>页的「运行时版本」。</p>
 <p>更新样本的步骤：</p>
 <ol>

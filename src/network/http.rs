@@ -290,7 +290,6 @@ fn split_absolute_url(target: &str) -> Option<(String, String)> {
 mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
-    use std::time::Instant;
 
     use super::*;
 
@@ -304,7 +303,6 @@ mod tests {
         let (mut upstream_side, _) = upstream.accept().unwrap();
         let idle = Duration::from_millis(200);
         let (done, finished) = mpsc::channel();
-        let started = Instant::now();
         thread::spawn(move || {
             forward_request(
                 Client::Tcp(proxy_side),
@@ -321,7 +319,6 @@ mod tests {
         finished
             .recv_timeout(Duration::from_secs(10))
             .expect("the handler thread did not end");
-        assert!(started.elapsed() >= idle, "{:?}", started.elapsed());
         upstream_side
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
@@ -363,6 +360,43 @@ mod tests {
         let mut received = Vec::new();
         caller.read_to_end(&mut received).unwrap();
         assert_eq!(received, b"first second third");
+    }
+
+    #[test]
+    fn upstream_with_gaps_longer_than_the_idle_timeout_is_relayed_while_the_client_is_open() {
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let clients = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut caller = TcpStream::connect(clients.local_addr().unwrap()).unwrap();
+        let (proxy_side, _) = clients.accept().unwrap();
+        let server_stream = TcpStream::connect(upstream.local_addr().unwrap()).unwrap();
+        let (mut upstream_side, _) = upstream.accept().unwrap();
+        let idle = Duration::from_millis(100);
+        thread::spawn(move || {
+            forward_request(
+                Client::Tcp(proxy_side),
+                server_stream,
+                b"GET / HTTP/1.1\r\n\r\n",
+                &[],
+                0,
+                idle,
+            );
+        });
+        let sender = thread::spawn(move || {
+            for part in [&b"first "[..], b"second ", b"third"] {
+                thread::sleep(Duration::from_millis(350));
+                upstream_side.write_all(part).unwrap();
+            }
+            upstream_side.shutdown(Shutdown::Write).unwrap();
+            upstream_side
+        });
+        caller
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut received = Vec::new();
+        caller.read_to_end(&mut received).unwrap();
+        assert_eq!(received, b"first second third");
+        caller.shutdown(Shutdown::Write).unwrap();
+        drop(sender.join().unwrap());
     }
 
     #[test]

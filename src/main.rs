@@ -2,7 +2,8 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
-use agentrun::run::{Caller, Signals, claim_orphans, run};
+use agentrun::claim_orphans;
+use agentrun::run::{Caller, Signals, run};
 use agentrun::runtime;
 
 fn main() -> ExitCode {

@@ -11,8 +11,6 @@ use super::{Available, Unavailable, Wrapper, start_check};
 #[cfg(target_os = "macos")]
 use crate::cli::Runtime;
 #[cfg(target_os = "macos")]
-use crate::run::Signals;
-#[cfg(target_os = "macos")]
 use crate::session::Session;
 
 pub(super) const SANDBOX_EXEC_PREFIX: &str = "sandbox-exec: ";
@@ -92,7 +90,7 @@ pub(super) fn probe(
     runtime: Runtime,
     session: &Session,
     cwd: &Path,
-    signals: &Signals,
+    checking: &dyn Fn(Option<i32>),
 ) -> Result<Available, Unavailable> {
     if runtime == Runtime::Codex {
         return Ok(Available {
@@ -116,7 +114,7 @@ pub(super) fn probe(
         SANDBOX_EXEC_PREFIX,
         session,
         cwd,
-        signals,
+        checking,
     )
     .map_err(|reason| unavailable(format!("sandbox-exec cannot start: {reason}")))?;
     Ok(Available {

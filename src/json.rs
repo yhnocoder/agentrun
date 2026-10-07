@@ -8,8 +8,8 @@ pub fn optional_string(value: &Value) -> Option<String> {
     value.as_str().map(str::to_string)
 }
 
-pub fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or_default().to_string()
+pub fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or("")
 }
 
 pub fn joined_text(content: &Value) -> String {

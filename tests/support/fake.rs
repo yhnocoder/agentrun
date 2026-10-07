@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use agentrun::cli::Runtime;
+use agentrun::cli::{RunArgs, Runtime};
 use agentrun::network::proxy_environment;
-use agentrun::output::{SandboxKind, SubagentStatus, TokenCounts, Usage};
-use agentrun::runtime::{Adapter, Invocation, Launch, Record};
+use agentrun::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
+use agentrun::runtime::{Adapter, Failure, Invocation, Launch, PrivateDir};
 use agentrun::sandbox;
 use serde_json::Value;
 
@@ -27,6 +27,10 @@ impl Adapter for FakeAdapter {
         Runtime::ClaudeCode
     }
 
+    fn check_args(&self, _args: &RunArgs) -> Result<(), String> {
+        Ok(())
+    }
+
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
@@ -40,6 +44,18 @@ impl Adapter for FakeAdapter {
             invocation.args.dry_run,
         )?;
         argv = wrapped.argv(&argv);
+        let private_dirs = if invocation.runtime == Runtime::Codex && !invocation.args.dry_run {
+            let mut path = invocation.tempdir.clone().into_os_string();
+            path.push("-codex");
+            let path = PathBuf::from(path);
+            std::fs::create_dir(&path).map_err(|error| error.to_string())?;
+            vec![PrivateDir {
+                label: "codex home",
+                path,
+            }]
+        } else {
+            Vec::new()
+        };
         let port = invocation.proxy.as_ref().map(|proxy| proxy.port_text());
         Ok(Launch {
             argv,
@@ -47,6 +63,8 @@ impl Adapter for FakeAdapter {
             env: port.as_deref().map(proxy_environment).unwrap_or_default(),
             signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts: Vec::new(),
+            wrapped: wrapped.kind,
+            private_dirs,
         })
     }
 
@@ -125,10 +143,11 @@ impl Adapter for FakeAdapter {
         Vec::new()
     }
 
-    fn failure(&self, exit_code: Option<i32>, _stderr_tail: &str) -> Option<String> {
-        self.failure
-            .clone()
-            .or_else(|| (exit_code != Some(0)).then(String::new))
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure> {
+        match &self.failure {
+            Some(detail) => Some(Failure::from_detail(detail.clone())),
+            None => (exit_code != Some(0)).then_some(Failure::Unexplained),
+        }
     }
 }
 

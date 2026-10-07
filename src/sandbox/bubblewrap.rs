@@ -12,8 +12,6 @@ use super::{Available, Unavailable, Wrapper, start_check};
 #[cfg(target_os = "linux")]
 use crate::cli::Runtime;
 #[cfg(target_os = "linux")]
-use crate::run::Signals;
-#[cfg(target_os = "linux")]
 use crate::session::{Session, find_executable, is_executable};
 
 pub const BWRAP_PREFIX: &str = "bwrap: ";
@@ -92,7 +90,7 @@ pub(super) fn probe(
     runtime: Runtime,
     session: &Session,
     cwd: &Path,
-    signals: &Signals,
+    checking: &dyn Fn(Option<i32>),
 ) -> Result<Available, Unavailable> {
     let missing = |name: &str, hint: &'static str| Unavailable {
         reason: format!("{name} not found in PATH"),
@@ -102,7 +100,7 @@ pub(super) fn probe(
         let bwrap = find_executable_outside("bwrap", &session.path, cwd)
             .ok_or_else(|| missing("bwrap", CODEX_INSTALL_HINT))?;
         let started = Instant::now();
-        check_bwrap(&bwrap, session, cwd, signals)?;
+        check_bwrap(&bwrap, session, cwd, checking)?;
         return Ok(Available {
             wrapper: Wrapper::Codex,
             description: format!(
@@ -117,7 +115,7 @@ pub(super) fn probe(
     let socat = find_executable("socat", &session.path, cwd)
         .ok_or_else(|| missing("socat", INSTALL_HINT))?;
     let started = Instant::now();
-    check_bwrap(&bwrap, session, cwd, signals)?;
+    check_bwrap(&bwrap, session, cwd, checking)?;
     Ok(Available {
         description: format!(
             "bubblewrap ({}, socat {}, check {}ms)",
@@ -134,7 +132,7 @@ fn check_bwrap(
     bwrap: &Path,
     session: &Session,
     cwd: &Path,
-    signals: &Signals,
+    checking: &dyn Fn(Option<i32>),
 ) -> Result<(), Unavailable> {
     start_check(
         bwrap,
@@ -154,7 +152,7 @@ fn check_bwrap(
         BWRAP_PREFIX,
         session,
         cwd,
-        signals,
+        checking,
     )
     .map_err(|reason| Unavailable {
         reason: format!("bwrap cannot start: {reason}"),

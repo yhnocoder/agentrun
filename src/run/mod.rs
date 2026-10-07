@@ -1,5 +1,4 @@
 mod execute;
-mod process_tree;
 mod signal;
 
 use std::ffi::{OsStr, OsString};
@@ -15,24 +14,21 @@ use clap::error::ErrorKind as ClapErrorKind;
 use tempfile::TempDir;
 
 use crate::cli::{
-    Cli, Format, Parsed, RunArgs, Runtime, SandboxMode, default_format, prescan_format,
+    Cli, ConnectArgs, DoctorArgs, Format, Parsed, RunArgs, Runtime, default_format, prescan_format,
     usage_error_detail,
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
 use crate::network::{self, FilterProxy, ProxyEndpoint};
-use crate::output::{Body, End, EndStatus, Event, OpenTool, Output, Usage};
-use crate::runtime::{Adapter, Invocation, Launch, codex, pi};
+use crate::output::{End, EndStatus, Event, Output, write_end};
+use crate::runtime::{Adapter, Invocation, Launch};
 use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use execute::execute;
 use signal::SharedWriter;
 
-pub use execute::{Exit, Translated, conclude, stderr_tail, translate_line};
-pub use process_tree::claim_orphans;
+pub use execute::{Exit, conclude, stderr_tail, translate_line};
 pub use signal::Signals;
-
-pub(crate) use process_tree::{kill_group_members, wait_for_exit};
 
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";
 const TEMPDIR_PREFIX: &str = "agentrun-";
@@ -67,8 +63,8 @@ impl Caller {
         }
     }
 
-    fn emit(&self, output: &mut Output, event: &Event, open_tool: OpenTool) {
-        self.with_stdout(|stdout| output.write(stdout, event, open_tool));
+    fn emit(&self, output: &mut Output, event: &Event) {
+        self.with_stdout(|stdout| output.write(stdout, event));
     }
 
     fn with_stdout(&self, write: impl FnOnce(&mut dyn Write)) {
@@ -87,6 +83,19 @@ impl Caller {
     }
 }
 
+enum Command {
+    Run(Runtime, RunArgs),
+    Doctor(DoctorArgs),
+    Connect(ConnectArgs),
+    Exit(u8),
+    UsageError(String),
+}
+
+enum Prepared {
+    DryRun(Vec<String>),
+    Execute(Box<Resources>),
+}
+
 struct Ready {
     invocation: Invocation,
     adapter: Box<dyn Adapter>,
@@ -94,84 +103,123 @@ struct Ready {
     raw: Option<(PathBuf, File)>,
 }
 
+struct Resources {
+    invocation: Invocation,
+    adapter: Box<dyn Adapter>,
+    launch: Launch,
+    plan: Vec<String>,
+    raw: Option<(PathBuf, File)>,
+}
+
+#[derive(Default)]
+struct Guards {
+    proxy: Option<FilterProxy>,
+    private_dirs: Vec<OwnedDir>,
+    tempdir: Option<TempDir>,
+}
+
+struct OwnedDir {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl Drop for OwnedDir {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
     let started = Instant::now();
     let fallback_format =
         prescan_format(&caller.args).unwrap_or(default_format(caller.stdout_is_terminal));
+    let mut guards = Guards::default();
+    let (format, prepared) = match parse_command(&caller) {
+        Command::Run(runtime, args) => {
+            let format = args.format.unwrap_or(fallback_format);
+            if let Err(code) = caller
+                .signals
+                .prepare(Arc::clone(&caller.stdout), format, started)
+            {
+                return code;
+            }
+            let prepared = set_up(&mut caller, runtime, args, format, adapters, &mut guards);
+            (format, prepared)
+        }
+        Command::UsageError(detail) => (fallback_format, Err(detail)),
+        Command::Doctor(args) => return doctor::run(caller, args, doctor::COMMAND_TIMEOUT),
+        Command::Connect(args) => return doctor::connect(&caller, &args),
+        Command::Exit(code) => return code,
+    };
+    let outcome = match prepared {
+        Ok(Prepared::DryRun(lines)) => {
+            caller.signals.finishing();
+            caller.print_lines(&lines);
+            Ok(0)
+        }
+        Ok(Prepared::Execute(resources)) => execute(&mut caller, *resources, &mut guards, started),
+        Err(detail) => Err(detail),
+    };
+    match outcome {
+        Ok(code) => code,
+        Err(detail) => reject(&mut caller, format, &detail, started),
+    }
+}
+
+fn parse_command(caller: &Caller) -> Command {
     let cli = match Cli::try_parse_from(&caller.args) {
         Ok(cli) => cli,
-        Err(error) => match error.kind() {
-            ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion => {
-                caller.signals.finishing();
-                caller.print_lines(&[error.render().to_string().trim_end().to_string()]);
-                return 0;
-            }
-            _ => {
-                let detail = usage_error_detail(&error.render().to_string());
-                if doctor::selected(&caller.args) {
+        Err(error) => {
+            return match error.kind() {
+                ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion => {
                     caller.signals.finishing();
-                    caller.print_error_line(&format!("agentrun: {detail}"));
-                    return doctor::USAGE_EXIT_CODE;
+                    caller.print_lines(&[error.render().to_string().trim_end().to_string()]);
+                    Command::Exit(0)
                 }
-                return reject(&mut caller, fallback_format, &detail, started);
-            }
-        },
+                _ => {
+                    let detail = usage_error_detail(&error.render().to_string());
+                    if doctor::selected(&caller.args) {
+                        caller.signals.finishing();
+                        caller.print_error_line(&format!("agentrun: {detail}"));
+                        Command::Exit(doctor::USAGE_EXIT_CODE)
+                    } else {
+                        Command::UsageError(detail)
+                    }
+                }
+            };
+        }
     };
-    let (runtime, args) = match cli.command.into_parsed() {
-        Parsed::Run(runtime, args) => (runtime, args),
-        Parsed::Doctor(args) => return doctor::run(caller, args, doctor::COMMAND_TIMEOUT),
-        Parsed::Connect(args) => return doctor::connect(&caller, &args),
-    };
-    let format = args.format.unwrap_or(fallback_format);
-    if let Err(code) = caller
-        .signals
-        .prepare(Arc::clone(&caller.stdout), format, started)
-    {
-        return code;
+    match cli.command.into_parsed() {
+        Parsed::Run(runtime, args) => Command::Run(runtime, args),
+        Parsed::Doctor(args) => Command::Doctor(args),
+        Parsed::Connect(args) => Command::Connect(args),
     }
-    let mut ready = match prepare(&mut caller, runtime, args, format, adapters) {
-        Ok(ready) => ready,
-        Err(detail) => return reject(&mut caller, format, &detail, started),
-    };
+}
+
+fn set_up(
+    caller: &mut Caller,
+    runtime: Runtime,
+    args: RunArgs,
+    format: Format,
+    adapters: &AdapterLookup,
+    guards: &mut Guards,
+) -> Result<Prepared, String> {
+    let mut ready = prepare(caller, runtime, args, format, adapters)?;
     let proxy_needed = network::proxy_needed(
         ready.invocation.runtime,
         ready.invocation.args.network,
         ready.invocation.sandbox.runs(),
     );
-    let codex_login = (ready.invocation.runtime == Runtime::Codex)
-        .then(|| codex::login_file(&ready.invocation.session, &ready.invocation.cwd));
     if ready.invocation.args.dry_run {
-        ready.invocation.tempdir = PathBuf::from(DRY_RUN_TEMPDIR);
-        ready.invocation.proxy = proxy_needed.then(|| ProxyEndpoint {
-            port: None,
-            socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
-        });
-        if let Some(login) = &codex_login {
-            if let Err(detail) = codex::check_login(&ready.invocation.session, login) {
-                return reject(&mut caller, format, &detail, started);
-            }
-            ready.invocation.codex_home = Some(codex::home_path(&ready.invocation.tempdir));
-        }
-        let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
-            Ok(launch) => launch,
-            Err(detail) => return reject(&mut caller, format, &detail, started),
-        };
-        caller.signals.finishing();
-        caller.print_lines(&plan_lines(
-            &launch,
-            &ready.invocation.session,
-            &ready.invocation.prompt,
-        ));
-        return 0;
+        return dry_run(&mut ready, proxy_needed).map(Prepared::DryRun);
     }
-    let credential = match write_session_credential(
+    let credential = write_session_credential(
         ready.invocation.runtime,
         &ready.invocation.session,
         &ready.invocation.cwd,
-    ) {
-        Ok(credential) => credential,
-        Err(detail) => return reject(&mut caller, format, &detail, started),
-    };
+    )?;
     let credential_line = match credential {
         Some(report) => format!(
             "credentials: {} -> {} ({})",
@@ -181,81 +229,71 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
         ),
         None => "credentials: (none)".to_string(),
     };
+    let debug = ready.invocation.args.debug;
     let hold = caller.signals.hold();
-    let tempdir = match create_tempdir(&caller, TEMPDIR_PREFIX) {
-        Ok(tempdir) => tempdir,
-        Err(detail) => return reject(&mut caller, format, &detail, started),
-    };
-    caller
-        .signals
-        .tempdir(tempdir.path().to_path_buf(), ready.invocation.args.debug);
+    let tempdir =
+        create_tempdir(caller, TEMPDIR_PREFIX).inspect_err(|_| caller.signals.finishing())?;
+    caller.signals.tempdir(tempdir.path().to_path_buf(), debug);
     drop(hold);
     ready.invocation.tempdir = tempdir.path().to_path_buf();
-    let _codex_home = match &codex_login {
-        Some(login) => {
-            let hold = caller.signals.hold();
-            let home = codex::home_path(tempdir.path());
-            if let Err(detail) = codex::check_login(&ready.invocation.session, login)
-                .and_then(|()| codex::create_home(&home, login))
-            {
-                return reject(&mut caller, format, &detail, started);
-            }
-            caller
-                .signals
-                .tempdir(home.clone(), ready.invocation.args.debug);
-            drop(hold);
-            ready.invocation.codex_home = Some(home.clone());
-            Some(PrivateDir {
-                path: home,
-                keep: ready.invocation.args.debug,
-            })
-        }
-        None => None,
-    };
-    let mut proxy = None;
+    guards.tempdir = Some(tempdir);
     if proxy_needed {
-        match FilterProxy::bind(tempdir.path()) {
-            Ok(bound) => {
-                ready.invocation.proxy = Some(bound.endpoint());
-                proxy = Some(bound);
-            }
-            Err(detail) => return reject(&mut caller, format, &detail, started),
-        }
+        let bound = FilterProxy::bind(&ready.invocation.tempdir)?;
+        ready.invocation.proxy = Some(bound.endpoint());
+        guards.proxy = Some(bound);
     }
-    let launch = match ready.adapter.launch(&ready.executable, &ready.invocation) {
-        Ok(launch) => launch,
-        Err(detail) => return reject(&mut caller, format, &detail, started),
-    };
+    let hold = caller.signals.hold();
+    let launch = ready
+        .adapter
+        .launch(&ready.executable, &ready.invocation)
+        .inspect_err(|_| caller.signals.finishing())?;
+    for dir in &launch.private_dirs {
+        caller.signals.tempdir(dir.path.clone(), debug);
+        guards.private_dirs.push(OwnedDir {
+            path: dir.path.clone(),
+            keep: debug,
+        });
+    }
+    drop(hold);
     let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
     plan.push(credential_line);
-    execute(caller, ready, launch, plan, tempdir, proxy, started)
+    let Ready {
+        invocation,
+        adapter,
+        raw,
+        ..
+    } = ready;
+    Ok(Prepared::Execute(Box::new(Resources {
+        invocation,
+        adapter,
+        launch,
+        plan,
+        raw,
+    })))
 }
 
-struct PrivateDir {
-    path: PathBuf,
-    keep: bool,
-}
-
-impl Drop for PrivateDir {
-    fn drop(&mut self) {
-        if !self.keep {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
+fn dry_run(ready: &mut Ready, proxy_needed: bool) -> Result<Vec<String>, String> {
+    ready.invocation.tempdir = PathBuf::from(DRY_RUN_TEMPDIR);
+    ready.invocation.proxy = proxy_needed.then(|| ProxyEndpoint {
+        port: None,
+        socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
+    });
+    let launch = ready.adapter.launch(&ready.executable, &ready.invocation)?;
+    Ok(plan_lines(
+        &launch,
+        &ready.invocation.session,
+        &ready.invocation.prompt,
+    ))
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
     caller.signals.finishing();
-    let end = Event::now(Body::End(End {
-        status: EndStatus::Rejected,
-        exit_code: None,
-        detail: detail.to_string(),
-        duration_ms: elapsed_ms(started),
-        usage: Usage::default(),
-        result: None,
-    }));
-    caller.emit(&mut Output::new(format, SandboxMode::On, ""), &end, &|_| {
-        None
+    caller.with_stdout(|out| {
+        write_end(
+            out,
+            format,
+            End::early(EndStatus::Rejected, detail.to_string(), started),
+        )
     });
     caller.print_error_line(&format!("agentrun: {detail}"));
     EndStatus::Rejected.exit_code()
@@ -268,12 +306,8 @@ fn prepare(
     format: Format,
     adapters: &AdapterLookup,
 ) -> Result<Ready, String> {
-    if args.max_turns.is_some() && runtime != Runtime::ClaudeCode {
-        return Err("--max-turns is only supported by claude-code".to_string());
-    }
-    if let (Runtime::Pi, Some(model)) = (runtime, &args.model) {
-        pi::parse_model(model)?;
-    }
+    let adapter = adapters(runtime);
+    adapter.check_args(&args)?;
     let allow_hosts = network::check_usage(args.network, &args.allow_host)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let prompt = read_prompt(caller, &args)?;
@@ -292,11 +326,12 @@ fn prepare(
     let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;
     let executable = find_executable(runtime.executable(), &session.path, &cwd)
         .ok_or_else(|| format!("{} not found in PATH", runtime.executable()))?;
-    let sandbox = sandbox::check(mode, runtime, &session, &cwd, &caller.signals)?;
+    let sandbox = sandbox::check(mode, runtime, &session, &cwd, &|pid| {
+        caller.signals.checking(pid)
+    })?;
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
-    let adapter = adapters(runtime);
     let invocation = Invocation {
         runtime,
         args,
@@ -308,7 +343,6 @@ fn prepare(
         session,
         allow_hosts,
         proxy: None,
-        codex_home: None,
     };
     Ok(Ready {
         invocation,

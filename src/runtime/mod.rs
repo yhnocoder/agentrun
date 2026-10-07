@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::cli::{Format, RunArgs, Runtime};
 use crate::network::{HostRule, ProxyEndpoint};
-use crate::output::{SubagentStatus, TokenCounts, Usage};
+use crate::output::{Record, SandboxKind};
 use crate::sandbox::Sandbox;
 use crate::session::Session;
 use claudecode::ClaudeCode;
@@ -20,11 +20,12 @@ pub const DETAIL_MAX_CHARS: usize = 500;
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
+    fn check_args(&self, args: &RunArgs) -> Result<(), String>;
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String>;
     fn echoes_prompt(&self) -> bool;
     fn translate(&mut self, line: &Value) -> Vec<Record>;
     fn after_exit(&mut self) -> Vec<Record>;
-    fn failure(&self, exit_code: Option<i32>, stderr_tail: &str) -> Option<String>;
+    fn failure(&self, exit_code: Option<i32>) -> Option<Failure>;
 }
 
 pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
@@ -32,6 +33,29 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    Message(String),
+    Unexplained,
+}
+
+impl Failure {
+    pub fn from_detail(detail: String) -> Failure {
+        if detail.is_empty() {
+            Failure::Unexplained
+        } else {
+            Failure::Message(detail)
+        }
+    }
+}
+
+pub fn reject_max_turns(args: &RunArgs) -> Result<(), String> {
+    match args.max_turns {
+        Some(_) => Err("--max-turns is only supported by claude-code".to_string()),
+        None => Ok(()),
     }
 }
 
@@ -55,7 +79,12 @@ pub struct Invocation {
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
     pub proxy: Option<ProxyEndpoint>,
-    pub codex_home: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateDir {
+    pub label: &'static str,
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,49 +94,8 @@ pub struct Launch {
     pub env: Vec<(OsString, OsString)>,
     pub signal_wrapped_child: bool,
     pub service_hosts: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Record {
-    PromptEcho {
-        text: String,
-    },
-    ToolStart {
-        id: String,
-        parent: Option<String>,
-        name: String,
-        summary: String,
-    },
-    ToolEnd {
-        id: String,
-        denied: bool,
-    },
-    SubagentStart {
-        id: String,
-        parent: Option<String>,
-        kind: String,
-        model: Option<String>,
-        description: String,
-    },
-    SubagentEnd {
-        id: String,
-        status: SubagentStatus,
-    },
-    Text {
-        parent: Option<String>,
-        text: String,
-    },
-    Usage {
-        parent: Option<String>,
-        model: Option<String>,
-        counts: TokenCounts,
-    },
-    RunUsage(Usage),
-    Result {
-        text: String,
-    },
-    Debug(String),
-    Terminate,
+    pub wrapped: SandboxKind,
+    pub private_dirs: Vec<PrivateDir>,
 }
 
 #[cfg(test)]

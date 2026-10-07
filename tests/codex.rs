@@ -403,6 +403,41 @@ fn missing_login_file_is_rejected_with_and_without_dry_run() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn filter_proxy_failure_is_reported_before_the_missing_login_file() {
+    let env = Env::with("codex", FAKE_CODEX);
+    let long_tmp = env.tmp().join("t".repeat(100));
+    std::fs::create_dir_all(&long_tmp).unwrap();
+    let output = command(
+        &env,
+        &[
+            "--network",
+            "custom",
+            "--allow-host",
+            "example.com",
+            "--prompt",
+            "hi",
+        ],
+    )
+    .env("TMPDIR", &long_tmp)
+    .output()
+    .unwrap();
+    let end = support::events(&output).pop().unwrap();
+    let detail = end["detail"].as_str().unwrap_or_default().to_string();
+    if detail.starts_with("sandbox is not available") {
+        eprintln!("skipped: {detail}");
+        return;
+    }
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(end["status"], "rejected");
+    assert!(
+        detail.starts_with("cannot start the filter proxy: "),
+        "{detail}"
+    );
+    assert_eq!(std::fs::read_dir(&long_tmp).unwrap().count(), 0);
+}
+
 #[test]
 fn dry_run_accepts_login_content_without_the_login_file() {
     let env = Env::with("codex", FAKE_CODEX);
