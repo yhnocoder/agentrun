@@ -39,7 +39,7 @@
     <tr><td><code>scripts/accept/</code></td><td>验收脚本 <code>accept.sh</code>、<code>lib/util.sh</code>、<code>lib/scenarios.sh</code>、<code>lib/concurrent.sh</code> 与 docker 镜像的 <code>Dockerfile</code></td><td>验收脚本</td></tr>
   </tbody>
 </table>
-<p><code>src/</code> 里每个文件末尾的 <code>#[cfg(test)] mod tests</code> 是该文件的单元测试，测试纯函数与适配器生成的参数；跨模块的行为、真实的子进程与沙箱放在 <code>tests/</code>。</p>
+<p><code>src/</code> 里每个文件末尾的 <code>#[cfg(test)] mod tests</code> 是该文件的单元测试，测试纯函数与适配器生成的参数。过滤代理的测试在 <code>src/network/tests.rs</code>，它们在测试进程内用多个线程在回环地址上启动真实的过滤代理与上游服务。跨模块的行为、真实的子进程与沙箱放在 <code>tests/</code>。</p>
 
 <h2>scripts/test.sh</h2>
 <p>一条命令运行全部检查，任何一步失败就停止并以非 0 退出。提交前在本机运行。</p>
