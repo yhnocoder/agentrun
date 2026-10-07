@@ -38,7 +38,7 @@
     <tr><td><code>src/doctor.rs</code></td><td><code>sandbox</code>、<code>sandbox_test</code>、<code>network</code>、<code>network_test</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
   </tbody>
 </table>
-<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个处理线程，建立转发后再加一个复制下行数据的线程，线程数没有上限；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。普通 HTTP 请求的转发、<code>CONNECT</code> 与 SOCKS5 的隧道都设了空闲时限：客户端关闭发送方向以后，上游连续 30 秒（<code>proxy.rs</code> 的 <code>UPSTREAM_IDLE_TIMEOUT</code>）没有发来数据，复制下行数据的线程就结束，所以上游一直不回复也不关闭时，处理线程与复制线程不会留到 agentrun 退出。客户端没有关闭时，上游停顿多久都不中断转发。</p>
+<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个处理线程，建立转发后再加一个复制下行数据的线程，线程数没有上限；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。普通 HTTP 请求的转发、<code>CONNECT</code> 与 SOCKS5 的隧道都设了空闲时限：客户端关闭发送方向以后，上游从最后一次发来数据起 30 秒（<code>proxy.rs</code> 的 <code>UPSTREAM_IDLE_TIMEOUT</code>）内没有再发来数据，复制下行数据的线程就结束，所以上游一直不回复也不关闭时，处理线程与复制线程不会留到 agentrun 退出。客户端没有关闭时，上游停顿多久都不中断转发。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
 <p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
