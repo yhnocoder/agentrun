@@ -37,7 +37,7 @@ agentrun is a single executable for macOS and Linux on x86_64 and arm64. Windows
 Download a release file. Replace `linux-x86_64` with `linux-arm64`, `macos-arm64` or `macos-x86_64` to match your machine:
 
 ```sh
-VERSION=1.0.0
+VERSION=1.0.1
 FILE=agentrun-$VERSION-linux-x86_64
 curl -LO https://github.com/yhnocoder/agentrun/releases/download/v$VERSION/$FILE
 chmod +x $FILE
@@ -53,7 +53,13 @@ On macOS, a file downloaded with a browser carries the quarantine attribute and 
 xattr -d com.apple.quarantine ~/.local/bin/agentrun
 ```
 
-Install from crates.io:
+Install with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall). It downloads the release file for your machine into `~/.cargo/bin` without compiling:
+
+```sh
+cargo binstall agentrun
+```
+
+Build from crates.io with the Rust toolchain:
 
 ```sh
 cargo install agentrun --locked

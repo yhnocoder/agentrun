@@ -39,7 +39,7 @@
     <tr><td><code>.github/workflows/ci.yml</code></td><td>每个 PR 与 <code>main</code> 的推送在 Linux 与 macOS 上运行的检查</td><td>CI</td></tr>
     <tr><td><code>.github/workflows/release.yml</code></td><td>四个可执行文件的构建与检查、第三方许可证文件、草稿 Release</td><td>发布</td></tr>
     <tr><td><code>about.toml</code>、<code>about.hbs</code></td><td><code>cargo-about</code> 的配置（接受的许可证、构建目标）与 <code>THIRD-PARTY-LICENSES.txt</code> 的纯文本模板</td><td>发布</td></tr>
-    <tr><td><code>Cargo.toml</code></td><td>版本号与 <code>[profile.release]</code></td><td>发布</td></tr>
+    <tr><td><code>Cargo.toml</code></td><td>版本号、<code>[profile.release]</code> 与 cargo-binstall 的下载地址 <code>[package.metadata.binstall]</code></td><td>发布</td></tr>
   </tbody>
 </table>
 <p><code>src/</code> 里每个文件末尾的 <code>#[cfg(test)] mod tests</code> 是该文件的单元测试，测试纯函数与适配器生成的参数。过滤代理的测试在 <code>src/network/tests.rs</code>，它们在测试进程内用多个线程在回环地址上启动真实的过滤代理与上游服务。跨模块的行为、真实的子进程与沙箱放在 <code>tests/</code>。</p>
@@ -219,6 +219,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 <p>每个文件上传为 Actions 的产物，保留 14 天。</p>
 <p><code>licenses</code> 用 <code>cargo-about</code> 按 <code>about.toml</code> 与 <code>about.hbs</code> 生成 <code>THIRD-PARTY-LICENSES.txt</code>，按许可证分组列出每个依赖的名字、版本与许可证全文。依赖的许可证不在 <code>about.toml</code> 的 <code>accepted</code> 列表里时任务失败。理由：发布的可执行文件静态链接了依赖，MIT 与 Apache-2.0 都要求随二进制分发附带许可声明。<code>about.toml</code> 的 <code>targets</code> 只列四个发布目标，只在 Windows 上使用的依赖不进入文件。</p>
 <p><code>release</code> 只在 tag 上运行（推送 tag，或在 Actions 页面对 tag 手动运行），等 <code>build</code> 与 <code>licenses</code> 都通过后，对四个可执行文件写 <code>SHA256SUMS</code>（每行 <code>&lt;哈希&gt;  &lt;文件名&gt;</code>），用 <code>gh release create --draft</code> 建标题为 <code>agentrun &lt;版本&gt;</code> 的草稿 Release，上传四个可执行文件、<code>SHA256SUMS</code> 与 <code>THIRD-PARTY-LICENSES.txt</code>。正文为空，发布说明由维护者贴入后发布。</p>
+<p><code>Cargo.toml</code> 的 <code>[package.metadata.binstall]</code> 让 <code>cargo binstall agentrun</code> 从 Release 下载这四个文件：<code>pkg-fmt = "bin"</code> 表示 Release 里的文件直接就是可执行文件；每个目标三元组一条 <code>overrides.&lt;三元组&gt;.pkg-url</code>，指向上表中的文件，Linux 的 gnu 与 musl 目标都指向 musl 静态链接的文件。理由：cargo-binstall 默认只认文件名里带目标三元组的文件，在 glibc 的 Linux 上先试 gnu 目标再试 musl。改文件名或增加平台时要同时改这些 override，否则 <code>cargo binstall</code> 找不到文件，回退到 cargo-quickinstall 的预编译文件或本机编译。这份配置随 crates.io 上的包发布，只对配置加入之后发布的版本生效。</p>
 <p><code>Cargo.toml</code> 的 <code>[profile.release]</code> 设 <code>strip = true</code>、<code>lto = true</code> 与 <code>codegen-units = 1</code>，理由：发布的文件更小，代价是 release 构建更慢。</p>
 <p>发布一个版本的步骤：</p>
 <ol>
@@ -227,6 +228,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
   <li>验收通过后合并 PR，在合并后的 <code>main</code> 上推送 tag：<code>git tag v&lt;版本&gt; &amp;&amp; git push origin v&lt;版本&gt;</code>。</li>
   <li>等 <code>release.yml</code> 建好草稿 Release，把发布说明贴进草稿并发布。</li>
   <li>在本机检出这个 tag，运行 <code>cargo publish --locked</code> 发布到 crates.io。crates.io 的令牌只在维护者本机，不放进仓库的 secrets。</li>
+  <li>运行 <code>cargo binstall agentrun@&lt;版本&gt; --disable-strategies quick-install,compile --root &lt;临时目录&gt; --no-confirm</code>，确认它从 Release 下载了文件，<code>&lt;临时目录&gt;/bin/agentrun --version</code> 输出新版本。<code>--disable-strategies</code> 禁止回退到编译，地址配置有误时命令失败。</li>
 </ol>
 </main>
 </body>
