@@ -79,14 +79,14 @@ cat <<'LINES'
 {"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"say hi"}]}}
 {"type":"message_start","message":{"role":"assistant","content":[],"provider":"deepseek","model":"deepseek-flash","stopReason":"pending"}}
 {"type":"message_update","message":{"role":"assistant","content":[]}}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"run it"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo hi\necho there"}}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":0,"totalTokens":10,"cost":{"total":0}},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"run it"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo hi\necho there"}}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":0,"totalTokens":10,"cost":{"total":0.125}},"stopReason":"toolUse"}}
 {"type":"tool_execution_start","toolCallId":"call_1","toolName":"bash","args":{"command":"echo hi\necho there","timeout":30}}
 {"type":"tool_execution_end","toolCallId":"call_1","toolName":"bash","result":{"content":[{"type":"text","text":"hi\nthere\n"}]},"isError":false}
 {"type":"message_end","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"hi\nthere\n"}],"isError":false}}
 {"type":"turn_end"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[],"provider":"deepseek","model":"deepseek-flash","stopReason":"pending"}}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":5,"output":6,"cacheRead":7,"cacheWrite":8,"reasoning":0,"totalTokens":26,"cost":{"total":0}},"stopReason":"stop"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":5,"output":6,"cacheRead":7,"cacheWrite":8,"reasoning":0,"totalTokens":26,"cost":{"total":0.25}},"stopReason":"stop"}}
 {"type":"turn_end"}
 {"type":"agent_end","messages":[]}
 {"type":"agent_settled"}
@@ -146,15 +146,15 @@ fn fake_pi_run_without_sandbox() {
         [
             json!({"schema": 1, "type": "prompt", "text": "say hi"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "deepseek/deepseek-flash", "input_tokens": 1, "output_tokens": 2,
-                "cache_read_tokens": 3, "cache_write_tokens": 4, "context_tokens": 8}),
+                "cache_read_tokens": 3, "cache_write_tokens": 4, "cost_usd": 0.125, "context_tokens": 8}),
             json!({"schema": 1, "type": "tool_start", "id": "call_1", "parent": null, "name": "bash", "summary": "bash: echo hi"}),
             json!({"schema": 1, "type": "tool", "id": "call_1", "parent": null, "name": "bash", "summary": "bash: echo hi", "denied": false, "error": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "hi there"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "deepseek/deepseek-flash", "input_tokens": 5, "output_tokens": 6,
-                "cache_read_tokens": 7, "cache_write_tokens": 8, "context_tokens": 20}),
+                "cache_read_tokens": 7, "cache_write_tokens": 8, "cost_usd": 0.25, "context_tokens": 20}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12,
-                    "by_model": {"deepseek/deepseek-flash": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12}}},
+                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.375,
+                    "by_model": {"deepseek/deepseek-flash": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.375}}},
                 "result": "hi there"}),
         ]
     );

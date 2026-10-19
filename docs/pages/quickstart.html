@@ -67,11 +67,11 @@ sudo dnf install bubblewrap socat</code></pre>
 <h2 id="doctor">检查环境</h2>
 <p>运行 <code>agentrun doctor</code>，后面写上你要用的运行时：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code
-<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude 2.1.303
 <span class="dim">[ok]  </span> claude-code  login       oauth_token
 <span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
 <span class="dim">[skip]</span> claude-code  network     --network none</div>
-<p>每一行是一项检查：运行时能不能找到，能不能登录，沙箱能不能启动，网络限制能不能执行。<code>sandbox</code> 一行说明 agentrun 在一个临时目录里试过了：沙箱里的命令能写这个目录，写不了目录以外的地方。全部是 <code>ok</code> 或 <code>skip</code> 就可以继续。出现 <code>fail</code> 时，这一行会写明原因和改法，也可以查<a href="guide.html#faq">常见问题</a>。</p>
+<p>每一行是一项检查：运行时能不能找到、版本是否满足上面表里的要求，能不能登录，沙箱能不能启动，网络限制能不能执行。<code>sandbox</code> 一行说明 agentrun 在一个临时目录里试过了：沙箱里的命令能写这个目录，写不了目录以外的地方。全部是 <code>ok</code> 或 <code>skip</code> 就可以继续。出现 <code>fail</code> 时，这一行会写明原因和改法，也可以查<a href="guide.html#faq">常见问题</a>。</p>
 
 <h2 id="first-run">运行第一个任务</h2>
 <p>新建一个目录，放一个小文件：</p>
@@ -80,17 +80,17 @@ printf 'def greet(name):\n    return "hello " + name\n' &gt; greet.py</code></pr
 <p>让 claude-code 给它写测试：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 greet.py 写一个测试并运行"
 <span class="dim">[main]</span> prompt 给 greet.py 写一个测试并运行
+<span class="dim">[main]</span> tool Glob: **/greet*.py
 <span class="dim">[main]</span> tool Read: greet.py
-<span class="dim">[main]</span> tool Glob: **/*test*.py
 <span class="dim">[main]</span> tool Write: test_greet.py
 <span class="dim">[main]</span> tool Bash: python3 -m unittest -v test_greet
-<span class="dim">[main]</span> text 我写了 `/tmp/hello/test_greet.py`，用的是 `unittest`，运行后 3 个测试全部通过。
-<span class="dim">[end]</span> finished 9.9s  in 67.4k  out 0.7k  cached 82%</div>
+<span class="dim">[main]</span> text 我给 `greet.py` 写了测试,放在 `test_greet.py` 里,运行后 2 个测试全部通过。
+<span class="dim">[end]</span> finished 13.4s  in 69.9k  out 0.7k  cached 91%  $0.0330</div>
 <p>怎么读这段输出：</p>
 <ul>
   <li>每行开头的 <code>[main]</code> 表示这一行来自主 agent。agent 启动 subagent 时，subagent 的行以它自己的标签开头，例如 <code>[explore#1]</code>。</li>
   <li><code>tool</code> 行是一次完成的工具调用，<code>text</code> 行是 agent 说的话。调用被拒绝时 <code>tool</code> 行末尾有 <code>(denied)</code>，执行出错时有 <code>(error)</code>，例如测试没有通过。</li>
-  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出，以及输入中命中缓存的比例。</li>
+  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出、输入中命中缓存的比例，最后是运行时报告的费用，单位美元。运行时不报告费用时（例如 codex）不显示费用。</li>
 </ul>
 <p>这次运行发生在沙箱里：agent 只能写 <code>hello</code> 目录和一个临时目录，它运行的命令不能联网，它也读不到你自己的运行时配置、插件和会话记录。</p>
 <p>不加 <code>--format text</code> 时，终端里显示的是动态界面：上方滚动显示同样的行，下方显示正在运行的 subagent 和主 agent 的状态。</p>

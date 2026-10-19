@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, PrivateDir, detail_head, reject_max_turns};
+use super::{
+    Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_max_turns,
+};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
@@ -14,6 +16,7 @@ use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
+pub(crate) const MIN_VERSION: Version = Version(0, 159, 2);
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
 pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
@@ -456,7 +459,7 @@ fn item_error(item: &Value) -> Option<bool> {
     let status = item["status"].as_str();
     if exit_code.is_some_and(|code| code != 0) || status == Some("failed") {
         Some(true)
-    } else if exit_code == Some(0) || status == Some("completed") {
+    } else if status == Some("completed") || (status.is_none() && exit_code == Some(0)) {
         Some(false)
     } else {
         None
@@ -471,6 +474,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: Some(field("output_tokens")),
         cache_read_tokens: Some(cached),
         cache_write_tokens: Some(field("cache_write_input_tokens")),
+        cost_usd: None,
     }
 }
 
@@ -1107,6 +1111,14 @@ mod tests {
                 None,
             ),
             (
+                json!({"type":"command_execution","exit_code":0,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0}),
+                Some(false),
+            ),
+            (
                 json!({"type":"file_change","status":"completed"}),
                 Some(false),
             ),
@@ -1166,6 +1178,7 @@ mod tests {
                     output_tokens: Some(109),
                     cache_read_tokens: Some(8960),
                     cache_write_tokens: Some(3),
+                    cost_usd: None,
                 },
             }]
         );
@@ -1183,6 +1196,7 @@ mod tests {
                     output_tokens: Some(0),
                     cache_read_tokens: Some(9),
                     cache_write_tokens: Some(0),
+                    cost_usd: None,
                 },
             }]
         );

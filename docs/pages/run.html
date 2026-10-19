@@ -34,10 +34,10 @@
     <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
     <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>一次运行的顺序、退出码</td></tr>
-    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_max_turns</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
-    <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>、<code>SERVICE_HOST</code></td><td>claude-code</td></tr>
-    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>、<code>model_service</code>、<code>session_state</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
-    <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
+    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_max_turns</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>Version</code>（<code>find</code>）、<code>min_version</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOST</code></td><td>claude-code</td></tr>
+    <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>MIN_VERSION</code>、<code>Model</code>、<code>parse_model</code>、<code>model_service</code>、<code>session_state</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
+    <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code>、<code>selected</code>、<code>COMMAND_TIMEOUT</code>、<code>USAGE_EXIT_CODE</code></td><td>doctor 检查</td></tr>
     <tr><td><code>src/json.rs</code></td><td><code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
   </tbody>
@@ -122,7 +122,7 @@ agentrun variables: (none)</div>
     <tr><th>检查项</th><th>通过条件</th></tr>
   </thead>
   <tbody>
-    <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到，说明里写出路径</td></tr>
+    <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到，并且版本不低于<a href="#runtime-versions">运行时版本</a>一节的最低版本。找到后运行 <code>&lt;运行时&gt; --version</code>（codex 用私有 <code>CODEX_HOME</code>），先在标准输出、再在标准错误里找第一个 <code>X.Y.Z</code> 形式的版本号，<code>v</code> 前缀与 <code>-</code> 之后的预发布后缀不参与比较。说明里写出路径与版本，例如 <code>/opt/node22/bin/claude 2.1.303</code>；低于最低版本时为 <code>fail</code>，说明写成 <code>&lt;路径&gt; 2.1.287, requires &gt;= 2.1.288</code>。命令启动失败、超时或退出码不为 0 时为 <code>fail</code>，退出码不为 0 时说明写成 <code>&lt;路径&gt;: --version exited with code 1: &lt;一行输出&gt;</code>，这行输出依次取标准错误里第一个形如 <code>TypeError:</code> 的错误行、标准错误的第一行、标准输出的第一行，都没有时只写 <code>exited with code 1</code>，被信号终止时写 <code>terminated by a signal</code>；不在输出里找版本号：npm 安装的运行时是 node 脚本，node 启动失败时标准错误的最后一行是 node 自己的版本，例如 <code>Node.js v22.22.0</code>。退出码为 0 但找不到版本号时为 <code>ok</code>，说明写成 <code>&lt;路径&gt;, version not recognized: &lt;输出的第一行&gt;</code>，因为解析不出版本不能说明运行时不能用。版本过低时其余三项照常检查</td></tr>
     <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 运行 <code>claude auth status</code>，读它输出的 JSON 里的 <code>loggedIn</code>；设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时说明写这个变量名，否则写 <code>authMethod</code>。codex 先检查登录文件存在，再用私有 <code>CODEX_HOME</code> 运行 <code>codex login status</code>，退出码 0 为通过。pi 用 <code>--mode json</code> 启动一次，读到 assistant 的 <code>message_start</code> 事件就终止它，不等模型回复；事件里的 <code>provider</code> 与 <code>model</code> 是 pi 实际选中的服务商与模型，给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败。pi 对不存在的模型名只在 stderr 上警告并照用，这个检查把该警告判为失败</td></tr>
     <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、目录内的文件写出、目录外写不进去。claude-code 的沙箱由它自己在进程内启动，无法单独调用，所以用 agentrun 给 pi 用的包裹代替：两者在 Linux 上都用 bwrap 与 socat，在 macOS 上都用 Seatbelt，检查的是同一组程序能否在当前环境启动。pi 用同一个包裹，并额外在包裹下运行一次 <code>pi --version</code>，确认 pi 与它依赖的 node 能在沙箱里启动，说明里加 <code>pi started</code>。codex 用 <code>codex sandbox</code> 执行同一条命令，文件系统与网络配置同实际运行。检查结束后删除该目录，给了 <code>--debug</code> 时保留并打印路径，保留前删除目录里指向登录文件的链接。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
     <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查，且沙箱检查没有运行时为 <code>skip</code>。启动过滤代理，在该运行时实际使用的沙箱里对一个允许的主机发 CONNECT 请求确认能连上，再对一个不允许的主机确认被拒绝。<code>custom</code> 时允许的主机是第一条 <code>--allow-host</code>（通配规则取 <code>www.</code> 加域名），不允许的主机是 <code>doctor-check.invalid:443</code>，要求拒绝原因为 <code>not_allowed</code>。<code>full</code> 时允许的主机是该运行时的模型服务主机（claude-code 为 <code>api.anthropic.com</code>，codex 为 <code>chatgpt.com</code>，pi 为 <code>--model</code> 的服务商，没给时为 pi 设置里的 <code>defaultProvider</code>，与实际运行时相同，取它在模型服务主机表里的主机，表里没有时用 <code>api.anthropic.com</code>），不允许的主机是 <code>169.254.169.254:80</code>，要求拒绝原因为 <code>private_address</code>。两次连接都由 agentrun 自己完成：在沙箱里运行 <code>agentrun doctor-connect HOST PORT</code>，它按环境里的代理变量经过滤代理连接，退出码 0 表示连上。codex 的网络由它自己的代理控制：<code>full</code> 时不启动过滤代理，不拦截私有地址，只检查允许的一半；<code>custom</code> 时 codex 的代理先按放行列表判断，放行的请求转给过滤代理；不允许的主机由 codex 的代理直接拒绝，过滤代理看不到这个请求，这时要求 codex 的代理回复 403 且带响应头 <code>x-proxy-error: blocked-by-allowlist</code>，过滤代理看到了请求时与另外两个运行时一样要求记录 <code>not_allowed</code>。macOS 上 codex 的 <code>custom</code> 检查失败且主机解析到 <code>198.18.0.0/15</code> 时，说明里指出这是 fake-ip，需要关掉本机代理软件的 fake-ip 模式</td></tr>
@@ -130,29 +130,29 @@ agentrun variables: (none)</div>
 </table>
 <p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒，超时按 <code>fail</code> 记并写明；<code>doctor-connect</code> 连接代理或目标最多等 10 秒。可执行文件没找到时，登录为 <code>skip</code>；沙箱与网络对 claude-code 与 pi 仍然检查，因为它们用的是 agentrun 自己的包裹与 <code>doctor-connect</code>，pi 的沙箱检查这时不启动 pi，说明里加 <code>pi not started (executable not found)</code>；对 codex 两项都为 <code>fail</code>，说明为 <code>executable not found</code>，因为它的沙箱与代理就是 codex 本身。默认输出每项一行，四列对齐；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>，被信号中断时输出已完成的项。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code pi
-[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  executable  /opt/node22/bin/claude 2.1.303
 [ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
 <span class="warn">[fail] claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</span>
 [skip] claude-code  network     --network none
-[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           executable  /opt/node22/bin/pi 1.2.0
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 <span class="warn">[fail] pi           sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</span>
 [skip] pi           network     --network none
 <span class="prompt">$</span> agentrun doctor claude-code pi --sandbox off --network full
-[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  executable  /opt/node22/bin/claude 2.1.303
 [ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
 [skip] claude-code  sandbox     --sandbox off
 [skip] claude-code  network     sandbox not running
-[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           executable  /opt/node22/bin/pi 1.2.0
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 [skip] pi           sandbox     --sandbox off
 [skip] pi           network     sandbox not running
 <span class="prompt">$</span> agentrun doctor claude-code pi --network custom --allow-host api.github.com
-[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  executable  /opt/node22/bin/claude 2.1.303
 [ok]   claude-code  login       oauth_token
 [ok]   claude-code  sandbox     bubblewrap: wrote inside, blocked outside
 [ok]   claude-code  network     api.github.com:443 reachable, doctor-check.invalid:443 refused (not_allowed)
-[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           executable  /opt/node22/bin/pi 1.2.0
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 [ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 [ok]   pi           network     api.github.com:443 reachable, doctor-check.invalid:443 refused (not_allowed)</div>
@@ -173,7 +173,8 @@ agentrun variables: (none)</div>
 </table>
 <p>调用方只看退出码就能区分「环境未配置好」（2）和「agent 没有完成任务」（1）。退出码为 2 时，调用方不改环境直接重试不会成功。状态的判定顺序见<a href="events.html#status">end.status</a>。</p>
 
-<h2>运行时版本</h2>
+<h2 id="runtime-versions">运行时版本</h2>
+<p>下面是 agentrun 要求的最低版本，<code>agentrun doctor</code> 的 <code>executable</code> 一项按它检查，见<a href="#doctor_check">doctor 检查</a>。最低版本是各运行时模块里的常量 <code>MIN_VERSION</code>，改这个列表时同时改常量与<a href="quickstart.html#runtimes">快速开始</a>的表，单元测试会比较三处是否一致。运行时子命令启动前不检查版本，<code>start</code> 事件也不带版本：运行开始前拿到版本要多启动一次运行时。</p>
 
 <ul>
   <li>claude-code: >= 2.1.288</li>
@@ -238,15 +239,15 @@ agentrun variables: (none)</div>
     <tr><td><code>user</code>，<code>isReplay</code> 为 true</td><td><code>message.content</code></td><td><code>prompt</code>，只取第一条。它在 <code>system/init</code> 之后、第一个 assistant 之前出现，<code>parent_tool_use_id</code> 为 null。之后出现的 <code>isReplay</code> 消息是后台 subagent 交回的结果（内容以 <code>&lt;agent-message</code> 开头），只写入 <code>--raw</code></td></tr>
     <tr><td><code>user</code>，其他</td><td><code>tool_result</code> 块的 <code>tool_use_id</code>、<code>is_error</code></td><td>对应的调用结束，输出 <code>tool</code>；<code>error</code> 取 <code>is_error</code>。调用成功时 tool_result 没有 <code>is_error</code> 字段，这时 <code>error</code> 为 false</td></tr>
     <tr><td><code>system</code>，subtype <code>task_notification</code></td><td><code>tool_use_id</code>、<code>status</code>、<code>usage.duration_ms</code></td><td><code>subagent_end</code>；<code>status</code> 为 <code>completed</code> 时 finished，其他值 failed</td></tr>
-    <tr><td><code>result</code></td><td><code>is_error</code>、<code>subtype</code>、<code>result</code>、<code>modelUsage</code></td><td><code>end</code> 的 <code>result</code>、失败判定与 <code>usage</code></td></tr>
+    <tr><td><code>result</code></td><td><code>is_error</code>、<code>subtype</code>、<code>result</code>、<code>modelUsage</code>、<code>total_cost_usd</code></td><td><code>end</code> 的 <code>result</code>、失败判定与 <code>usage</code></td></tr>
     <tr><td>其他，例如 <code>stream_event</code>、<code>rate_limit_event</code>、<code>system/status</code>、<code>task_started</code>、<code>task_progress</code></td><td></td><td>只写入 <code>--raw</code></td></tr>
   </tbody>
 </table>
 <ul>
   <li><code>parent</code> 取所在 assistant 消息的 <code>parent_tool_use_id</code>；它不是任何 <code>subagent_start</code> 的 id 时按 null 处理。</li>
   <li>subagent：<code>kind</code> 取 input 的 <code>subagent_type</code>，缺省为 <code>general-purpose</code>；<code>model</code> 取 input 的 <code>model</code>；<code>description</code> 取 input 的 <code>description</code> 第一行。subagent 默认在后台运行，启动后立即有一个 <code>status</code> 为 <code>async_launched</code> 的 tool_result，这个结果不输出事件。前台运行的 subagent 没有 <code>task_notification</code>，在收到它的 tool_result 时输出 <code>subagent_end</code>，<code>is_error</code> 为 true 时 failed。subagent 交回结果用的内部工具 <code>SubagentHandback</code> 不输出 <code>tool</code>。</li>
-  <li>usage：claude-code 把一次模型调用拆成多条 assistant 消息（thinking、tool_use、text 各一条），它们的 <code>message.id</code> 相同，每条都带 usage。同一个 id 只输出一个 <code>usage</code>，取最后一条的值，<code>time</code> 取输出时的时间。合并按 <code>parent_tool_use_id</code> 分别进行：主 agent 与每个 subagent 各保存一条待输出的用量，某个 parent 出现新的 <code>message.id</code> 时输出它自己的那条；输出 <code>subagent_end</code> 之前与运行时结束时输出全部待输出的用量。理由：多个 subagent 并行时，它们的 assistant 消息交错出现，只按 id 的先后判断会把一次调用拆成多个 <code>usage</code>。字段：<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_input_tokens</code>、<code>cache_creation_input_tokens</code>。model 为 <code>&lt;synthetic&gt;</code> 的消息不输出 <code>usage</code>，它的文字照常输出。</li>
-  <li>一次运行可能有多个 result：subagent 在后台运行时，主 agent 每收到一个 subagent 的结果就多一轮，每轮一个 result，<code>modelUsage</code> 是到当时为止的累计值。所有用到 result 的地方都取运行时退出前的最后一个。<code>end.usage</code> 由它的 <code>modelUsage</code> 按模型换算。</li>
+  <li>usage：claude-code 把一次模型调用拆成多条 assistant 消息（thinking、tool_use、text 各一条），它们的 <code>message.id</code> 相同，每条都带 usage。同一个 id 只输出一个 <code>usage</code>，取最后一条的值，<code>time</code> 取输出时的时间。合并按 <code>parent_tool_use_id</code> 分别进行：主 agent 与每个 subagent 各保存一条待输出的用量，某个 parent 出现新的 <code>message.id</code> 时输出它自己的那条；输出 <code>subagent_end</code> 之前与运行时结束时输出全部待输出的用量。理由：多个 subagent 并行时，它们的 assistant 消息交错出现，只按 id 的先后判断会把一次调用拆成多个 <code>usage</code>。字段：<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_input_tokens</code>、<code>cache_creation_input_tokens</code>；这里没有费用，<code>cost_usd</code> 为 null。model 为 <code>&lt;synthetic&gt;</code> 的消息不输出 <code>usage</code>，它的文字照常输出。</li>
+  <li>一次运行可能有多个 result：subagent 在后台运行时，主 agent 每收到一个 subagent 的结果就多一轮，每轮一个 result，<code>modelUsage</code> 是到当时为止的累计值。所有用到 result 的地方都取运行时退出前的最后一个。<code>end.usage</code> 由它的 <code>modelUsage</code> 按模型换算，<code>costUSD</code> 对应各模型的 <code>cost_usd</code>，总量的 <code>cost_usd</code> 取 <code>total_cost_usd</code>。</li>
 </ul>
 <table>
   <thead>
@@ -310,7 +311,7 @@ agentrun variables: (none)</div>
   <tbody>
     <tr><td><code>tool_execution_start</code></td><td><code>tool_start</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，summary 由 <code>args</code> 计算</td></tr>
     <tr><td><code>tool_execution_end</code></td><td><code>tool</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，<code>denied</code> 为 false，<code>error</code> 取 <code>isError</code>，没有这个字段时为 null。<code>args</code> 不在这个事件里，从对应的 <code>tool_execution_start</code> 取。同一条消息里的多个调用并行执行，结束顺序可能与开始顺序不同</td></tr>
-    <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测）；<code>reasoning</code> 与 <code>cost</code> 不进统一事件</td></tr>
+    <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测），<code>cost.total</code> 对应 <code>cost_usd</code>；<code>reasoning</code> 与 <code>cost</code> 的其他分项不进统一事件</td></tr>
     <tr><td>user 的 <code>message_end</code></td><td><code>prompt</code>：全部 text 元素按顺序用换行连接</td></tr>
     <tr><td>第一个 assistant 的 <code>message_start</code></td><td>不输出；用于模型检查</td></tr>
   </tbody>
@@ -389,9 +390,9 @@ agentrun variables: (none)</div>
     <tr><td><code>item.started</code>，<code>command_execution</code></td><td><code>tool_start</code>：<code>name</code> 为 <code>command_execution</code>，summary 为 <code>shell: </code> 加命令第一行</td></tr>
     <tr><td><code>item.started</code>，<code>file_change</code></td><td><code>tool_start</code>：<code>name</code> 为 <code>file_change</code>，summary 为 <code>patch: </code> 加全部路径，空格分隔</td></tr>
     <tr><td><code>item.started</code>，<code>mcp_tool_call</code></td><td><code>tool_start</code>：<code>name</code> 为 <code>mcp_tool_call</code>，summary 为 <code>mcp: server.tool</code></td></tr>
-    <tr><td><code>item.completed</code>，<code>command_execution</code>、<code>file_change</code>、<code>mcp_tool_call</code></td><td><code>tool</code>，<code>id</code> 为 item 的 <code>id</code>。这个 <code>id</code> 之前没有 <code>item.started</code> 时，先按上面三行由这个 item 输出 <code>tool_start</code>，再输出 <code>tool</code>。<code>error</code>：<code>exit_code</code> 不为 0 或 <code>status</code> 为 <code>failed</code> 时为 true；<code>exit_code</code> 为 0 或 <code>status</code> 为 <code>completed</code> 时为 false；其余情况为 null，例如 <code>status</code> 为 <code>declined</code>。只有 <code>command_execution</code> 有 <code>exit_code</code></td></tr>
+    <tr><td><code>item.completed</code>，<code>command_execution</code>、<code>file_change</code>、<code>mcp_tool_call</code></td><td><code>tool</code>，<code>id</code> 为 item 的 <code>id</code>。这个 <code>id</code> 之前没有 <code>item.started</code> 时，先按上面三行由这个 item 输出 <code>tool_start</code>，再输出 <code>tool</code>。<code>error</code>：<code>exit_code</code> 不为 0 或 <code>status</code> 为 <code>failed</code> 时为 true；<code>status</code> 为 <code>completed</code>，或者没有 <code>status</code> 而 <code>exit_code</code> 为 0 时为 false；其余情况为 null，例如 <code>status</code> 为 <code>declined</code>。只有 <code>command_execution</code> 有 <code>exit_code</code></td></tr>
     <tr><td><code>item.completed</code>，<code>agent_message</code></td><td><code>text</code></td></tr>
-    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>input_tokens</code> 减去 <code>cached_input_tokens</code> 为输入，<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>，<code>cache_write_input_tokens</code> 对应 <code>cache_write_tokens</code>，<code>output_tokens</code> 为输出。<code>input_tokens</code> 含缓存部分按 OpenAI 用量的含义处理，样本里 <code>cached_input_tokens</code> 小于 <code>input_tokens</code>。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null</td></tr>
+    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>input_tokens</code> 减去 <code>cached_input_tokens</code> 为输入，<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>，<code>cache_write_input_tokens</code> 对应 <code>cache_write_tokens</code>，<code>output_tokens</code> 为输出。<code>input_tokens</code> 含缓存部分按 OpenAI 用量的含义处理，样本里 <code>cached_input_tokens</code> 小于 <code>input_tokens</code>。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null；codex 不报告费用，<code>cost_usd</code> 为 null</td></tr>
     <tr><td>其他（<code>collab_tool_call</code>、<code>reasoning</code>、<code>todo_list</code>、<code>web_search</code>，以及其余类型的 <code>item.started</code> 等）</td><td>只写入 <code>--raw</code></td></tr>
   </tbody>
 </table>

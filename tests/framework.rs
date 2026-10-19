@@ -23,7 +23,7 @@ fn types(events: &[Value]) -> Vec<String> {
 }
 
 fn empty_usage() -> Value {
-    json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "by_model": {}})
+    json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null, "by_model": {}})
 }
 
 #[test]
@@ -63,15 +63,15 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
             json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true, "error": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "stdin=hi"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "m1", "input_tokens": 10, "output_tokens": 2,
-                "cache_read_tokens": 5, "cache_write_tokens": 1, "context_tokens": 16}),
+                "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null, "context_tokens": 16}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": null, "input_tokens": 3, "output_tokens": 4,
-                "cache_read_tokens": null, "cache_write_tokens": null, "context_tokens": null}),
+                "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null, "context_tokens": null}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "all done"}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 13, "output_tokens": 6, "cache_read_tokens": 5, "cache_write_tokens": 1,
+                "usage": {"input_tokens": 13, "output_tokens": 6, "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null,
                     "by_model": {
-                        "m1": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 5, "cache_write_tokens": 1},
-                        "unknown": {"input_tokens": 3, "output_tokens": 4, "cache_read_tokens": null, "cache_write_tokens": null}
+                        "m1": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null},
+                        "unknown": {"input_tokens": 3, "output_tokens": 4, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null}
                     }},
                 "result": "all done"}),
         ]
@@ -110,8 +110,8 @@ fn normal_run_with_echo_uses_echo_result_and_run_usage() {
     assert_eq!(end["result"], "final answer");
     assert_eq!(
         end["usage"],
-        json!({"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9,
-            "by_model": {"m1": {"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9}}})
+        json!({"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9, "cost_usd": null,
+            "by_model": {"m1": {"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9, "cost_usd": null}}})
     );
 }
 
@@ -184,16 +184,16 @@ fn nested_subagents_get_numbers_parents_and_usage() {
     assert_eq!(
         events[11],
         json!({"schema": 1, "type": "subagent_end", "id": "s2", "status": "finished",
-            "usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null,
-                "by_model": {"unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null}}}})
+            "usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null,
+                "by_model": {"unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null}}}})
     );
     assert_eq!(
         events[12],
         json!({"schema": 1, "type": "subagent_end", "id": "s1", "status": "failed",
-        "usage": {"input_tokens": 25, "output_tokens": 3, "cache_read_tokens": 3, "cache_write_tokens": null,
+        "usage": {"input_tokens": 25, "output_tokens": 3, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null,
             "by_model": {
-                "haiku-4": {"input_tokens": 20, "output_tokens": 2, "cache_read_tokens": null, "cache_write_tokens": null},
-                "unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null}
+                "haiku-4": {"input_tokens": 20, "output_tokens": 2, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null},
+                "unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null}
             }}})
     );
     assert_eq!(events[13]["id"], "s3");
