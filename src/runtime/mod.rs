@@ -117,6 +117,8 @@ pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> 
             .filter(|other| *other != runtime || !reads_login_inside_sandbox(runtime))
             .filter_map(|other| login_file(other, session, cwd)),
     );
+    paths.extend(claudecode::history_paths(session, cwd));
+    paths.extend(codex::history_paths(session, cwd));
     paths.retain(|path| !contains(path, cwd));
     paths
 }
@@ -362,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn default_denied_reads_list_home_entries_and_every_login_file_but_pis_own() {
+    fn default_denied_reads_list_home_entries_login_files_but_pis_own_and_histories() {
         let cwd = Path::new("/nonexistent/work");
         let home = [("HOME", "/nonexistent/home")];
         let logins = [
@@ -380,6 +382,14 @@ mod tests {
                     .iter()
                     .filter(|(other, _)| runtime != Runtime::Pi || *other != Runtime::Pi)
                     .map(|(_, login)| PathBuf::from(login)),
+            );
+            expected.extend(
+                [
+                    "/nonexistent/home/.claude/projects",
+                    "/nonexistent/home/.codex/sessions",
+                    "/nonexistent/home/.codex/history.jsonl",
+                ]
+                .map(PathBuf::from),
             );
             assert_eq!(
                 default_denied_reads(runtime, &env_session(runtime, &home), cwd),
@@ -401,6 +411,9 @@ mod tests {
             [
                 PathBuf::from("/nonexistent/claude/.credentials.json"),
                 PathBuf::from("/nonexistent/work/relative/codex/auth.json"),
+                PathBuf::from("/nonexistent/claude/projects"),
+                PathBuf::from("/nonexistent/work/relative/codex/sessions"),
+                PathBuf::from("/nonexistent/work/relative/codex/history.jsonl"),
             ]
         );
         assert_eq!(

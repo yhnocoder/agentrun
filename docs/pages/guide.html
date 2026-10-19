@@ -64,7 +64,7 @@ agentrun claude-code &lt; task.md</code></pre>
 <p>被拒绝的连接显示为 <code>net denied</code> 一行，括号里是原因。解析到内网地址的主机默认也会被拒绝，需要访问时把主机名原样写进 <code>--allow-host</code>。agentrun 不支持 IPv6。规则的细节见<a href="isolation.html#network">网络</a>。</p>
 
 <h2 id="deny-read">不让 agent 读某些文件</h2>
-<p>默认情况下，agent 读不到 <code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code>，也读不到 claude-code、codex 与 pi 的登录文件（运行 pi 时 pi 自己的登录文件除外）。还有别的文件不想让 agent 看到时，用 <code>--deny-read</code> 加上，可以写多次，文件和目录都可以：</p>
+<p>默认情况下，agent 读不到 <code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code>，也读不到 claude-code、codex 与 pi 的登录文件（运行 pi 时 pi 自己的登录文件除外），以及 claude-code 与 codex 保存的会话记录（<code>~/.claude/projects</code>、<code>~/.codex/sessions</code>、<code>~/.codex/history.jsonl</code>）。还有别的文件不想让 agent 看到时，用 <code>--deny-read</code> 加上，可以写多次，文件和目录都可以：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --deny-read .env --format text --prompt "依次运行 cat ~/.aws/config 与 cat .env，然后用一行回复：每个文件是否读到了内容"
 <span class="dim">[main]</span> prompt 依次运行 cat ~/.aws/config 与 cat .env，然后用一行回复：每个文件是否读到了内容
 <span class="dim">[main]</span> text 我会运行这些命令。
@@ -195,7 +195,7 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
     <tr><th></th><th>沙箱开启时（默认）</th></tr>
   </thead>
   <tbody>
-    <tr><td>读文件</td><td>读不到存放密钥与账号的常见路径和运行时的登录文件，<code>--deny-read</code> 可以再加，见<a href="#deny-read">不让 agent 读某些文件</a></td></tr>
+    <tr><td>读文件</td><td>读不到存放密钥与账号的常见路径、运行时的登录文件和会话记录，<code>--deny-read</code> 可以再加，见<a href="#deny-read">不让 agent 读某些文件</a></td></tr>
     <tr><td>写文件</td><td>只能写工作目录（<code>--cwd</code>，默认是当前目录）和一个临时目录，运行结束后临时目录会被删除</td></tr>
     <tr><td>联网</td><td>按 <code>--network</code>，默认不能联网</td></tr>
     <tr><td>你的配置</td><td>不读取你自己的运行时设置、插件、规则文件与会话记录，每次运行都从干净的状态开始</td></tr>

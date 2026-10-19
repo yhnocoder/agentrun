@@ -17,6 +17,7 @@ pub(crate) const SERVICE_HOST: &str = "api.anthropic.com";
 const CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
 const CONFIG_HOME_SUBDIR: &str = ".claude";
 const LOGIN_FILE: &str = ".credentials.json";
+const HISTORY_DIR: &str = "projects";
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
 const ALLOWED_WITH_SANDBOX: [&str; 3] = ["Read", "Glob", "Grep"];
@@ -481,6 +482,14 @@ pub(crate) fn login_file(session: &Session, cwd: &Path) -> Option<PathBuf> {
     session
         .runtime_dir(cwd, CONFIG_DIR_VARIABLE, CONFIG_HOME_SUBDIR)
         .map(|dir| dir.join(LOGIN_FILE))
+}
+
+pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    session
+        .runtime_dir(cwd, CONFIG_DIR_VARIABLE, CONFIG_HOME_SUBDIR)
+        .map(|dir| dir.join(HISTORY_DIR))
+        .into_iter()
+        .collect()
 }
 
 fn denied_paths(denied_reads: &[PathBuf]) -> Vec<String> {

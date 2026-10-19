@@ -19,6 +19,7 @@ pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
 const HOME_LABEL: &str = "codex home";
 pub(crate) const LOGIN_FILE: &str = "auth.json";
+const HISTORY_ENTRIES: [&str; 2] = ["sessions", "history.jsonl"];
 pub(crate) const SERVICE_HOSTS: [&str; 4] = [
     "chatgpt.com",
     "ab.chatgpt.com",
@@ -329,6 +330,13 @@ impl Adapter for Codex {
 
 pub(crate) fn user_home(session: &Session, cwd: &Path) -> Option<PathBuf> {
     session.runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
+}
+
+pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    user_home(session, cwd)
+        .into_iter()
+        .flat_map(|home| HISTORY_ENTRIES.map(|entry| home.join(entry)))
+        .collect()
 }
 
 pub(crate) fn login_file(session: &Session, cwd: &Path) -> PathBuf {

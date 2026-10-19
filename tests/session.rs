@@ -160,7 +160,13 @@ fn dry_run_lists_variable_names_and_skips_credentials() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let denied: Vec<String> = agentrun::runtime::DENIED_HOME_ENTRIES
         .iter()
-        .chain(&[".claude/.credentials.json", ".codex/auth.json"])
+        .chain(&[
+            ".claude/.credentials.json",
+            ".codex/auth.json",
+            ".claude/projects",
+            ".codex/sessions",
+            ".codex/history.jsonl",
+        ])
         .map(|entry| format!("{home_str}/{entry}"))
         .collect();
     assert_eq!(

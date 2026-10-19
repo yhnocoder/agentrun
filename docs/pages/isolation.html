@@ -35,7 +35,7 @@
     <tr><td><code>src/sandbox/seatbelt.rs</code></td><td><code>probe</code>、<code>write_seatbelt_profile</code>、<code>wrap_seatbelt</code></td><td>判断沙箱能不能用、用 Seatbelt 包裹命令（由 <code>wrap</code> 调用）、读取限制</td></tr>
     <tr><td><code>src/network/</code></td><td><code>mod.rs</code> 的 <code>ProxyEndpoint</code>、<code>proxy_needed</code>、<code>proxy_environment</code>；<code>rule.rs</code> 的 <code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>；<code>address.rs</code> 的 <code>is_private</code>；<code>upstream.rs</code> 的 <code>Upstream</code>、<code>ProxyAddress</code>；<code>proxy.rs</code> 的 <code>FilterProxy</code>（<code>bind</code>、<code>endpoint</code>、<code>serve_session</code>）；<code>http.rs</code> 的 <code>handle_http</code>；<code>socks.rs</code> 的 <code>handle_socks</code></td><td>网络、过滤代理、不支持 IPv6</td></tr>
     <tr><td><code>src/runtime/mod.rs</code></td><td><code>DENIED_HOME_ENTRIES</code>、<code>default_denied_reads</code>、<code>denied_reads</code></td><td>读取限制</td></tr>
-    <tr><td><code>src/runtime/claudecode.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/runtime/pi.rs</code></td><td><code>claudecode.rs</code> 的 <code>ClaudeCode</code>（<code>launch</code>）、<code>SERVICE_HOST</code>、<code>login_file</code>；<code>codex.rs</code> 的 <code>Codex</code>（<code>launch</code>）、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code>；<code>pi.rs</code> 的 <code>Pi</code>（<code>launch</code>）、<code>model_service</code></td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/runtime/pi.rs</code></td><td><code>claudecode.rs</code> 的 <code>ClaudeCode</code>（<code>launch</code>）、<code>SERVICE_HOST</code>、<code>login_file</code>、<code>history_paths</code>；<code>codex.rs</code> 的 <code>Codex</code>（<code>launch</code>）、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code>、<code>history_paths</code>；<code>pi.rs</code> 的 <code>Pi</code>（<code>launch</code>）、<code>model_service</code></td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
   </tbody>
 </table>
@@ -131,10 +131,12 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <tbody>
     <tr><td>主目录里的密钥与账号（<code>DENIED_HOME_ENTRIES</code>）</td><td><code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code></td></tr>
     <tr><td>三个运行时的登录文件</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/.credentials.json</code>（未设时 <code>~/.claude/.credentials.json</code>）、codex 的 <code>$CODEX_HOME/auth.json</code>（未设时 <code>~/.codex/auth.json</code>）、pi 的 <code>$PI_CODING_AGENT_DIR/auth.json</code>（未设时 <code>~/.pi/agent/auth.json</code>）。运行 pi 时不含 pi 自己的登录文件</td></tr>
+    <tr><td>会话记录</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/projects</code>（未设时 <code>~/.claude/projects</code>，含每个项目的会话记录与 memory 目录）、codex 的 <code>$CODEX_HOME/sessions</code> 与 <code>$CODEX_HOME/history.jsonl</code>（未设时在 <code>~/.codex</code> 下）</td></tr>
   </tbody>
 </table>
 <ul>
   <li><code>~</code> 与这三个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。</li>
+  <li>agentrun 自己的运行不使用这几个会话记录路径：claude-code 用 <code>--no-session-persistence</code>，沙箱里的 memory 目录在会话临时目录；codex 用私有 <code>CODEX_HOME</code>。所以三个运行时都挡住它们。</li>
   <li>pi 的整个进程在沙箱里，要读写自己的登录文件来登录和刷新令牌，所以运行 pi 时不挡它。claude-code 与 codex 的进程在沙箱外读写自己的登录文件，只有它们的工具与命令受读取限制，所以运行它们时自己的登录文件也挡住。</li>
   <li><code>--deny-read</code> 的相对路径按 agentrun 的当前目录展开成绝对路径，不展开 <code>~</code>。路径等于或包含工作目录时是用法错误（退出码 2），<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: contains the working directory &lt;工作目录&gt;</code>；默认列表里包含工作目录的项直接去掉。理由：工作目录读不到时 agent 无法工作。</li>
   <li>最终的列表按默认列表在前、<code>--deny-read</code> 在后的顺序去重，写进 <code>start</code> 事件的 <code>deny_read</code> 与 <code>--dry-run</code>、<code>--debug</code> 的 <code>deny read:</code> 一行。</li>
@@ -266,7 +268,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>pi</td><td>能读读取限制以外、用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。agent 可以把状态目录里的 <code>auth.json</code> 换成指向其他文件的符号链接，之后带 <code>AGENTRUN_PI_AUTH</code> 运行时，agentrun 把凭据写到那个文件，这个文件可以在沙箱之外，见<a href="session.html#credentials">凭据</a>。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能读、写容器内任何位置，能联网，边界是容器</td></tr>
   </tbody>
 </table>
-<p>读取限制只针对文件。会话环境里的变量（例如 <code>DEEPSEEK_API_KEY</code> 与容器里的令牌）agent 都能读到；默认列表以外的凭据文件，需要用 <code>--deny-read</code> 自己加上。</p>
+<p>读取限制只针对文件。会话环境里的变量（例如 <code>DEEPSEEK_API_KEY</code> 与容器里的令牌）agent 都能读到；默认列表以外的凭据文件，需要用 <code>--deny-read</code> 自己加上。pi 的会话记录目录（状态目录里的 <code>sessions/</code>）不在默认列表里。</p>
 <p>过滤代理本身的剩余风险：</p>
 <ul>
   <li>HTTPS 只按 <code>CONNECT</code> 的主机名与端口判定，TLS 里的 SNI 与 <code>Host</code> 不检查。放行的主机如果和别的站点共用 IP 并按 SNI 选站点，隧道里可以访问那些站点。</li>
