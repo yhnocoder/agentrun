@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::{Adapter, Failure, Invocation, Launch, Version, display_path};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
-use crate::image::{Image, base64};
+use crate::encoding::base64;
+use crate::image::Image;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
