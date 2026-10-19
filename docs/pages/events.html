@@ -72,7 +72,7 @@ interface StartEvent extends EventBase {
 interface PromptEvent extends EventBase {
   type: "prompt"
   text: string
-  images: string[]           // --image 给出的路径，按给出的顺序，原样不改；没有图片时为 []
+  images: string[]           // --image 给出的路径，按给出的顺序；没有图片时为 []
 }
 
 // 一次工具调用结束时输出
@@ -289,7 +289,7 @@ interface Usage extends TokenCounts {
   "result": "测试全部通过。"
 }</code></pre>
 <h3>提示词</h3>
-<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。<code>images</code> 列出调用方用 <code>--image</code> 给出的路径，不写图片内容，也不写 agentrun 在会话临时目录里写的副本路径，见<a href="run.html#images">图片</a>。</p>
+<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。<code>images</code> 列出调用方用 <code>--image</code> 给出的路径，不转成绝对路径，路径里不是 UTF-8 的字节换成 U+FFFD；不写图片内容，也不写 agentrun 在会话临时目录里写的副本路径，见<a href="run.html#images">图片</a>。</p>
 
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 

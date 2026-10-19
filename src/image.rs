@@ -9,6 +9,10 @@ const BASE64_ALPHABET: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_SIGNATURE: [u8; 3] = [0xff, 0xd8, 0xff];
+const JPEG_LS_MARKER: u8 = 0xf7;
+const PNG_HEADER_LENGTH: u32 = 13;
+const PNG_ANIMATION_CHUNK: &[u8; 4] = b"acTL";
+const PNG_DATA_CHUNK: &[u8; 4] = b"IDAT";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageKind {
@@ -47,9 +51,9 @@ pub struct Image {
 
 fn detect(bytes: &[u8]) -> Option<ImageKind> {
     if bytes.starts_with(&PNG_SIGNATURE) {
-        Some(ImageKind::Png)
+        still_png(bytes).then_some(ImageKind::Png)
     } else if bytes.starts_with(&JPEG_SIGNATURE) {
-        Some(ImageKind::Jpeg)
+        (bytes.get(3) != Some(&JPEG_LS_MARKER)).then_some(ImageKind::Jpeg)
     } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
         Some(ImageKind::Gif)
     } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
@@ -59,6 +63,31 @@ fn detect(bytes: &[u8]) -> Option<ImageKind> {
     }
 }
 
+fn still_png(bytes: &[u8]) -> bool {
+    let chunk_length = |offset: usize| {
+        bytes
+            .get(offset..offset + 4)
+            .map(|field| u32::from_be_bytes(field.try_into().expect("four bytes")))
+    };
+    if chunk_length(PNG_SIGNATURE.len()) != Some(PNG_HEADER_LENGTH)
+        || bytes.get(12..16) != Some(b"IHDR")
+    {
+        return false;
+    }
+    let mut offset = PNG_SIGNATURE.len();
+    while let (Some(length), Some(kind)) = (chunk_length(offset), bytes.get(offset + 4..offset + 8))
+    {
+        if kind == PNG_ANIMATION_CHUNK {
+            return false;
+        }
+        if kind == PNG_DATA_CHUNK {
+            return true;
+        }
+        offset += 12 + length as usize;
+    }
+    true
+}
+
 pub fn read_images(paths: &[PathBuf]) -> Result<Vec<Image>, String> {
     paths.iter().map(|path| read_image(path)).collect()
 }
@@ -66,19 +95,27 @@ pub fn read_images(paths: &[PathBuf]) -> Result<Vec<Image>, String> {
 fn read_image(path: &Path) -> Result<Image, String> {
     let read_error =
         |error: std::io::Error| format!("cannot read image {}: {error}", path.display());
-    let mut file = std::fs::File::open(path).map_err(read_error)?;
-    let size = file.metadata().map_err(read_error)?.len();
-    if size > IMAGE_MAX_BYTES {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(read_error)?;
+    if !file.metadata().map_err(read_error)?.is_file() {
+        return Err(format!("image {} is not a regular file", path.display()));
+    }
+    let mut bytes = Vec::new();
+    file.take(IMAGE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(read_error)?;
+    if bytes.len() as u64 > IMAGE_MAX_BYTES {
         return Err(format!(
-            "image {} is {size} bytes, more than the limit of {IMAGE_MAX_BYTES} bytes",
+            "image {} is larger than the limit of {IMAGE_MAX_BYTES} bytes",
             path.display()
         ));
     }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(read_error)?;
     let kind = detect(&bytes).ok_or_else(|| {
         format!(
-            "image {} is not a png, jpeg, gif or webp file",
+            "image {} is not a png, jpeg, gif or webp file (animated png and jpeg-ls are not supported)",
             path.display()
         )
     })?;
@@ -156,10 +193,30 @@ mod tests {
         assert_eq!(base64(&[0xff, 0xfe, 0xfd, 0x00]), "//79AA==");
     }
 
+    fn png(chunks: &[&[u8; 4]]) -> Vec<u8> {
+        let mut bytes = PNG_SIGNATURE.to_vec();
+        for (index, kind) in chunks.iter().enumerate() {
+            let length: u32 = if index == 0 { 13 } else { 2 };
+            bytes.extend(length.to_be_bytes());
+            bytes.extend(*kind);
+            bytes.extend(vec![0; length as usize + 4]);
+        }
+        bytes
+    }
+
     #[test]
     fn detect_reads_the_file_signature() {
-        assert_eq!(detect(&PNG_SIGNATURE), Some(ImageKind::Png));
+        assert_eq!(detect(&png(&[b"IHDR", b"IDAT"])), Some(ImageKind::Png));
+        assert_eq!(
+            detect(&png(&[b"IHDR", b"tEXt", b"IDAT", b"acTL"])),
+            Some(ImageKind::Png)
+        );
+        assert_eq!(detect(&png(&[b"IHDR"])), Some(ImageKind::Png));
+        assert_eq!(detect(&png(&[b"IHDR", b"acTL", b"IDAT"])), None);
+        assert_eq!(detect(&png(&[b"tEXt", b"IDAT"])), None);
+        assert_eq!(detect(&PNG_SIGNATURE), None);
         assert_eq!(detect(&[0xff, 0xd8, 0xff, 0xe0]), Some(ImageKind::Jpeg));
+        assert_eq!(detect(&[0xff, 0xd8, 0xff, 0xf7]), None);
         assert_eq!(detect(b"GIF89a...."), Some(ImageKind::Gif));
         assert_eq!(detect(b"GIF87a...."), Some(ImageKind::Gif));
         assert_eq!(detect(b"RIFF\x10\0\0\0WEBPVP8 "), Some(ImageKind::Webp));
@@ -184,7 +241,7 @@ mod tests {
         assert_eq!(
             read_images(std::slice::from_ref(&text)).unwrap_err(),
             format!(
-                "image {} is not a png, jpeg, gif or webp file",
+                "image {} is not a png, jpeg, gif or webp file (animated png and jpeg-ls are not supported)",
                 text.display()
             )
         );
@@ -195,14 +252,20 @@ mod tests {
         assert_eq!(
             read_images(std::slice::from_ref(&large)).unwrap_err(),
             format!(
-                "image {} is {} bytes, more than the limit of {IMAGE_MAX_BYTES} bytes",
-                large.display(),
-                IMAGE_MAX_BYTES + 1
+                "image {} is larger than the limit of {IMAGE_MAX_BYTES} bytes",
+                large.display()
             )
         );
 
-        let error = read_images(&[dir.path().to_path_buf()]).unwrap_err();
-        assert!(error.starts_with("cannot read image "), "{error}");
+        let fifo = dir.path().join("fifo.png");
+        let fifo_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+        for path in [dir.path().to_path_buf(), fifo, PathBuf::from("/dev/zero")] {
+            assert_eq!(
+                read_images(std::slice::from_ref(&path)).unwrap_err(),
+                format!("image {} is not a regular file", path.display())
+            );
+        }
     }
 
     #[test]

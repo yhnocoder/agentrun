@@ -155,7 +155,7 @@ fn image_that_is_missing_or_not_an_image_is_rejected() {
     assert_eq!(
         detail,
         format!(
-            "image {} is not a png, jpeg, gif or webp file",
+            "image {} is not a png, jpeg, gif or webp file (animated png and jpeg-ls are not supported)",
             text.display()
         )
     );

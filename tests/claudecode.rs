@@ -171,7 +171,7 @@ fn fake_claude_run_without_sandbox() {
 fn images_go_to_stdin_and_their_names_to_the_prompt_event() {
     let env = Env::with("claude", FAKE_CLAUDE);
     let image = env.root().join("shot.png");
-    std::fs::write(&image, b"\x89PNG\r\n\x1a\nrest").unwrap();
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDRrest").unwrap();
     let output = run(
         &env,
         &["--sandbox", "off", "--image", image.to_str().unwrap()],
@@ -184,7 +184,7 @@ fn images_go_to_stdin_and_their_names_to_the_prompt_event() {
     assert_eq!(
         line["message"]["content"],
         json!([
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpyZXN0"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUnJlc3Q="}},
             {"type": "text", "text": "say hi"}
         ])
     );

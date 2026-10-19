@@ -55,7 +55,7 @@ agentrun claude-code &lt; task.md</code></pre>
   "text": "图里写的是什么？只回答图里的文字。",
   "images": ["screenshot.png"]
 }</code></pre>
-<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、类型不对或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。传法的细节见<a href="run.html#images">图片</a>。</p>
+<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、不是普通文件、类型不对（包括动画 PNG）或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。传法的细节见<a href="run.html#images">图片</a>。</p>
 
 <h2 id="network">让 agent 访问网络</h2>
 <p>默认情况下，agent 运行的命令不能联网。运行时自己访问模型服务不受影响。需要联网时有两种放开方式：</p>
