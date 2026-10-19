@@ -180,7 +180,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 
 <h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
-<p>按当前环境检查运行时能否使用。不写运行时时检查全部三个，顺序固定为 claude-code、codex、pi。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
+<p>按当前环境检查运行时能否使用。不写运行时时检查全部三个，顺序固定为 claude-code、codex、pi。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--model</code> 只由 pi 的登录检查与实际使用的模型比较，claude-code 与 codex 的登录检查不调用模型，不检查模型名是否存在；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
 <table>
   <thead>
     <tr><th>检查项</th><th>通过条件</th></tr>

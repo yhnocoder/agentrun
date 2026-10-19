@@ -207,7 +207,11 @@ pub struct DoctorArgs {
         help = "Runtimes to check, in the order claude-code, codex, pi (default: all)"
     )]
     pub runtimes: Vec<Runtime>,
-    #[arg(long, value_name = "ID", help = "Model, checked for every runtime")]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Model; only the pi login check compares it with the model in use"
+    )]
     pub model: Option<String>,
     #[arg(
         long,
