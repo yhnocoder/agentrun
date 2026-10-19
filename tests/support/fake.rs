@@ -96,6 +96,7 @@ impl Adapter for FakeAdapter {
             Some("tool_end") => Record::ToolEnd {
                 id: string(line, "id"),
                 denied: line["denied"].as_bool().unwrap_or(false),
+                error: line["error"].as_bool(),
             },
             Some("subagent_start") => Record::SubagentStart {
                 id: string(line, "id"),

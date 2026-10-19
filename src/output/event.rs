@@ -132,6 +132,7 @@ pub struct Tool {
     pub name: String,
     pub summary: String,
     pub denied: bool,
+    pub error: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -380,11 +381,12 @@ mod tests {
             parent: None,
             name: "Bash".to_string(),
             summary: "Bash: ls".to_string(),
-            denied: true,
+            denied: false,
+            error: Some(true),
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"tool","time":"2026-10-04T13:00:00.000Z","id":"t1","parent":null,"name":"Bash","summary":"Bash: ls","denied":true}"#
+            r#"{"schema":1,"type":"tool","time":"2026-10-04T13:00:00.000Z","id":"t1","parent":null,"name":"Bash","summary":"Bash: ls","denied":false,"error":true}"#
         );
     }
 

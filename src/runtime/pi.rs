@@ -250,6 +250,7 @@ impl Adapter for Pi {
             Some("tool_execution_end") => vec![Record::ToolEnd {
                 id: string(&line["toolCallId"]),
                 denied: false,
+                error: line["isError"].as_bool(),
             }],
             Some("message_start") => self.message_start(&line["message"]),
             Some("message_end") => self.message_end(&line["message"]),
@@ -1476,6 +1477,17 @@ mod tests {
             vec![Record::ToolEnd {
                 id: "call_1".to_string(),
                 denied: false,
+                error: Some(true),
+            }]
+        );
+        let unreported =
+            json!({"type": "tool_execution_end", "toolCallId": "call_2", "toolName": "read"});
+        assert_eq!(
+            adapter.translate(&unreported),
+            vec![Record::ToolEnd {
+                id: "call_2".to_string(),
+                denied: false,
+                error: None,
             }]
         );
         let user = json!({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "do"}, {"type": "text", "text": "it"}]}});

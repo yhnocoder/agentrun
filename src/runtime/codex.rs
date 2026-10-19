@@ -121,6 +121,7 @@ impl Codex {
         let end = Record::ToolEnd {
             id: id.clone(),
             denied: false,
+            error: item_error(item),
         };
         if self.started_items.remove(&id) {
             vec![end]
@@ -467,6 +468,18 @@ fn toml_string(text: &str) -> String {
     }
     quoted.push('"');
     quoted
+}
+
+fn item_error(item: &Value) -> Option<bool> {
+    let exit_code = item["exit_code"].as_i64();
+    let status = item["status"].as_str();
+    if exit_code.is_some_and(|code| code != 0) || status == Some("failed") {
+        Some(true)
+    } else if status == Some("completed") || (status.is_none() && exit_code == Some(0)) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn counts(usage: &Value) -> TokenCounts {
@@ -1025,6 +1038,7 @@ mod tests {
                 Record::ToolEnd {
                     id: "item_1".to_string(),
                     denied: false,
+                    error: Some(false),
                 },
             ]
         );
@@ -1121,18 +1135,21 @@ mod tests {
                 summary: "mcp: fs.read".to_string(),
             }]
         );
-        for (id, completed) in [
+        for (id, completed, error) in [
             (
                 "item_1",
                 json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","aggregated_output":"ok","exit_code":0}}),
+                Some(false),
             ),
             (
                 "item_2",
                 json!({"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/repo/a.txt","kind":"add"}]}}),
+                None,
             ),
             (
                 "item_3",
                 json!({"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"fs","tool":"read"}}),
+                None,
             ),
         ] {
             assert_eq!(
@@ -1140,6 +1157,7 @@ mod tests {
                 [Record::ToolEnd {
                     id: id.to_string(),
                     denied: false,
+                    error,
                 }]
             );
         }
@@ -1151,6 +1169,53 @@ mod tests {
             .len(),
             2
         );
+    }
+
+    #[test]
+    fn item_error_comes_from_exit_code_and_status() {
+        let cases = [
+            (
+                json!({"type":"command_execution","exit_code":0,"status":"completed"}),
+                Some(false),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":56,"status":"failed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":1,"status":"completed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":null,"status":"failed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":null,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0}),
+                Some(false),
+            ),
+            (
+                json!({"type":"file_change","status":"completed"}),
+                Some(false),
+            ),
+            (json!({"type":"file_change","status":"failed"}), Some(true)),
+            (
+                json!({"type":"mcp_tool_call","status":"failed"}),
+                Some(true),
+            ),
+            (json!({"type":"mcp_tool_call"}), None),
+        ];
+        for (item, error) in cases {
+            assert_eq!(item_error(&item), error, "{item}");
+        }
     }
 
     #[test]
@@ -1169,6 +1234,7 @@ mod tests {
             [Record::ToolEnd {
                 id: "item_1".to_string(),
                 denied: false,
+                error: Some(true),
             }]
         );
         assert_eq!(

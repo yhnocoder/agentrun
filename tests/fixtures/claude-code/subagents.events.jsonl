@@ -2,9 +2,9 @@
 {"schema":1,"type":"subagent_start","id":"toolu_01XMvpaW3SoLXoY774Msz1se","parent":null,"number":1,"kind":"general-purpose","model":null,"description":"Create sub1.txt"}
 {"schema":1,"type":"subagent_start","id":"toolu_01RGami7Q8jZ3znWXC47RRZk","parent":null,"number":2,"kind":"general-purpose","model":null,"description":"Create sub2.txt"}
 {"schema":1,"type":"tool_start","id":"toolu_01GsNnWbLtrmvRcstNNeEnDm","parent":"toolu_01XMvpaW3SoLXoY774Msz1se","name":"Write","summary":"Write: sub1.txt"}
-{"schema":1,"type":"tool","id":"toolu_01GsNnWbLtrmvRcstNNeEnDm","parent":"toolu_01XMvpaW3SoLXoY774Msz1se","name":"Write","summary":"Write: sub1.txt","denied":false}
+{"schema":1,"type":"tool","id":"toolu_01GsNnWbLtrmvRcstNNeEnDm","parent":"toolu_01XMvpaW3SoLXoY774Msz1se","name":"Write","summary":"Write: sub1.txt","denied":false,"error":false}
 {"schema":1,"type":"tool_start","id":"toolu_01NRrb7zGtKcmeSx1VW5hCiG","parent":"toolu_01RGami7Q8jZ3znWXC47RRZk","name":"Write","summary":"Write: sub2.txt"}
-{"schema":1,"type":"tool","id":"toolu_01NRrb7zGtKcmeSx1VW5hCiG","parent":"toolu_01RGami7Q8jZ3znWXC47RRZk","name":"Write","summary":"Write: sub2.txt","denied":false}
+{"schema":1,"type":"tool","id":"toolu_01NRrb7zGtKcmeSx1VW5hCiG","parent":"toolu_01RGami7Q8jZ3znWXC47RRZk","name":"Write","summary":"Write: sub2.txt","denied":false,"error":false}
 {"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":16,"cache_read_tokens":9878,"cache_write_tokens":4029,"cost_usd":null,"context_tokens":13909}
 {"schema":1,"type":"usage","parent":"toolu_01XMvpaW3SoLXoY774Msz1se","model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":16,"cache_read_tokens":0,"cache_write_tokens":8254,"cost_usd":null,"context_tokens":8256}
 {"schema":1,"type":"usage","parent":"toolu_01RGami7Q8jZ3znWXC47RRZk","model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":16,"cache_read_tokens":0,"cache_write_tokens":8254,"cost_usd":null,"context_tokens":8256}
