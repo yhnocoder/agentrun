@@ -24,6 +24,7 @@ const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
 const ALLOWED_WITH_SANDBOX: [&str; 3] = ["Read", "Glob", "Grep"];
 const PATH_TOOLS: [&str; 2] = ["Edit", "Write"];
+const PATTERN_CHARACTERS: [char; 7] = ['\\', '*', '?', '[', ']', '{', '}'];
 const WEB_FETCH_TOOL: &str = "WebFetch";
 const WEB_SEARCH_TOOL: &str = "WebSearch";
 const SOCAT_LISTEN_VARIABLE: &str = "SOCAT_DEFAULT_LISTEN_IP";
@@ -344,7 +345,7 @@ impl Adapter for ClaudeCode {
                 .collect();
             for dir in [&cwd, &tempdir] {
                 for tool in PATH_TOOLS {
-                    rules.push(path_rule(tool, dir));
+                    rules.push(path_rule(tool, dir, "/**"));
                 }
             }
             rules.push(SUBAGENT_TOOL.to_string());
@@ -499,8 +500,16 @@ impl Adapter for ClaudeCode {
     }
 }
 
-fn path_rule(tool: &str, dir: &str) -> String {
-    format!("{tool}(//{}/**)", dir.strip_prefix('/').unwrap_or(dir))
+fn path_rule(tool: &str, path: &str, suffix: &str) -> String {
+    let relative = path.strip_prefix('/').unwrap_or(path);
+    let mut escaped = String::with_capacity(relative.len());
+    for character in relative.chars() {
+        if PATTERN_CHARACTERS.contains(&character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    format!("{tool}(//{escaped}{suffix})")
 }
 
 fn domain_rule(rule: &HostRule) -> String {
@@ -550,13 +559,7 @@ fn denied_paths(denied_reads: &[PathBuf]) -> Vec<String> {
 fn read_rules(denied: &[String]) -> Vec<String> {
     denied
         .iter()
-        .flat_map(|path| {
-            let relative = path.strip_prefix('/').unwrap_or(path);
-            [
-                format!("Read(//{relative})"),
-                format!("Read(//{relative}/**)"),
-            ]
-        })
+        .flat_map(|path| [path_rule("Read", path, ""), path_rule("Read", path, "/**")])
         .collect()
 }
 
@@ -827,6 +830,35 @@ mod tests {
                 assert_eq!(settings.get("sandbox"), None, "{settings}");
             }
         }
+    }
+
+    #[test]
+    fn path_rules_escape_pattern_characters() {
+        let invocation = Invocation {
+            cwd: PathBuf::from("/work/w[1]"),
+            denied_reads: vec![PathBuf::from("/data/a*b{c}?\\d")],
+            ..invocation(true, &[])
+        };
+        let launch = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        let index = launch
+            .argv
+            .iter()
+            .position(|arg| arg == "--allowedTools")
+            .unwrap();
+        assert!(
+            launch.argv[index + 1].contains(r"Edit(//work/w\[1\]/**),Write(//work/w\[1\]/**)"),
+            "{}",
+            launch.argv[index + 1]
+        );
+        assert_eq!(
+            settings_of(&launch)["permissions"]["deny"],
+            json!([
+                r"Read(//data/a\*b\{c\}\?\\d)",
+                r"Read(//data/a\*b\{c\}\?\\d/**)"
+            ])
+        );
     }
 
     #[test]
