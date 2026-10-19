@@ -31,7 +31,7 @@
   </thead>
   <tbody>
     <tr><td><code>src/main.rs</code></td><td>入口：安装信号处理，把进程的参数、环境与标准流装进 <code>Caller</code>，调用 <code>run::run</code>，把返回的退出码交给进程</td><td>命令行界面、退出码</td></tr>
-    <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
+    <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code>、<code>MISSING_COMMAND</code></td><td>命令行界面</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
     <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>一次运行的顺序、轮数与 token 上限、退出码</td></tr>
     <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>、<code>transcript</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_limits</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>Version</code>（<code>find</code>）、<code>min_version</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
@@ -83,6 +83,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--dry-run</code></td><td>完成命令行解析与启动前检查，把将执行的命令、会话 PATH 与变量名打印到标准输出后以 0 退出。不创建临时目录，不写凭据，不输出事件</td><td>不开</td></tr>
   </tbody>
 </table>
+<p><code>agentrun &lt;运行时&gt; --help</code> 把选项分成 Prompt、Model and limits、Sandbox, network and reads、Session environment、Saved sessions、Output 六组，逐项说明 <code>--sandbox</code>、<code>--network</code> 与 <code>--format</code> 的取值，末尾写出退出码与使用指南的链接；<code>-h</code> 给出每项一行的简表。分组名是 <code>src/cli.rs</code> 里的常量。</p>
 <p>任何输出都只写变量名，不写变量的值，PATH 除外。三个运行时都从标准输入读提示词，所以提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里，也不出现在 <code>--dry-run</code> 与 <code>--debug</code> 打印的命令里。</p>
 <p>agentrun 自己写出的文字都用英文：<code>detail</code>、标准错误里的说明、text 与 rich 格式里的固定词、<code>[note]</code> 提示与 doctor 的输出。运行时与模型给出的内容（提示词、模型的文字、运行时的错误信息）原样输出。理由：命令行解析使用现成的库，它的错误信息是英文，全部输出用同一种语言。</p>
 <p>启动前检查失败时，写到标准错误的一行是 <code>agentrun: </code> 加 <code>detail</code>。<code>--dry-run</code> 写到标准输出、<code>--debug</code> 写到标准错误，每项一行，格式是 <code>项目名: 值</code>，<code>--debug</code> 的每行前面另加 <code>[debug] </code>。命令的每个参数按 shell 规则加引号。</p>
@@ -134,6 +135,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 </ul>
 <p>过滤代理启动失败先于 codex 登录文件与私有目录的检查：两者同时成立时，<code>detail</code> 是过滤代理那一条。</p>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
+<p>命令行解析的错误说明由 clap 生成。<code>usage_error_detail</code> 去掉其中的 <code>error: </code> 前缀、<code>Usage:</code> 与 <code>For more information</code> 两部分，把剩下的各行连成一行，前一行以冒号结尾时用空格连接，否则用 <code>; </code>，例如 <code>unexpected argument '--promt' found; tip: a similar argument exists: '--prompt'; tip: to pass '--promt' as a value, use '-- --promt'</code>。没有写子命令时 detail 是常量 <code>MISSING_COMMAND</code>：<code>no command given: use claude-code, codex, pi or doctor; see agentrun --help</code>。理由：clap 自己的说明会列出只给 doctor 内部使用的 <code>doctor-connect</code>。<code>--max-turns</code>、<code>--max-tokens</code> 与 <code>--timeout</code> 的值不是正整数时，说明是 <code>invalid value '0' for '--timeout &lt;SECONDS&gt;': expected a positive integer</code>。</p>
 <p><code>run::run</code> 解析命令行后，把运行时子命令交给运行框架，把 <code>doctor</code> 与 <code>doctor-connect</code> 分别交给 <code>doctor::run</code> 与 <code>doctor::connect</code>。运行时子命令被拒绝时的 <code>end</code> 只由 <code>run::run</code> 输出。</p>
 
 <h3 id="limits">轮数与 token 上限</h3>
@@ -158,7 +160,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 [end] finished 2.0s  in 2.2k  out 5  cached 92%  $0.0001  session 01a152a2-6878-70d1-8e7f-3877dfb11836</div>
 <ul>
   <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。目录在所有启动前检查通过之后才创建，<code>--dry-run</code> 与被拒绝的运行不创建目录。<code>DIR</code> 要放在工作目录与会话临时目录之外：沙箱里的 agent 能写这两处，<code>DIR</code> 在里面时 agent 能改写已保存的会话。</li>
-  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 必须是完整的会话 id，三个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
+  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 必须是完整的会话 id，三个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>；这个 id 在 <code>DIR</code> 里另一个运行时的子目录里找得到时，后面再加 <code>; it was saved by &lt;运行时名&gt;, continue it with agentrun &lt;运行时名&gt;</code>，按 claude-code、codex、pi 的顺序取第一个找到的。</li>
   <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。源与目标不在同一个文件系统时先复制再删除源。</li>
   <li>继续时 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）。<code>--model</code> 等选项每次照常传给运行时。</li>
   <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex 与 pi 后结束的那次覆盖先结束的那次。</li>

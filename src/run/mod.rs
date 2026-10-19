@@ -14,8 +14,8 @@ use clap::error::ErrorKind as ClapErrorKind;
 use tempfile::TempDir;
 
 use crate::cli::{
-    Cli, ConnectArgs, DoctorArgs, Format, Parsed, RunArgs, Runtime, default_format, prescan_format,
-    usage_error_detail,
+    Cli, ConnectArgs, DoctorArgs, Format, MISSING_COMMAND, Parsed, RunArgs, Runtime,
+    default_format, prescan_format, usage_error_detail,
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
@@ -180,8 +180,11 @@ fn parse_command(caller: &Caller) -> Command {
                     caller.print_lines(&[error.render().to_string().trim_end().to_string()]);
                     Command::Exit(0)
                 }
-                _ => {
-                    let detail = usage_error_detail(&error.render().to_string());
+                kind => {
+                    let detail = match kind {
+                        ClapErrorKind::MissingSubcommand => MISSING_COMMAND.to_string(),
+                        _ => usage_error_detail(&error.render().to_string()),
+                    };
                     if doctor::selected(&caller.args) {
                         caller.signals.finishing();
                         caller.print_error_line(&format!("agentrun: {detail}"));
@@ -378,11 +381,10 @@ fn resolve_session_dir(
     };
     let dir = std::path::absolute(dir)
         .map_err(|error| format!("--session-dir {}: {error}", dir.display()))?;
-    let store = transcript::store(&dir, runtime);
     let resume = args
         .resume
         .as_deref()
-        .map(|id| transcript::locate(&store, runtime, id))
+        .map(|id| transcript::locate(&dir, runtime, id))
         .transpose()?;
     args.session_dir = Some(dir);
     Ok((args, resume))

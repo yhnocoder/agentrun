@@ -72,6 +72,30 @@ fn unknown_subcommand_is_rejected() {
 }
 
 #[test]
+fn missing_subcommand_names_only_public_commands() {
+    let detail = assert_rejected(&run(&Env::new(), &[]));
+    assert_eq!(
+        detail,
+        "no command given: use claude-code, codex, pi or doctor; see agentrun --help"
+    );
+}
+
+#[test]
+fn zero_limit_says_a_positive_integer_is_expected() {
+    for (option, value_name) in [
+        ("--max-turns", "N"),
+        ("--max-tokens", "N"),
+        ("--timeout", "SECONDS"),
+    ] {
+        let detail = assert_rejected(&run(&Env::new(), &["pi", option, "0", "--prompt", "hi"]));
+        assert_eq!(
+            detail,
+            format!("invalid value '0' for '{option} <{value_name}>': expected a positive integer")
+        );
+    }
+}
+
+#[test]
 fn prompt_and_prompt_file_together_are_rejected() {
     let env = Env::new();
     let file = env.root().join("task.md");
@@ -1010,7 +1034,7 @@ fn resume_rejects_a_session_saved_by_another_runtime() {
     assert_eq!(
         end["detail"],
         format!(
-            "no saved pi session 0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b in {}",
+            "no saved pi session 0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b in {}; it was saved by claude-code, continue it with agentrun claude-code",
             session_dir.join("pi").display()
         )
     );

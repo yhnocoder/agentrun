@@ -3,6 +3,8 @@ use std::io::ErrorKind;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
+
 use crate::cli::Runtime;
 
 const FILE_SUFFIX: &str = ".jsonl";
@@ -38,22 +40,34 @@ pub fn create_store(store: &Path) -> Result<(), String> {
         })
 }
 
-pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
+pub fn locate(session_dir: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
     if !is_session_id(id) {
         return Err(format!("--resume {id:?} is not a session id"));
     }
-    find_file(store, id)
-        .map(|file| Saved {
+    let own = store(session_dir, runtime);
+    if let Some(file) = find_file(&own, id) {
+        return Ok(Saved {
             id: id.to_string(),
             file,
-        })
-        .ok_or_else(|| {
-            format!(
-                "no saved {} session {id} in {}",
-                runtime.name(),
-                store.display()
-            )
-        })
+        });
+    }
+    let missing = format!(
+        "no saved {} session {id} in {}",
+        runtime.name(),
+        own.display()
+    );
+    let saved_by = Runtime::value_variants()
+        .iter()
+        .copied()
+        .filter(|other| *other != runtime)
+        .find(|other| find_file(&store(session_dir, *other), id).is_some());
+    Err(match saved_by {
+        Some(other) => format!(
+            "{missing}; it was saved by {0}, continue it with agentrun {0}",
+            other.name()
+        ),
+        None => missing,
+    })
 }
 
 fn is_session_id(id: &str) -> bool {
@@ -215,9 +229,11 @@ mod tests {
     #[test]
     fn locate_finds_a_direct_file_and_rejects_others() {
         let root = tempfile::tempdir().unwrap();
-        let file = root.path().join(format!("rollout-1-{ID}.jsonl"));
+        let codex = store(root.path(), Runtime::Codex);
+        std::fs::create_dir(&codex).unwrap();
+        let file = codex.join(format!("rollout-1-{ID}.jsonl"));
         touch(&file);
-        std::fs::create_dir(root.path().join(format!("{ID}.jsonl.d"))).unwrap();
+        std::fs::create_dir(codex.join(format!("{ID}.jsonl.d"))).unwrap();
         assert_eq!(
             locate(root.path(), Runtime::Codex, ID),
             Ok(Saved {
@@ -230,7 +246,7 @@ mod tests {
             locate(root.path(), Runtime::Pi, other),
             Err(format!(
                 "no saved pi session {other} in {}",
-                root.path().display()
+                root.path().join("pi").display()
             ))
         );
         for partial in [
@@ -253,6 +269,21 @@ mod tests {
             Err("--resume \"\" is not a session id".to_string())
         );
         assert!(locate(&root.path().join("missing"), Runtime::Pi, ID).is_err());
+    }
+
+    #[test]
+    fn locate_names_the_runtime_that_saved_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        let codex = store(root.path(), Runtime::Codex);
+        std::fs::create_dir(&codex).unwrap();
+        touch(&codex.join(format!("rollout-1-{ID}.jsonl")));
+        assert_eq!(
+            locate(root.path(), Runtime::Pi, ID),
+            Err(format!(
+                "no saved pi session {ID} in {}; it was saved by codex, continue it with agentrun codex",
+                root.path().join("pi").display()
+            ))
+        );
     }
 
     #[test]

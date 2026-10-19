@@ -179,7 +179,7 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <div class="term"><span class="warn">[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches</span></div>
 
 <h2 id="ci">在脚本与 CI 里判断成败</h2>
-<p>只看退出码就能区分三类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
+<p>只看退出码就能区分这几类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题，3 是超过 <code>--timeout</code>，4 是超过 <code>--max-turns</code> 或 <code>--max-tokens</code>，130 与 143 是 agentrun 被 Ctrl-C 或 SIGTERM 中断。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
 <p>在 CI 里建议显式写 <code>--format jsonl</code> 和 <code>--timeout</code>，并在作业开始时对你用的运行时运行一次 <code>agentrun doctor</code>，例如 <code>agentrun doctor claude-code</code>，让环境问题在第一步就暴露出来。</p>
 <p>三种情况不会让结果变成失败：agent 的某次工具调用被拒绝，某次工具调用执行出错（例如命令的退出码不为 0），以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
@@ -324,6 +324,10 @@ No API key found for anthropic.
 <div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 76393ad0-3433-47bd-a4d4-47d35df96724 --format text --prompt "继续"
 <span class="dim">[end]</span> rejected no saved claude-code session 76393ad0-3433-47bd-a4d4-47d35df96724 in /root/agent-sessions/claude-code
 agentrun: no saved claude-code session 76393ad0-3433-47bd-a4d4-47d35df96724 in /root/agent-sessions/claude-code</div>
+<p>会话是用另一个子命令保存的时，说明的末尾写出保存它的运行时，换成那个子命令继续：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 01a1531b-25be-76aa-b37f-347776815ddf --format text --prompt "继续"
+<span class="dim">[end]</span> rejected no saved claude-code session 01a1531b-25be-76aa-b37f-347776815ddf in /root/agent-sessions/claude-code; it was saved by pi, continue it with agentrun pi
+agentrun: no saved claude-code session 01a1531b-25be-76aa-b37f-347776815ddf in /root/agent-sessions/claude-code; it was saved by pi, continue it with agentrun pi</div>
 <p>只写了 id 的一部分时报 <code>--resume "76393ad0" is not a session id</code>，从 <code>[end]</code> 行或 <code>end</code> 事件复制完整的 id。</p>
 
 <h3><code>--env NAME: not set in the caller's environment</code></h3>
