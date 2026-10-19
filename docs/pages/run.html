@@ -278,7 +278,7 @@ agentrun variables: (none)</div>
   &lt;-- 之后的调用方参数&gt;</code></pre>
 <ul>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
-  <li>提示词原文写入标准输入后关闭，不放在命令行里。理由：pi 把以 <code>@</code> 开头的位置参数当成文件路径，写在 <code>--</code> 之后也一样，文件不存在时报 <code>File not found</code> 退出，文件存在时把文件内容当成提示词。pi 去掉标准输入内容首尾的空白，所以模型收到的提示词与 <code>prompt</code> 事件都没有首尾的空白与空行，中间的换行与缩进不变；claude-code 与 codex 收到的是原文。</li>
+  <li>提示词原文写入标准输入后关闭，不放在命令行里。理由：pi 把以 <code>@</code> 开头的位置参数当成文件路径，写在 <code>--</code> 之后也一样，文件不存在时报 <code>File not found</code> 退出，文件存在时把文件内容当成提示词。pi 去掉标准输入内容首尾的空白（pi 1.0.1 与 1.2.0 相同），所以模型收到的提示词与 <code>prompt</code> 事件都没有首尾的空白与空行，中间的换行与缩进不变；claude-code 与 codex 收到的是原文。调用方参数里的位置参数由 pi 当成消息：第一个直接接在提示词后面，中间不加分隔，之后的每个各算一轮新的消息，以 <code>@</code> 开头的被当成文件。所以调用方参数里只写选项。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
   <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>。Linux：
 <pre><code class="language-bash">bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt;

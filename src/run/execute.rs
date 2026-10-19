@@ -220,12 +220,7 @@ fn start_event(invocation: &Invocation, launch: &Launch) -> Event {
         },
         model: invocation.args.model.clone(),
         cwd: invocation.cwd.to_string_lossy().into_owned(),
-        argv: launch
-            .argv
-            .iter()
-            .filter(|arg| **arg != invocation.prompt)
-            .cloned()
-            .collect(),
+        argv: launch.argv.clone(),
         env: invocation.session.set.clone(),
     }))
 }

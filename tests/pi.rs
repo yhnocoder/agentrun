@@ -250,6 +250,28 @@ fn prompt_starting_with_at_reaches_pi_on_stdin_and_not_as_an_argument() {
 }
 
 #[test]
+fn arguments_equal_to_the_prompt_stay_in_the_command() {
+    let env = Env::with("pi", STDIN_PI);
+    let args = ["--sandbox", "off", "--effort", "low", "--prompt", "low"];
+    let output = run(&env, &[&args[..], &["--dry-run"]].concat());
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().next().unwrap().ends_with(" --thinking low"),
+        "{stdout}"
+    );
+    let output = run(&env, &args);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let argv = support::events(&output)[0]["argv"].clone();
+    let argv = argv.as_array().unwrap();
+    assert_eq!(argv[argv.len() - 2..], [json!("--thinking"), json!("low")]);
+    assert_eq!(
+        std::fs::read_to_string(env.work().join("stdin.txt")).unwrap(),
+        "low"
+    );
+}
+
+#[test]
 fn missing_user_state_dir_is_created_before_pi_starts() {
     let env = Env::with("pi", REPORTING_PI);
     let output = run(&env, &["--sandbox", "off", "--prompt", "hi"]);

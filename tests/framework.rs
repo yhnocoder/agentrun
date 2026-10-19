@@ -367,7 +367,7 @@ fn debug_keeps_tempdir_and_writes_raw_jsonl() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "[debug] sandbox: none (--sandbox off)\n[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
+            "[debug] sandbox: none (--sandbox off)\n[debug] command: {}\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
             executable.display(),
             env.path_var(),
             dir.display(),
@@ -409,7 +409,7 @@ fn dry_run_prints_quoted_command_and_path() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "command: {} --flag 'it'\\''s' 'two words' '<prompt 2 bytes>'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\n",
+            "command: {} --flag 'it'\\''s' 'two words'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\n",
             env.bin().join("claude").display(),
             env.path_var()
         )

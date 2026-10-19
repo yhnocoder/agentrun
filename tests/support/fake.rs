@@ -45,7 +45,6 @@ impl Adapter for FakeAdapter {
         }
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
-        argv.push(invocation.prompt.clone());
         let wrapped = sandbox::wrap(
             &invocation.sandbox,
             &invocation.cwd,
