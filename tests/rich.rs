@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Instant;
 
 use agentrun::cli::SandboxMode;
-use agentrun::output::{Aggregator, OpenTools, Rich, SandboxKind, TextFormatter};
+use agentrun::output::{Aggregator, Rich, SandboxKind, TextFormatter};
 use agentrun::run::{Exit, conclude, translate_line};
 use agentrun::runtime::Adapter;
 use support::env::Env;
@@ -143,7 +143,7 @@ impl Session {
             expected: Vec::new(),
             started: Instant::now(),
         };
-        let events = session.aggregator.begin(prompt);
+        let events = session.aggregator.begin(prompt, Vec::new());
         session.emit(&events);
         session
     }
@@ -160,7 +160,6 @@ impl Session {
     fn push(&mut self, record: &str) {
         let events =
             translate_line(record.as_bytes(), &mut self.adapter, &mut self.aggregator).events;
-        self.rich.set_open_tools(self.aggregator.open_tools());
         self.emit(&events);
     }
 
@@ -189,7 +188,6 @@ impl Session {
             limit: None,
         };
         let aggregator = std::mem::replace(&mut self.aggregator, Aggregator::new(false));
-        self.rich.set_open_tools(OpenTools::default());
         let (events, _) = conclude(
             aggregator,
             &mut self.adapter,
@@ -223,9 +221,6 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
     assert!(panel[1].contains(" main  "), "{}", panel[1]);
 
     session.push(r#"{"record":"tool_start","id":"t1","parent":null,"name":"Bash","summary":"Bash: cargo check"}"#);
-    let mut refresh = Vec::new();
-    session.rich.refresh(&mut refresh);
-    session.screen.feed(&refresh);
     let panel = session.panel();
     assert!(
         panel[1].contains(" main  Bash: cargo check  "),
@@ -264,6 +259,13 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
         session.expected.last().unwrap(),
         "[explore#1] tool Read: a.rs"
     );
+    let panel = session.panel();
+    assert!(!panel[2].contains("Read: a.rs"), "{}", panel[2]);
+    assert!(
+        panel[4].contains(" main  Bash: cargo check  "),
+        "{}",
+        panel[4]
+    );
     session.push(SUBAGENT_END);
     assert!(
         session
@@ -278,12 +280,13 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
 
     session.push(MAIN_TEXT);
     assert_eq!(session.expected.last().unwrap(), "[main] text done");
-    session.push(r#"{"record":"tool_end","id":"t1","denied":false}"#);
+    session.push(r#"{"record":"tool_end","id":"t1","denied":false,"error":true}"#);
     assert_eq!(
         session.expected.last().unwrap(),
-        "[main] tool Bash: cargo check"
+        "[main] tool Bash: cargo check (error)"
     );
-    session.panel();
+    let panel = session.panel();
+    assert!(!panel[3].contains("Bash: cargo check"), "{}", panel[3]);
 
     let screen = session.finish();
     assert_eq!(screen.rows().len(), 7);

@@ -291,7 +291,7 @@ fn signal_before_launch_ends_without_start() {
     assert_eq!(end["result"], Value::Null);
     assert_eq!(
         end["usage"],
-        serde_json::json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "by_model": {}})
+        serde_json::json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null, "by_model": {}})
     );
 }
 

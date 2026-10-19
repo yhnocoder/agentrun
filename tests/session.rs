@@ -161,7 +161,7 @@ fn dry_run_lists_variable_names_and_skips_credentials() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "command: {} '<prompt 2 bytes>'\nPATH: {}\nset: ZED, ALPHA, GH_TOKEN\nremoved: (none)\nagentrun variables: AGENTRUN_PI_AUTH, AGENTRUN_SANDBOX\n",
+            "command: {}\nPATH: {}\nset: ZED, ALPHA, GH_TOKEN\nremoved: (none)\nagentrun variables: AGENTRUN_PI_AUTH, AGENTRUN_SANDBOX\n",
             env.bin().join("pi").display(),
             env.path_var()
         )

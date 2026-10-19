@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::event::{Body, EndStatus, Event, SandboxKind};
-use super::usage::TokenCounts;
+use super::usage::{TokenCounts, cost};
 use crate::cli::SandboxMode;
 use crate::json::first_line;
 
@@ -25,14 +25,25 @@ impl TextFormatter {
     pub fn lines(&mut self, event: &Event) -> Vec<String> {
         match &event.body {
             Body::Start(start) => self.note(start.sandbox).into_iter().collect(),
-            Body::Prompt(prompt) => vec![format!("[main] prompt {}", first_line(&prompt.text))],
+            Body::Prompt(prompt) => vec![format!(
+                "[main] prompt {}{}",
+                first_line(&prompt.text),
+                image_count(prompt.images.len())
+            )],
+            Body::ToolStart(_) => Vec::new(),
             Body::Tool(tool) => {
-                let denied = if tool.denied { " (denied)" } else { "" };
+                let outcome = if tool.denied {
+                    " (denied)"
+                } else if tool.error == Some(true) {
+                    " (error)"
+                } else {
+                    ""
+                };
                 vec![format!(
                     "[{}] tool {}{}",
                     self.label(tool.parent.as_deref()),
                     first_line(&tool.summary),
-                    denied
+                    outcome
                 )]
             }
             Body::Text(text) => vec![format!(
@@ -95,6 +106,10 @@ impl TextFormatter {
                 }
                 let mut line = format!("[end] {} {}", end.status.name(), seconds(end.duration_ms));
                 line.push_str(&usage_items(&end.usage.totals));
+                if let Some(usd) = end.usage.totals.cost_usd {
+                    line.push_str("  ");
+                    line.push_str(&cost(usd));
+                }
                 if !end.detail.is_empty() {
                     line.push_str("  ");
                     line.push_str(&single_line(&end.detail));
@@ -157,13 +172,21 @@ fn usage_items(counts: &TokenCounts) -> String {
         .collect()
 }
 
+fn image_count(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        1 => " (+1 image)".to_string(),
+        count => format!(" (+{count} images)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
     use crate::output::event::{
         End, Network, NetworkInfo, NetworkReason, Prompt, Start, SubagentEnd, SubagentStart,
-        SubagentStatus, Text, Tool, UsageReport,
+        SubagentStatus, Text, Tool, ToolStart, UsageReport,
     };
     use crate::output::usage::Usage;
 
@@ -201,6 +224,7 @@ mod tests {
             output_tokens: output,
             cache_read_tokens: read,
             cache_write_tokens: write,
+            cost_usd: None,
         }
     }
 
@@ -243,9 +267,24 @@ mod tests {
         let mut text = TextFormatter::new(SandboxMode::On, "");
         assert_eq!(
             text.lines(&event(Body::Prompt(Prompt {
-                text: "fix tests\nmore".to_string()
+                text: "fix tests\nmore".to_string(),
+                images: Vec::new()
             }))),
             vec!["[main] prompt fix tests"]
+        );
+        assert_eq!(
+            text.lines(&event(Body::Prompt(Prompt {
+                text: "read this".to_string(),
+                images: vec!["a.png".to_string()]
+            }))),
+            vec!["[main] prompt read this (+1 image)"]
+        );
+        assert_eq!(
+            text.lines(&event(Body::Prompt(Prompt {
+                text: "compare".to_string(),
+                images: vec!["a.png".to_string(), "b.png".to_string()]
+            }))),
+            vec!["[main] prompt compare (+2 images)"]
         );
         assert_eq!(
             text.lines(&event(Body::Text(Text {
@@ -254,6 +293,15 @@ mod tests {
             }))),
             vec!["[main] text done"]
         );
+        assert!(
+            text.lines(&event(Body::ToolStart(ToolStart {
+                id: "t1".to_string(),
+                parent: None,
+                name: "Bash".to_string(),
+                summary: "Bash: cat ~/.ssh/id_rsa".to_string(),
+            })))
+            .is_empty()
+        );
         assert_eq!(
             text.lines(&event(Body::Tool(Tool {
                 id: "t1".to_string(),
@@ -261,9 +309,27 @@ mod tests {
                 name: "Bash".to_string(),
                 summary: "Bash: cat ~/.ssh/id_rsa".to_string(),
                 denied: true,
+                error: Some(false),
             }))),
             vec!["[main] tool Bash: cat ~/.ssh/id_rsa (denied)"]
         );
+        for (error, line) in [
+            (Some(true), "[main] tool Bash: cargo test (error)"),
+            (Some(false), "[main] tool Bash: cargo test"),
+            (None, "[main] tool Bash: cargo test"),
+        ] {
+            assert_eq!(
+                text.lines(&event(Body::Tool(Tool {
+                    id: "t2".to_string(),
+                    parent: None,
+                    name: "Bash".to_string(),
+                    summary: "Bash: cargo test".to_string(),
+                    denied: false,
+                    error,
+                }))),
+                vec![line]
+            );
+        }
     }
 
     #[test]
@@ -307,6 +373,7 @@ mod tests {
                 name: "Read".to_string(),
                 summary: "Read: tests/parse.rs".to_string(),
                 denied: false,
+                error: Some(false),
             }))),
             vec!["[general-purpose#2] tool Read: tests/parse.rs"]
         );
@@ -374,6 +441,28 @@ mod tests {
                 counts(None, Some(3), None, Some(4))
             )),
             vec!["[end] failed 31.3s  in 4  out 3  boom"]
+        );
+        assert_eq!(
+            text.lines(&end(
+                EndStatus::Finished,
+                "",
+                TokenCounts {
+                    cost_usd: Some(0.04369),
+                    ..counts(Some(18234), Some(912), Some(42000), Some(5100))
+                }
+            )),
+            vec!["[end] finished 31.3s  in 65.3k  out 0.9k  cached 64%  $0.0437"]
+        );
+        assert_eq!(
+            text.lines(&end(
+                EndStatus::Failed,
+                "boom",
+                TokenCounts {
+                    cost_usd: Some(0.0),
+                    ..TokenCounts::default()
+                }
+            )),
+            vec!["[end] failed 31.3s  $0.0000  boom"]
         );
         assert_eq!(
             text.lines(&end(EndStatus::Failed, "", TokenCounts::default())),

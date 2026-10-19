@@ -93,11 +93,11 @@ Check the environment first. Each line is one check of one runtime:
 
 ```console
 $ agentrun doctor claude-code pi
-[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  executable  /opt/node22/bin/claude 2.1.303
 [ok]   claude-code  login       oauth_token
 [ok]   claude-code  sandbox     bubblewrap: wrote inside, blocked outside
 [skip] claude-code  network     --network none
-[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           executable  /opt/node22/bin/pi 1.2.0
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 [ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 [skip] pi           network     --network none
@@ -130,18 +130,19 @@ $ agentrun pi --format text --prompt "Count the lines in hello.txt with wc, then
 [end] finished 5.2s  in 4.5k  out 90  cached 91%
 ```
 
-`--format jsonl` writes one JSON event per line, for programs that call agentrun. It is the default when standard output is not a terminal. The `start` event records the sandbox, the network mode and the full command of the runtime; the `network` event shows that pi reached its model service through the filter proxy; the `end` event gives the status and the total usage.
+`--format jsonl` writes one JSON event per line, for programs that call agentrun. It is the default when standard output is not a terminal. The `start` event records the sandbox, the network mode and the full command of the runtime; the `network` event shows that pi reached its model service through the filter proxy; `tool_start` and `tool` mark the start and the end of each tool call; the `end` event gives the status and the total usage.
 
 ```console
 $ agentrun pi --format jsonl --prompt "Count the lines in hello.txt with wc, then reply in one short sentence"
-{"schema":1,"type":"start","time":"2026-10-06T03:19:46.563Z","runtime":"pi","sandbox":"bubblewrap","network":{"mode":"none","allow":[],"enforced":true},"model":null,"cwd":"/tmp/demo","argv":["/usr/bin/bwrap","--ro-bind","/","/","--bind","/tmp/demo","/tmp/demo","--bind","/tmp/agentrun-LkywMR","/tmp/agentrun-LkywMR","--dev","/dev","--proc","/proc","--die-with-parent","--unshare-net","--","/bin/sh","-c","\"$0\" \"TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr\" \"UNIX-CONNECT:$2\" 2>/dev/null & shift 2; exec \"$@\"","/usr/bin/socat","34501","/tmp/agentrun-LkywMR/proxy.sock","/opt/node22/bin/pi","-p","--mode","json","--no-session","--no-extensions","--no-skills","--no-prompt-templates","--no-themes","--no-context-files","--no-approve","--offline","--tools","read,bash,edit,write,grep,find,ls","--"],"env":[]}
-{"schema":1,"type":"prompt","time":"2026-10-06T03:19:47.077Z","text":"Count the lines in hello.txt with wc, then reply in one short sentence"}
-{"schema":1,"type":"network","time":"2026-10-06T03:19:47.208Z","host":"api.deepseek.com","port":443,"allowed":true,"reason":null}
-{"schema":1,"type":"usage","time":"2026-10-06T03:19:48.758Z","parent":null,"model":"deepseek/deepseek-flash","input_tokens":165,"output_tokens":79,"cache_read_tokens":2048,"cache_write_tokens":0,"context_tokens":2213}
-{"schema":1,"type":"tool","time":"2026-10-06T03:19:48.777Z","id":"call_00_fKSpSPw3Qpm6M9pkhl9O6002","parent":null,"name":"bash","summary":"bash: wc -l hello.txt","denied":false}
-{"schema":1,"type":"text","time":"2026-10-06T03:19:50.410Z","parent":null,"text":"hello.txt contains 1 line."}
-{"schema":1,"type":"usage","time":"2026-10-06T03:19:50.410Z","parent":null,"model":"deepseek/deepseek-flash","input_tokens":260,"output_tokens":8,"cache_read_tokens":2048,"cache_write_tokens":0,"context_tokens":2308}
-{"schema":1,"type":"end","time":"2026-10-06T03:19:51.011Z","status":"finished","exit_code":0,"detail":"","duration_ms":4459,"usage":{"input_tokens":425,"output_tokens":87,"cache_read_tokens":4096,"cache_write_tokens":0,"by_model":{"deepseek/deepseek-flash":{"input_tokens":425,"output_tokens":87,"cache_read_tokens":4096,"cache_write_tokens":0}}},"result":"hello.txt contains 1 line."}
+{"schema":1,"type":"start","time":"2026-10-19T05:29:48.458Z","runtime":"pi","sandbox":"bubblewrap","network":{"mode":"none","allow":[],"enforced":true},"model":null,"cwd":"/tmp/demo","argv":["/usr/bin/bwrap","--ro-bind","/","/","--bind","/tmp/demo","/tmp/demo","--bind","/tmp/agentrun-fPmB32","/tmp/agentrun-fPmB32","--bind","/root/.pi/agent","/root/.pi/agent","--ro-bind","/root/.pi/agent/settings.json","/root/.pi/agent/settings.json","--dev","/dev","--proc","/proc","--die-with-parent","--unshare-net","--","/bin/sh","-c","\"$0\" \"TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr\" \"UNIX-CONNECT:$2\" 2>/dev/null & shift 2; exec \"$@\"","/usr/bin/socat","37051","/tmp/agentrun-fPmB32/proxy.sock","/opt/node22/bin/pi","-p","--mode","json","--no-session","--no-extensions","--no-skills","--no-prompt-templates","--no-themes","--no-context-files","--no-approve","--offline","--tools","read,bash,edit,write,grep,find,ls"],"env":[]}
+{"schema":1,"type":"prompt","time":"2026-10-19T05:29:49.069Z","text":"Count the lines in hello.txt with wc, then reply in one short sentence"}
+{"schema":1,"type":"network","time":"2026-10-19T05:29:49.126Z","host":"api.deepseek.com","port":443,"allowed":true,"reason":null}
+{"schema":1,"type":"usage","time":"2026-10-19T05:29:50.542Z","parent":null,"model":"deepseek/deepseek-flash","input_tokens":165,"output_tokens":58,"cache_read_tokens":2048,"cache_write_tokens":0,"cost_usd":0.000131388,"context_tokens":2213}
+{"schema":1,"type":"tool_start","time":"2026-10-19T05:29:50.543Z","id":"call_00_ET_V4pqYzPmAOG7TLWwYrGs7501","parent":null,"name":"bash","summary":"bash: wc -l hello.txt"}
+{"schema":1,"type":"tool","time":"2026-10-19T05:29:50.561Z","id":"call_00_ET_V4pqYzPmAOG7TLWwYrGs7501","parent":null,"name":"bash","summary":"bash: wc -l hello.txt","denied":false,"error":false}
+{"schema":1,"type":"text","time":"2026-10-19T05:29:51.471Z","parent":null,"text":"hello.txt contains 1 line."}
+{"schema":1,"type":"usage","time":"2026-10-19T05:29:51.471Z","parent":null,"model":"deepseek/deepseek-flash","input_tokens":239,"output_tokens":8,"cache_read_tokens":2048,"cache_write_tokens":0,"cost_usd":0.000093588,"context_tokens":2287}
+{"schema":1,"type":"end","time":"2026-10-19T05:29:51.565Z","status":"finished","exit_code":0,"detail":"","duration_ms":3119,"usage":{"input_tokens":404,"output_tokens":66,"cache_read_tokens":4096,"cache_write_tokens":0,"cost_usd":0.000224976,"by_model":{"deepseek/deepseek-flash":{"input_tokens":404,"output_tokens":66,"cache_read_tokens":4096,"cache_write_tokens":0,"cost_usd":0.000224976}}},"result":"hello.txt contains 1 line."}
 ```
 
 codex takes the same options:

@@ -22,7 +22,7 @@ use crate::output::{Network, NetworkReason, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
 use crate::run::{Caller, create_tempdir, shell_quote};
 use crate::runtime::pi::{self, Model, Pi};
-use crate::runtime::{self, Adapter, Invocation, codex};
+use crate::runtime::{self, Adapter, Invocation, Version, codex};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, Sandbox, UNAVAILABLE_PREFIX, Wrapped, Wrapper,
 };
@@ -39,6 +39,8 @@ const POLL: Duration = Duration::from_millis(10);
 const DRAIN: Duration = Duration::from_secs(1);
 const TEMPDIR_PREFIX: &str = "agentrun-doctor-";
 const PROMPT: &str = "agentrun doctor";
+const VERSION_FLAG: &str = "--version";
+const ERROR_MARKER: &str = "Error:";
 const ORDER: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
 const SANDBOX_SCRIPT: &str =
     r#"echo ok > "$1/inside.txt"; echo ok > "$2/outside.txt" 2>/dev/null; echo done"#;
@@ -317,6 +319,29 @@ impl Finished {
             .unwrap_or_else(|| self.exit_text.clone())
     }
 
+    fn version(&self) -> Option<Version> {
+        self.stdout
+            .iter()
+            .map(String::as_str)
+            .chain(self.stderr.lines())
+            .find_map(Version::find)
+    }
+
+    fn failure(&self) -> String {
+        let error_line = self.stderr.lines().map(str::trim).find(|line| {
+            line.split_once(ERROR_MARKER).is_some_and(|(kind, _)| {
+                kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        });
+        match error_line
+            .or_else(|| self.stderr_line())
+            .or_else(|| self.stdout_line())
+        {
+            Some(line) => format!("{}: {line}", self.exit_text),
+            None => self.exit_text.clone(),
+        }
+    }
+
     fn output(&self) -> String {
         self.stdout_line()
             .or_else(|| self.stderr_line())
@@ -479,12 +504,10 @@ impl Doctor {
         let runtime = target.runtime;
         let executable = find_executable(runtime.executable(), &target.session.path, &self.cwd);
         match &executable {
-            Some(path) => self.record(
-                runtime,
-                Check::Executable,
-                Status::Ok,
-                path.display().to_string(),
-            ),
+            Some(path) => {
+                let result = self.executable_version(target, path);
+                self.record_result(runtime, Check::Executable, result);
+            }
             None => self.record(
                 runtime,
                 Check::Executable,
@@ -510,6 +533,44 @@ impl Doctor {
         }
         let sandbox = self.sandbox(target, executable.as_deref());
         self.network(target, executable.as_deref(), sandbox.as_ref());
+    }
+
+    fn executable_version(&self, target: &Target, executable: &Path) -> Result<String, String> {
+        let path = executable.display();
+        let argv = vec![
+            executable.to_string_lossy().into_owned(),
+            VERSION_FLAG.to_string(),
+        ];
+        let env = match target.runtime {
+            Runtime::Codex => self.codex_env(),
+            Runtime::ClaudeCode | Runtime::Pi => Vec::new(),
+        };
+        let finished = self
+            .execute(
+                target.runtime,
+                Check::Executable,
+                Run {
+                    argv: &argv,
+                    env: &env,
+                    session: &target.session,
+                },
+                |_| false,
+            )
+            .map_err(|error| format!("{path}: {error}"))?;
+        if finished.exit_code != Some(0) {
+            return Err(format!("{path}: {VERSION_FLAG} {}", finished.failure()));
+        }
+        let required = runtime::min_version(target.runtime);
+        match finished.version() {
+            Some(version) if version < required => {
+                Err(format!("{path} {version}, requires >= {required}"))
+            }
+            Some(version) => Ok(format!("{path} {version}")),
+            None => Ok(format!(
+                "{path}, version not recognized: {}",
+                finished.output()
+            )),
+        }
     }
 
     fn claude_code_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
@@ -650,6 +711,7 @@ impl Doctor {
             cwd: None,
             prompt: Some(PROMPT.to_string()),
             prompt_file: None,
+            image: Vec::new(),
             model: self.args.model.clone(),
             effort: None,
             max_turns: None,

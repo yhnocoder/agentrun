@@ -23,7 +23,7 @@ fn types(events: &[Value]) -> Vec<String> {
 }
 
 fn empty_usage() -> Value {
-    json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "by_model": {}})
+    json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null, "by_model": {}})
 }
 
 #[test]
@@ -58,19 +58,20 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
             json!({"schema": 1, "type": "start", "runtime": "claude-code", "sandbox": "none",
                 "network": {"mode": "none", "allow": [], "enforced": false},
                 "model": "m1", "cwd": work, "argv": [executable, "--extra"], "env": []}),
-            json!({"schema": 1, "type": "prompt", "text": "hi"}),
-            json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true}),
+            json!({"schema": 1, "type": "prompt", "text": "hi", "images": []}),
+            json!({"schema": 1, "type": "tool_start", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls"}),
+            json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true, "error": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "stdin=hi"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "m1", "input_tokens": 10, "output_tokens": 2,
-                "cache_read_tokens": 5, "cache_write_tokens": 1, "context_tokens": 16}),
+                "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null, "context_tokens": 16}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": null, "input_tokens": 3, "output_tokens": 4,
-                "cache_read_tokens": null, "cache_write_tokens": null, "context_tokens": null}),
+                "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null, "context_tokens": null}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "all done"}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 13, "output_tokens": 6, "cache_read_tokens": 5, "cache_write_tokens": 1,
+                "usage": {"input_tokens": 13, "output_tokens": 6, "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null,
                     "by_model": {
-                        "m1": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 5, "cache_write_tokens": 1},
-                        "unknown": {"input_tokens": 3, "output_tokens": 4, "cache_read_tokens": null, "cache_write_tokens": null}
+                        "m1": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null},
+                        "unknown": {"input_tokens": 3, "output_tokens": 4, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null}
                     }},
                 "result": "all done"}),
         ]
@@ -109,8 +110,8 @@ fn normal_run_with_echo_uses_echo_result_and_run_usage() {
     assert_eq!(end["result"], "final answer");
     assert_eq!(
         end["usage"],
-        json!({"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9,
-            "by_model": {"m1": {"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9}}})
+        json!({"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9, "cost_usd": null,
+            "by_model": {"m1": {"input_tokens": 7, "output_tokens": 8, "cache_read_tokens": null, "cache_write_tokens": 9, "cost_usd": null}}})
     );
 }
 
@@ -156,6 +157,7 @@ fn nested_subagents_get_numbers_parents_and_usage() {
             "subagent_start",
             "subagent_start",
             "subagent_start",
+            "tool_start",
             "tool",
             "text",
             "usage",
@@ -176,27 +178,28 @@ fn nested_subagents_get_numbers_parents_and_usage() {
     assert_eq!(events[4]["parent"], Value::Null);
     assert_eq!(events[4]["number"], 3);
     assert_eq!(events[5]["parent"], "s2");
-    assert_eq!(events[6]["parent"], Value::Null);
-    assert_eq!(events[6]["text"], "orphan");
-    assert_eq!(
-        events[10],
-        json!({"schema": 1, "type": "subagent_end", "id": "s2", "status": "finished",
-            "usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null,
-                "by_model": {"unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null}}}})
-    );
+    assert_eq!(events[6]["parent"], "s2");
+    assert_eq!(events[7]["parent"], Value::Null);
+    assert_eq!(events[7]["text"], "orphan");
     assert_eq!(
         events[11],
+        json!({"schema": 1, "type": "subagent_end", "id": "s2", "status": "finished",
+            "usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null,
+                "by_model": {"unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null}}}})
+    );
+    assert_eq!(
+        events[12],
         json!({"schema": 1, "type": "subagent_end", "id": "s1", "status": "failed",
-        "usage": {"input_tokens": 25, "output_tokens": 3, "cache_read_tokens": 3, "cache_write_tokens": null,
+        "usage": {"input_tokens": 25, "output_tokens": 3, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null,
             "by_model": {
-                "haiku-4": {"input_tokens": 20, "output_tokens": 2, "cache_read_tokens": null, "cache_write_tokens": null},
-                "unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null}
+                "haiku-4": {"input_tokens": 20, "output_tokens": 2, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null},
+                "unknown": {"input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 3, "cache_write_tokens": null, "cost_usd": null}
             }}})
     );
-    assert_eq!(events[12]["id"], "s3");
-    assert_eq!(events[12]["usage"], empty_usage());
-    assert_eq!(events[13]["usage"]["input_tokens"], 125);
-    assert_eq!(events[13]["result"], "orphan");
+    assert_eq!(events[13]["id"], "s3");
+    assert_eq!(events[13]["usage"], empty_usage());
+    assert_eq!(events[14]["usage"]["input_tokens"], 125);
+    assert_eq!(events[14]["result"], "orphan");
 }
 
 #[test]
@@ -219,8 +222,10 @@ fn unfinished_tools_and_subagents_are_closed_before_end() {
         vec![
             "start",
             "prompt",
+            "tool_start",
             "subagent_start",
             "subagent_start",
+            "tool_start",
             "usage",
             "tool",
             "tool",
@@ -230,20 +235,28 @@ fn unfinished_tools_and_subagents_are_closed_before_end() {
         ]
     );
     assert_eq!(
-        events[5],
-        json!({"schema": 1, "type": "tool", "id": "a", "parent": null, "name": "Bash", "summary": "Bash: sleep", "denied": false})
+        events[2],
+        json!({"schema": 1, "type": "tool_start", "id": "a", "parent": null, "name": "Bash", "summary": "Bash: sleep"})
     );
     assert_eq!(
-        events[6],
-        json!({"schema": 1, "type": "tool", "id": "b", "parent": "s1", "name": "Grep", "summary": "Grep: foo", "denied": false})
+        events[5],
+        json!({"schema": 1, "type": "tool_start", "id": "b", "parent": "s1", "name": "Grep", "summary": "Grep: foo"})
     );
-    assert_eq!(events[7]["id"], "s1");
-    assert_eq!(events[7]["status"], "failed");
-    assert_eq!(events[7]["usage"]["input_tokens"], 4);
-    assert!(outcome.events()[7]["duration_ms"].is_u64());
-    assert_eq!(events[8]["id"], "s2");
-    assert_eq!(events[8]["status"], "failed");
-    assert_eq!(events[9]["status"], "finished");
+    assert_eq!(
+        events[7],
+        json!({"schema": 1, "type": "tool", "id": "a", "parent": null, "name": "Bash", "summary": "Bash: sleep", "denied": false, "error": null})
+    );
+    assert_eq!(
+        events[8],
+        json!({"schema": 1, "type": "tool", "id": "b", "parent": "s1", "name": "Grep", "summary": "Grep: foo", "denied": false, "error": null})
+    );
+    assert_eq!(events[9]["id"], "s1");
+    assert_eq!(events[9]["status"], "failed");
+    assert_eq!(events[9]["usage"]["input_tokens"], 4);
+    assert!(outcome.events()[9]["duration_ms"].is_u64());
+    assert_eq!(events[10]["id"], "s2");
+    assert_eq!(events[10]["status"], "failed");
+    assert_eq!(events[11]["status"], "finished");
 }
 
 #[test]
@@ -367,7 +380,7 @@ fn debug_keeps_tempdir_and_writes_raw_jsonl() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "[debug] sandbox: none (--sandbox off)\n[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
+            "[debug] sandbox: none (--sandbox off)\n[debug] command: {}\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
             executable.display(),
             env.path_var(),
             dir.display(),
@@ -409,7 +422,7 @@ fn dry_run_prints_quoted_command_and_path() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "command: {} --flag 'it'\\''s' 'two words' '<prompt 2 bytes>'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\n",
+            "command: {} --flag 'it'\\''s' 'two words'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\n",
             env.bin().join("claude").display(),
             env.path_var()
         )
@@ -426,7 +439,7 @@ fn text_format_shows_note_and_lines() {
         "\n",
         r#"{"record":"tool_start","id":"t1","parent":"s1","name":"Grep","summary":"Grep: foo"}"#,
         "\n",
-        r#"{"record":"tool_end","id":"t1","denied":false}"#,
+        r#"{"record":"tool_end","id":"t1","denied":false,"error":true}"#,
         "\n",
         r#"{"record":"usage","parent":"s1","model":"claude-haiku-4-5","input_tokens":30,"output_tokens":4,"cache_read_tokens":null,"cache_write_tokens":null}"#,
         "\n",
@@ -443,7 +456,7 @@ fn text_format_shows_note_and_lines() {
             "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches",
             "[main] prompt hi",
             "[main] agent start explore#1 (haiku): look around",
-            "[explore#1] tool Grep: foo",
+            "[explore#1] tool Grep: foo (error)",
         ]
     );
     assert!(lines[4].starts_with("[explore#1] agent finished "));

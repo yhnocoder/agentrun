@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
@@ -5,14 +6,18 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, PrivateDir, detail_head, reject_limits};
+use super::{
+    Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_limits,
+};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
+use crate::image::write_copies;
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
+pub(crate) const MIN_VERSION: Version = Version(0, 159, 2);
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
 pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
@@ -68,6 +73,7 @@ const NO_SUBAGENTS_ARGS: [&str; 6] = [
     "--disable",
     "multi_agent_v2",
 ];
+const IMAGE_LIST_SEPARATOR: char = ',';
 const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
 
 #[derive(Default)]
@@ -79,6 +85,7 @@ pub struct Codex {
     turn_completed: bool,
     turn_failed: Option<String>,
     last_error: Option<String>,
+    started_items: HashSet<String>,
 }
 
 impl Codex {
@@ -86,34 +93,60 @@ impl Codex {
         Codex::default()
     }
 
+    fn item_started(&mut self, item: &Value) -> Vec<Record> {
+        let Some(start) = self.tool_start(item) else {
+            return Vec::new();
+        };
+        if !self.started_items.insert(string(&item["id"])) {
+            return Vec::new();
+        }
+        vec![start]
+    }
+
     fn item_completed(&mut self, item: &Value) -> Vec<Record> {
-        let summary = match item["type"].as_str() {
-            Some("command_execution") => {
-                self.note_sandbox_failure(&item["aggregated_output"]);
-                format!("shell: {}", first_line(&string(&item["command"])))
-            }
-            Some("file_change") => format!("patch: {}", self.changed_paths(&item["changes"])),
-            Some("mcp_tool_call") => {
-                format!("mcp: {}.{}", string(&item["server"]), string(&item["tool"]))
-            }
+        match item["type"].as_str() {
+            Some("command_execution") => self.note_sandbox_failure(&item["aggregated_output"]),
             Some("agent_message") => {
                 return vec![Record::Text {
                     parent: None,
                     text: string(&item["text"]),
                 }];
             }
-            _ => return Vec::new(),
+            _ => {}
+        }
+        let Some(start) = self.tool_start(item) else {
+            return Vec::new();
         };
         let id = string(&item["id"]);
-        vec![
-            Record::ToolStart {
-                id: id.clone(),
-                parent: None,
-                name: string(&item["type"]),
-                summary,
-            },
-            Record::ToolEnd { id, denied: false },
-        ]
+        let end = Record::ToolEnd {
+            id: id.clone(),
+            denied: false,
+            error: item_error(item),
+        };
+        if self.started_items.remove(&id) {
+            vec![end]
+        } else {
+            vec![start, end]
+        }
+    }
+
+    fn tool_start(&self, item: &Value) -> Option<Record> {
+        let summary = match item["type"].as_str() {
+            Some("command_execution") => {
+                format!("shell: {}", first_line(&string(&item["command"])))
+            }
+            Some("file_change") => format!("patch: {}", self.changed_paths(&item["changes"])),
+            Some("mcp_tool_call") => {
+                format!("mcp: {}.{}", string(&item["server"]), string(&item["tool"]))
+            }
+            _ => return None,
+        };
+        Some(Record::ToolStart {
+            id: string(&item["id"]),
+            parent: None,
+            name: string(&item["type"]),
+            summary,
+        })
     }
 
     fn note_sandbox_failure(&mut self, output: &Value) {
@@ -167,6 +200,20 @@ impl Adapter for Codex {
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
         argv.push(invocation.cwd.to_string_lossy().into_owned());
+        for copy in write_copies(
+            &invocation.images,
+            &invocation.tempdir,
+            invocation.args.dry_run,
+        )? {
+            let copy = copy.to_string_lossy().into_owned();
+            if copy.contains(IMAGE_LIST_SEPARATOR) {
+                return Err(format!(
+                    "cannot give images to codex: the path {copy} contains '{IMAGE_LIST_SEPARATOR}', which codex reads as a list separator"
+                ));
+            }
+            argv.push("--image".to_string());
+            argv.push(copy);
+        }
         if invocation.sandbox.runs() {
             let tempdir = if invocation.args.dry_run {
                 invocation.tempdir.clone()
@@ -248,6 +295,7 @@ impl Adapter for Codex {
 
     fn translate(&mut self, line: &Value) -> Vec<Record> {
         match line["type"].as_str() {
+            Some("item.started") => self.item_started(&line["item"]),
             Some("item.completed") => self.item_completed(&line["item"]),
             Some("turn.completed") => {
                 self.turn_completed = true;
@@ -422,6 +470,18 @@ fn toml_string(text: &str) -> String {
     quoted
 }
 
+fn item_error(item: &Value) -> Option<bool> {
+    let exit_code = item["exit_code"].as_i64();
+    let status = item["status"].as_str();
+    if exit_code.is_some_and(|code| code != 0) || status == Some("failed") {
+        Some(true)
+    } else if status == Some("completed") || (status.is_none() && exit_code == Some(0)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn counts(usage: &Value) -> TokenCounts {
     let field = |name: &str| usage[name].as_u64().unwrap_or(0);
     let cached = field("cached_input_tokens");
@@ -430,6 +490,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: Some(field("output_tokens")),
         cache_read_tokens: Some(cached),
         cache_write_tokens: Some(field("cache_write_input_tokens")),
+        cost_usd: None,
     }
 }
 
@@ -443,6 +504,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
+    use crate::image::{Image, ImageKind};
     use crate::network::{self, ProxyEndpoint};
     use crate::sandbox::{Sandbox, Wrapper};
 
@@ -741,6 +803,73 @@ mod tests {
         );
     }
 
+    fn with_images(setup: &Setup, extra: &[&str]) -> Result<Launch, String> {
+        let _ = std::fs::remove_dir_all(home_path(&setup.tempdir()));
+        let mut invocation = setup.invocation(false, extra);
+        invocation.images = vec![
+            Image {
+                given: "a.png".to_string(),
+                kind: ImageKind::Png,
+                bytes: b"png".to_vec(),
+            },
+            Image {
+                given: "b.jpg".to_string(),
+                kind: ImageKind::Jpeg,
+                bytes: b"jpeg".to_vec(),
+            },
+        ];
+        Codex::new().launch(Path::new("/opt/bin/codex"), &invocation)
+    }
+
+    #[test]
+    fn images_are_copied_and_passed_right_after_the_working_directory() {
+        let setup = Setup::new();
+        let launch = with_images(&setup, &[]).unwrap();
+        let first = setup.tempdir().join("image-1.png");
+        let second = setup.tempdir().join("image-2.jpg");
+        let head = head(&setup);
+        assert_eq!(launch.argv[..head.len()], head);
+        assert_eq!(
+            launch.argv[head.len()..head.len() + 5],
+            [
+                "--image".to_string(),
+                first.to_string_lossy().into_owned(),
+                "--image".to_string(),
+                second.to_string_lossy().into_owned(),
+                "-c".to_string(),
+            ]
+        );
+        assert_eq!(launch.argv.last().unwrap(), "-");
+        assert_eq!(std::fs::read(&first).unwrap(), b"png");
+        assert_eq!(std::fs::read(&second).unwrap(), b"jpeg");
+    }
+
+    #[test]
+    fn dry_run_names_the_image_copies_without_writing_them() {
+        let setup = Setup::new();
+        let launch = with_images(&setup, &["--dry-run"]).unwrap();
+        assert!(launch.argv.contains(&"<tempdir>/image-1.png".to_string()));
+        assert!(!setup.tempdir().join("image-1.png").exists());
+    }
+
+    #[test]
+    fn image_copy_path_with_a_comma_is_a_launch_error() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(false, &["--dry-run"]);
+        invocation.tempdir = PathBuf::from("/tmp/a,b");
+        invocation.images = vec![Image {
+            given: "a.png".to_string(),
+            kind: ImageKind::Png,
+            bytes: b"png".to_vec(),
+        }];
+        assert_eq!(
+            Codex::new()
+                .launch(Path::new("/opt/bin/codex"), &invocation)
+                .unwrap_err(),
+            "cannot give images to codex: the path /tmp/a,b/image-1.png contains ',', which codex reads as a list separator"
+        );
+    }
+
     #[test]
     fn dry_run_writes_the_placeholders() {
         let setup = Setup::new();
@@ -915,6 +1044,7 @@ mod tests {
                 Record::ToolEnd {
                     id: "item_1".to_string(),
                     denied: false,
+                    error: Some(false),
                 },
             ]
         );
@@ -953,7 +1083,8 @@ mod tests {
             }]
         );
         for other in [
-            json!({"type":"item.started","item":{"id":"item_5","type":"command_execution","command":"ls"}}),
+            json!({"type":"item.started","item":{"id":"item_5","type":"agent_message","text":""}}),
+            json!({"type":"item.started","item":{"id":"item_8","type":"collab_tool_call","tool":"wait"}}),
             json!({"type":"item.completed","item":{"id":"item_6","type":"collab_tool_call","tool":"wait"}}),
             json!({"type":"item.completed","item":{"id":"item_7","type":"reasoning","text":"hm"}}),
             json!({"type":"thread.started","thread_id":"t"}),
@@ -961,6 +1092,163 @@ mod tests {
         ] {
             assert!(translate(&mut codex, other.clone()).is_empty(), "{other}");
         }
+    }
+
+    #[test]
+    fn started_item_gives_tool_start_and_its_completion_only_tool_end() {
+        let mut codex = Codex::new();
+        codex.cwd = PathBuf::from("/work/repo");
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex\nmore","aggregated_output":"","exit_code":null,"status":"in_progress"}})
+            ),
+            [Record::ToolStart {
+                id: "item_1".to_string(),
+                parent: None,
+                name: "command_execution".to_string(),
+                summary: "shell: latexmk -xelatex".to_string(),
+            }]
+        );
+        assert!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","status":"in_progress"}})
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/repo/a.txt","kind":"add"}],"status":"in_progress"}})
+            ),
+            [Record::ToolStart {
+                id: "item_2".to_string(),
+                parent: None,
+                name: "file_change".to_string(),
+                summary: "patch: a.txt".to_string(),
+            }]
+        );
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"fs","tool":"read","status":"in_progress"}})
+            ),
+            [Record::ToolStart {
+                id: "item_3".to_string(),
+                parent: None,
+                name: "mcp_tool_call".to_string(),
+                summary: "mcp: fs.read".to_string(),
+            }]
+        );
+        for (id, completed, error) in [
+            (
+                "item_1",
+                json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","aggregated_output":"ok","exit_code":0}}),
+                Some(false),
+            ),
+            (
+                "item_2",
+                json!({"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/repo/a.txt","kind":"add"}]}}),
+                None,
+            ),
+            (
+                "item_3",
+                json!({"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"fs","tool":"read"}}),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                translate(&mut codex, completed),
+                [Record::ToolEnd {
+                    id: id.to_string(),
+                    denied: false,
+                    error,
+                }]
+            );
+        }
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}})
+            )
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn item_error_comes_from_exit_code_and_status() {
+        let cases = [
+            (
+                json!({"type":"command_execution","exit_code":0,"status":"completed"}),
+                Some(false),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":56,"status":"failed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":1,"status":"completed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":null,"status":"failed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":null,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0}),
+                Some(false),
+            ),
+            (
+                json!({"type":"file_change","status":"completed"}),
+                Some(false),
+            ),
+            (json!({"type":"file_change","status":"failed"}), Some(true)),
+            (
+                json!({"type":"mcp_tool_call","status":"failed"}),
+                Some(true),
+            ),
+            (json!({"type":"mcp_tool_call"}), None),
+        ];
+        for (item, error) in cases {
+            assert_eq!(item_error(&item), error, "{item}");
+        }
+    }
+
+    #[test]
+    fn bwrap_output_after_a_started_item_is_still_a_sandbox_failure() {
+        let mut codex = Codex::new();
+        codex.sandboxed = true;
+        translate(
+            &mut codex,
+            json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":""}}),
+        );
+        assert_eq!(
+            translate(
+                &mut codex,
+                bwrap_output("item_1", "bwrap: setting up uid map: Permission denied")
+            ),
+            [Record::ToolEnd {
+                id: "item_1".to_string(),
+                denied: false,
+                error: Some(true),
+            }]
+        );
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message(
+                "sandbox failed to start: setting up uid map: Permission denied".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -980,6 +1268,7 @@ mod tests {
                     output_tokens: Some(109),
                     cache_read_tokens: Some(8960),
                     cache_write_tokens: Some(3),
+                    cost_usd: None,
                 },
             }]
         );
@@ -997,6 +1286,7 @@ mod tests {
                     output_tokens: Some(0),
                     cache_read_tokens: Some(9),
                     cache_write_tokens: Some(0),
+                    cost_usd: None,
                 },
             }]
         );

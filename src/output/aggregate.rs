@@ -20,6 +20,7 @@ pub enum Record {
     ToolEnd {
         id: String,
         denied: bool,
+        error: Option<bool>,
     },
     SubagentStart {
         id: String,
@@ -62,21 +63,9 @@ pub struct Translated {
     pub terminate: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct OpenTools(HashMap<Option<String>, String>);
-
-impl OpenTools {
-    pub fn insert(&mut self, agent: Option<String>, summary: String) {
-        self.0.insert(agent, summary);
-    }
-
-    pub fn get(&self, agent: Option<&str>) -> Option<&str> {
-        self.0.get(&agent.map(str::to_string)).map(String::as_str)
-    }
-}
-
 pub struct Aggregator {
     echoes_prompt: bool,
+    images: Vec<String>,
     open_tools: Vec<StartedTool>,
     subagent_parents: HashMap<String, Option<String>>,
     running: Vec<RunningSubagent>,
@@ -116,6 +105,7 @@ impl Aggregator {
     pub fn new(echoes_prompt: bool) -> Aggregator {
         Aggregator {
             echoes_prompt,
+            images: Vec::new(),
             open_tools: Vec::new(),
             subagent_parents: HashMap::new(),
             running: Vec::new(),
@@ -129,11 +119,12 @@ impl Aggregator {
         }
     }
 
-    pub fn begin(&self, prompt: &str) -> Vec<Event> {
+    pub fn begin(&mut self, prompt: &str, images: Vec<String>) -> Vec<Event> {
+        self.images = images;
         if self.echoes_prompt {
             Vec::new()
         } else {
-            vec![prompt_event(prompt)]
+            vec![self.prompt_event(prompt)]
         }
     }
 
@@ -147,7 +138,7 @@ impl Aggregator {
             match record {
                 Record::PromptEcho { text } => {
                     if self.echoes_prompt {
-                        translated.events.push(prompt_event(&text));
+                        translated.events.push(self.prompt_event(&text));
                     }
                 }
                 Record::ToolStart {
@@ -155,16 +146,27 @@ impl Aggregator {
                     parent,
                     name,
                     summary,
-                } => self.open_tools.push(StartedTool {
-                    id,
-                    parent,
-                    name,
-                    summary,
-                }),
-                Record::ToolEnd { id, denied } => {
+                } => {
+                    let tool = StartedTool {
+                        id,
+                        parent: self.known_parent(parent),
+                        name,
+                        summary: truncate_summary(&summary),
+                    };
+                    translated
+                        .events
+                        .push(Event::now(Body::ToolStart(event::ToolStart {
+                            id: tool.id.clone(),
+                            parent: tool.parent.clone(),
+                            name: tool.name.clone(),
+                            summary: tool.summary.clone(),
+                        })));
+                    self.open_tools.push(tool);
+                }
+                Record::ToolEnd { id, denied, error } => {
                     if let Some(index) = self.open_tools.iter().position(|tool| tool.id == id) {
                         let tool = self.open_tools.remove(index);
-                        translated.events.push(self.tool_event(tool, denied));
+                        translated.events.push(tool_event(tool, denied, error));
                     }
                 }
                 Record::SubagentStart {
@@ -251,7 +253,7 @@ impl Aggregator {
     pub fn finish(mut self) -> (Vec<Event>, Summary) {
         let mut events = Vec::new();
         for tool in std::mem::take(&mut self.open_tools) {
-            events.push(self.tool_event(tool, false));
+            events.push(tool_event(tool, false, None));
         }
         for subagent in std::mem::take(&mut self.running) {
             events.push(self.subagent_end_event(subagent, SubagentStatus::Failed));
@@ -277,28 +279,14 @@ impl Aggregator {
         reported + self.call_tokens.values().sum::<u64>()
     }
 
-    pub fn open_tools(&self) -> OpenTools {
-        let mut open_tools = OpenTools::default();
-        for tool in &self.open_tools {
-            open_tools.insert(
-                self.known_parent(tool.parent.clone()),
-                truncate_summary(&tool.summary),
-            );
-        }
-        open_tools
-    }
-
     fn known_parent(&self, parent: Option<String>) -> Option<String> {
         parent.filter(|id| self.subagent_parents.contains_key(id))
     }
 
-    fn tool_event(&self, tool: StartedTool, denied: bool) -> Event {
-        Event::now(Body::Tool(event::Tool {
-            id: tool.id,
-            parent: self.known_parent(tool.parent),
-            name: tool.name,
-            summary: truncate_summary(&tool.summary),
-            denied,
+    fn prompt_event(&self, text: &str) -> Event {
+        Event::now(Body::Prompt(event::Prompt {
+            text: text.to_string(),
+            images: self.images.clone(),
         }))
     }
 
@@ -331,9 +319,14 @@ impl Aggregator {
     }
 }
 
-fn prompt_event(text: &str) -> Event {
-    Event::now(Body::Prompt(event::Prompt {
-        text: text.to_string(),
+fn tool_event(tool: StartedTool, denied: bool, error: Option<bool>) -> Event {
+    Event::now(Body::Tool(event::Tool {
+        id: tool.id,
+        parent: tool.parent,
+        name: tool.name,
+        summary: tool.summary,
+        denied,
+        error: if denied { Some(false) } else { error },
     }))
 }
 
@@ -372,47 +365,142 @@ mod tests {
         Record::ToolEnd {
             id: id.to_string(),
             denied: false,
+            error: Some(false),
+        }
+    }
+
+    fn subagent_start(id: &str) -> Record {
+        Record::SubagentStart {
+            id: id.to_string(),
+            parent: None,
+            kind: "Explore".to_string(),
+            model: None,
+            description: "look".to_string(),
+        }
+    }
+
+    fn started(event: &Event) -> &event::ToolStart {
+        match &event.body {
+            Body::ToolStart(start) => start,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn ended(event: &Event) -> &event::Tool {
+        match &event.body {
+            Body::Tool(tool) => tool,
+            other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn open_tools_takes_the_last_open_call_of_each_agent() {
+    fn tool_start_is_written_when_the_call_starts() {
         let mut aggregator = Aggregator::new(false);
-        assert_eq!(aggregator.open_tools(), OpenTools::default());
-        aggregator.push(vec![
-            Record::SubagentStart {
-                id: "s1".to_string(),
-                parent: None,
-                kind: "Explore".to_string(),
-                model: None,
-                description: "look".to_string(),
-            },
-            tool_start("t1", None, "Bash: first"),
-            tool_start("t2", Some("s1"), "Read: a.rs"),
-            tool_start("t3", None, "Bash: second"),
-            tool_start("t4", Some("unknown"), "Bash: unknown parent"),
-        ]);
-        let open_tools = aggregator.open_tools();
-        assert_eq!(open_tools.get(None), Some("Bash: unknown parent"));
-        assert_eq!(open_tools.get(Some("s1")), Some("Read: a.rs"));
-        assert_eq!(open_tools.get(Some("unknown")), None);
-
-        aggregator.push(vec![tool_end("t4")]);
-        assert_eq!(aggregator.open_tools().get(None), Some("Bash: second"));
-        aggregator.push(vec![tool_end("t3")]);
-        assert_eq!(aggregator.open_tools().get(None), Some("Bash: first"));
-        aggregator.push(vec![tool_end("t2")]);
-        assert_eq!(aggregator.open_tools().get(Some("s1")), None);
-
         let long = format!("Bash: {}", "x".repeat(200));
-        aggregator.push(vec![tool_start("t5", None, &long)]);
-        let shown = aggregator.open_tools().get(None).unwrap().to_string();
-        let translated = aggregator.push(vec![tool_end("t5")]);
-        let Body::Tool(tool) = &translated.events[0].body else {
-            panic!("{:?}", translated.events);
+        let translated = aggregator.push(vec![tool_start("t1", None, &long)]);
+        assert_eq!(translated.events.len(), 1);
+        let start = started(&translated.events[0]).clone();
+        assert_eq!(start.id, "t1");
+        assert_eq!(start.parent, None);
+        assert_eq!(start.name, "Bash");
+        assert_eq!(start.summary, truncate_summary(&long));
+
+        let translated = aggregator.push(vec![tool_end("t1")]);
+        assert_eq!(translated.events.len(), 1);
+        let tool = ended(&translated.events[0]);
+        assert_eq!(tool.id, start.id);
+        assert_eq!(tool.summary, start.summary);
+        assert!(aggregator.push(vec![tool_end("t1")]).events.is_empty());
+    }
+
+    #[test]
+    fn tool_start_and_tool_of_one_call_have_the_same_parent() {
+        let mut aggregator = Aggregator::new(false);
+        let translated = aggregator.push(vec![
+            tool_start("t1", Some("s1"), "Bash: before"),
+            subagent_start("s1"),
+            tool_start("t2", Some("s1"), "Read: a.rs"),
+            tool_start("t3", Some("unknown"), "Bash: unknown parent"),
+            tool_end("t1"),
+            tool_end("t2"),
+            tool_end("t3"),
+        ]);
+        let events = &translated.events;
+        assert_eq!(events.len(), 7);
+        let pairs = [(0, 4), (2, 5), (3, 6)];
+        let parents = [None, Some("s1".to_string()), None];
+        for ((start, end), parent) in pairs.into_iter().zip(parents) {
+            assert_eq!(started(&events[start]).parent, parent);
+            assert_eq!(ended(&events[end]).parent, parent);
+            assert_eq!(started(&events[start]).id, ended(&events[end]).id);
+        }
+    }
+
+    #[test]
+    fn tool_written_at_finish_follows_its_tool_start() {
+        let mut aggregator = Aggregator::new(false);
+        let translated = aggregator.push(vec![
+            subagent_start("s1"),
+            tool_start("t1", Some("s1"), "Bash: sleep"),
+        ]);
+        let start = started(&translated.events[1]).clone();
+        let (events, _) = aggregator.finish();
+        let tool = ended(&events[0]);
+        assert_eq!(tool.id, start.id);
+        assert_eq!(tool.parent, start.parent);
+        assert_eq!(tool.summary, start.summary);
+        assert!(!tool.denied);
+        assert_eq!(tool.error, None);
+    }
+
+    #[test]
+    fn denied_call_has_no_error_and_other_calls_keep_the_reported_error() {
+        let mut aggregator = Aggregator::new(false);
+        let end = |id: &str, denied: bool, error: Option<bool>| Record::ToolEnd {
+            id: id.to_string(),
+            denied,
+            error,
         };
-        assert_eq!(shown, tool.summary);
-        assert_eq!(shown.chars().count(), SUMMARY_MAX_CHARS);
+        let translated = aggregator.push(vec![
+            tool_start("t1", None, "Bash: cat ~/.ssh/id_rsa"),
+            tool_start("t2", None, "Bash: false"),
+            tool_start("t3", None, "Bash: true"),
+            tool_start("t4", None, "Bash: unknown"),
+            end("t1", true, Some(true)),
+            end("t2", false, Some(true)),
+            end("t3", false, Some(false)),
+            end("t4", false, None),
+        ]);
+        let outcomes: Vec<_> = translated.events[4..]
+            .iter()
+            .map(|event| {
+                let tool = ended(event);
+                (tool.id.as_str(), tool.denied, tool.error)
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                ("t1", true, Some(false)),
+                ("t2", false, Some(true)),
+                ("t3", false, Some(false)),
+                ("t4", false, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn call_that_starts_a_subagent_has_no_tool_start() {
+        let mut aggregator = Aggregator::new(false);
+        let translated = aggregator.push(vec![subagent_start("s1")]);
+        assert_eq!(translated.events.len(), 1);
+        assert!(matches!(
+            &translated.events[0].body,
+            Body::SubagentStart(start) if start.id == "s1"
+        ));
+        let (events, _) = aggregator.finish();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0].body, Body::SubagentEnd(end) if end.id == "s1"));
     }
 
     #[test]
@@ -422,6 +510,7 @@ mod tests {
             output_tokens: Some(output),
             cache_read_tokens: None,
             cache_write_tokens: None,
+            cost_usd: None,
         };
         let call_usage = |parent: Option<&str>, output| Record::CallUsage {
             parent: parent.map(str::to_string),

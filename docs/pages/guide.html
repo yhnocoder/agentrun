@@ -41,6 +41,22 @@ agentrun claude-code --prompt-file task.md
 agentrun claude-code &lt; task.md</code></pre>
 <p>长提示词放在文件里，避免 shell 的引号问题。同时给出两种方式，或者提示词为空，agentrun 都会报用法错误。</p>
 
+<h2 id="images">让 agent 看图片</h2>
+<p>需要模型看截图、设计稿或照片时，用 <code>--image</code> 把图片和提示词一起传入。有多张图片时重复这个选项，模型按你给出的顺序看到它们：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --format text --image screenshot.png --prompt "图里写的是什么？只回答图里的文字。"
+<span class="dim">[main]</span> prompt 图里写的是什么？只回答图里的文字。 (+1 image)
+<span class="dim">[main]</span> text ZEBRA 4721
+<span class="dim">[end]</span> finished 6.3s  in 17.8k  out 26  cached 74%</div>
+<p>text 与 rich 格式在 prompt 一行的末尾写出图片的张数。图片可以放在任何你能读到的位置，不需要放进工作目录。在 jsonl 输出里，<code>prompt</code> 事件的 <code>images</code> 列出你给的路径，可以用来核对这次运行带了哪些图片：</p>
+<pre><code class="language-json">{
+  "schema": 1,
+  "type": "prompt",
+  "time": "2026-10-19T03:14:26.078Z",
+  "text": "图里写的是什么？只回答图里的文字。",
+  "images": ["screenshot.png"]
+}</code></pre>
+<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、不是普通文件、类型不对（包括动画 PNG）或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。传法的细节见<a href="run.html#images">图片</a>。</p>
+
 <h2 id="network">让 agent 访问网络</h2>
 <p>默认情况下，agent 运行的命令不能联网。运行时自己访问模型服务不受影响。需要联网时有两种放开方式：</p>
 <table>
@@ -57,10 +73,9 @@ agentrun claude-code &lt; task.md</code></pre>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --network custom --allow-host pypi.org --format text --prompt "依次运行 curl -sI https://pypi.org/simple/ 与 curl -sI https://example.com ，然后用一行回复：pypi=状态码 example=状态码"
 <span class="dim">[main]</span> prompt 依次运行 curl -sI https://pypi.org/simple/ 与 curl -sI https://example.com ，然后用一行回复：pypi=状态码 example=状态码
 <span class="dim">[main]</span> <span class="warn">net denied example.com:443 (not_allowed)</span>
-<span class="dim">[main]</span> tool bash: curl -sI https://pypi.org/simple/ | head -1; curl -sI https://example.com | head -1
-<span class="dim">[main]</span> tool bash: echo "--- pypi ---"; curl -sI https://pypi.org/simple/ ; echo "--- example ---"; curl -sI https://example.com
+<span class="dim">[main]</span> tool bash: curl -sI https://pypi.org/simple/ | head -5; echo "---"; curl -sI https://example.com | head -5
 <span class="dim">[main]</span> text pypi=200 example=403
-<span class="dim">[end]</span> finished 6.8s  in 7.9k  out 0.4k  cached 86%</div>
+<span class="dim">[end]</span> finished 5.1s  in 4.7k  out 0.1k  cached 59%  $0.0008</div>
 <p>被拒绝的连接显示为 <code>net denied</code> 一行，括号里是原因。解析到内网地址的主机默认也会被拒绝，需要访问时把主机名原样写进 <code>--allow-host</code>。agentrun 不支持 IPv6。规则的细节见<a href="isolation.html#network">网络</a>。</p>
 
 <h2 id="env">传入环境变量与密钥</h2>
@@ -84,7 +99,8 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <span class="dim">[main]</span> prompt 运行 sleep 30，然后回复 done
 <span class="dim">[main]</span> tool Bash: sleep 30
 <span class="dim">[main]</span> tool Bash: sleep 30
-<span class="dim">[end]</span> timeout 5.5s  in 31.7k  out 24  cached 69%
+<span class="dim">[main]</span> text `sleep 30` 已在后台运行,结束时我会收到通知。等它跑完再回复 done。
+<span class="dim">[end]</span> timeout 6.9s  in 52.6k  out 0.3k  cached 88%  $0.0281
 <span class="prompt">$</span> echo $?
 3</div>
 <p>按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
@@ -95,11 +111,11 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <span class="dim">[main]</span> prompt 依次运行 echo 1、echo 2、echo 3 三条命令，每次只运行一条，最后回复 done
 <span class="dim">[main]</span> tool Bash: echo 1
 <span class="dim">[main]</span> tool Bash: echo 2
-<span class="dim">[main]</span> tool Bash: echo 3
-<span class="dim">[end]</span> limit 5.5s  in 50.8k  out 48  cached 91%  --max-turns 2 reached: the main agent started turn 3
+<span class="dim">[main]</span> tool Bash: echo 3 (error)
+<span class="dim">[end]</span> limit 6.5s  in 36.6k  out 48  cached 88%  --max-turns 2 reached: the main agent started turn 3
 <span class="prompt">$</span> echo $?
 4</div>
-<p><code>[end]</code> 行的最后写出是哪个上限、你给的值和实际的值。主 agent 开始第 3 次调用时 agentrun 停止了运行，所以最后一个 <code>tool</code> 是这次调用请求的命令，它可能没有执行，也可能已经开始执行。<code>--max-tokens</code> 的结果写成 <code>--max-tokens 5000 exceeded: 7389 tokens</code>。agent 在超过上限时恰好已经完成任务、正常退出的，结果仍是 <code>finished</code>。</p>
+<p><code>[end]</code> 行的最后写出是哪个上限、你给的值和实际的值。主 agent 开始第 3 次调用时 agentrun 停止了运行，所以最后一个 <code>tool</code> 是这次调用请求的命令，它可能没有执行，也可能已经开始执行；这里 claude-code 在停止时把它报告为出错，所以带 <code>(error)</code>。<code>--max-tokens</code> 的结果写成 <code>--max-tokens 5000 exceeded: 7389 tokens</code>。agent 在最后一次调用里已经完成任务并正常退出、agentrun 还没有停止它时，结果仍是 <code>finished</code>。</p>
 <p>codex 只在运行结束时报告用量，agentrun 无法在运行中停止它，所以 codex 不接受这两个选项，给出时直接报错。两个上限的计数方法见<a href="run.html#limits">轮数与 token 上限</a>。</p>
 
 <h2 id="containers">在 docker 与 Cloud Managed 容器里运行</h2>
@@ -138,9 +154,20 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <h2 id="ci">在脚本与 CI 里判断成败</h2>
 <p>只看退出码就能区分三类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
 <p>在 CI 里建议显式写 <code>--format jsonl</code> 和 <code>--timeout</code>，并在作业开始时对你用的运行时运行一次 <code>agentrun doctor</code>，例如 <code>agentrun doctor claude-code</code>，让环境问题在第一步就暴露出来。</p>
-<p>两种情况不会让结果变成失败：agent 的某次工具调用被拒绝，以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
+<p>三种情况不会让结果变成失败：agent 的某次工具调用被拒绝，某次工具调用执行出错（例如命令的退出码不为 0），以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
+jq -c 'select(.type == "tool" and .error)' run.jsonl
 jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code></pre>
+<p>例如列出执行出错的调用：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --model sonnet --format jsonl --prompt "运行 ls missing.txt，再运行 ls ." &gt; run.jsonl
+<span class="prompt">$</span> jq -r 'select(.type == "tool" and .error) | .summary' run.jsonl
+Bash: ls missing.txt</div>
+<p>被拒绝的调用的 <code>error</code> 为 false，只由第一条命令查出。运行时没有报告调用结果时 <code>error</code> 为 null，第二条命令不会查出这样的调用。字段的完整说明见<a href="events.html">事件与输出</a>。</p>
+<p>要记录每次运行的花费，从 <code>end</code> 事件读 <code>usage.cost_usd</code>，单位是美元：</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --format jsonl --prompt "回复 OK" &gt; run.jsonl
+<span class="prompt">$</span> jq -c 'select(.type == "end") | {status, cost_usd: .usage.cost_usd}' run.jsonl
+{"status":"finished","cost_usd":0.000072288}</div>
+<p>codex 不报告费用，<code>cost_usd</code> 为 null；claude-code 没完成一轮就被中断时也为 null。金额由运行时按单价表计算，用订阅登录时它不是实际扣费。按模型拆分的金额与各运行时的差别见<a href="events.html#cost">费用</a>。</p>
 
 <h2 id="parallel">同时运行多个 agent</h2>
 <p>需要几个 agent 同时处理不同的任务时，在后台启动多个 agentrun，每个用自己的 <code>--cwd</code>，输出写到各自的文件，再用 <code>wait</code> 等它们都结束：</p>
@@ -150,12 +177,12 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <span class="prompt">$</span> cat api.log web.log
 <span class="dim">[main]</span> prompt 创建 hello.txt，内容为 api
 <span class="dim">[main]</span> tool Write: hello.txt
-<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`，内容为 `api`，末尾带一个换行符。
-<span class="dim">[end]</span> finished 5.6s  in 27.8k  out 0.1k  cached 82%
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`,内容为 `api`,末尾带一个换行符。
+<span class="dim">[end]</span> finished 6.6s  in 34.1k  out 0.1k  cached 86%  $0.0189
 <span class="dim">[main]</span> prompt 创建 hello.txt，内容为 web
 <span class="dim">[main]</span> tool Write: hello.txt
-<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`，内容为 `web`（末尾带一个换行）。
-<span class="dim">[end]</span> finished 5.0s  in 27.8k  out 0.1k  cached 82%</div>
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`,内容为 `web`,末尾带一个换行。
+<span class="dim">[end]</span> finished 6.3s  in 34.1k  out 0.1k  cached 86%  $0.0188</div>
 <p>每个运行有自己的临时目录、网络代理和 <code>network</code> 事件，结束或被中断时只停止自己启动的进程，所以每个日志可以单独按<a href="#ci">上一节</a>的方法判断成败。运行时可以不同，例如一个用 claude-code、一个用 pi。</p>
 <p>同时运行时注意三点：</p>
 <ul>
@@ -180,6 +207,15 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 </table>
 <p>这些输出都只写变量名，不写变量的值，也不写提示词。</p>
 
+<h3 id="running-tool">在你的程序里显示正在执行的工具</h3>
+<p>你的程序读 <code>--format jsonl</code>，想在一次工具调用执行期间显示 agent 正在做什么时，读 <code>tool_start</code> 事件。agentrun 在一次工具调用开始时输出 <code>tool_start</code>，在调用结束时输出同 <code>id</code> 的 <code>tool</code>：</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --format jsonl --prompt "Run sleep 3 with bash, then count the lines in hello.txt with wc, then reply in one short sentence" \
+    | jq -r --unbuffered 'select(.type == "tool_start" or .type == "tool") | "\(.time) \(.type) \(.summary)"'
+2026-10-19T03:02:35.820Z tool_start bash: sleep 3 &amp;&amp; wc -l hello.txt
+2026-10-19T03:02:38.839Z tool bash: sleep 3 &amp;&amp; wc -l hello.txt</div>
+<p>命令开始时就输出了 <code>tool_start</code>，3 秒后命令结束时才输出 <code>tool</code>。收到 <code>tool_start</code> 时，把它的 <code>summary</code> 显示为正在执行的工具；收到同 <code>id</code> 的 <code>tool</code> 时，这次调用结束。主 agent 与 subagent 的调用可以同时进行，用 <code>id</code> 对应开始与结束，用 <code>parent</code> 区分是哪个 agent 的调用。每个 <code>tool_start</code> 之后都会有同 <code>id</code> 的 <code>tool</code>，运行被中断或超时也一样，在 <code>end</code> 之前给出。</p>
+<p>两个事件的字段见<a href="events.html#event-types">事件与输出</a>。</p>
+
 <h2 id="safety">agent 能做什么、不能做什么</h2>
 <table>
   <thead>
@@ -196,8 +232,8 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "用 Write 工具把 hello 写到 /tmp/outside.txt"
 <span class="dim">[main]</span> prompt 用 Write 工具把 hello 写到 /tmp/outside.txt
 <span class="dim">[main]</span> tool Write: /tmp/outside.txt <span class="warn">(denied)</span>
-<span class="dim">[main]</span> text 没写成。Write 工具往 `/tmp/outside.txt` 写入时被拒绝了。当前是 don't ask 模式，这个路径在工作目录 `/tmp/demo` 之外，没有放行规则。
-<span class="dim">[end]</span> finished 7.7s  in 32.7k  out 0.3k  cached 85%</div>
+<span class="dim">[main]</span> text 我没能写入 `/tmp/outside.txt`。Write 工具的调用被拒绝了,原因是当前会话处于 "don't ask" 模式,不允许写工作目录之外的路径。
+<span class="dim">[end]</span> finished 8.9s  in 35.3k  out 0.4k  cached 83%  $0.0263</div>
 <p>三种情况下这些限制会变化：</p>
 <ul>
   <li><code>--sandbox relax</code>：沙箱能启动就用，启动不了就不用沙箱照常运行。</li>
@@ -216,10 +252,19 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <p>agentrun 在 PATH 里找不到运行时。确认运行时已经安装；它装在 PATH 之外时，用 <code>--path</code> 把它所在的目录加进来：</p>
 <pre><code class="language-bash">agentrun codex --path ~/tools/codex/bin --prompt "..."</code></pre>
 
+<h3><code>requires &gt;= X.Y.Z</code></h3>
+<p>doctor 找到的运行时版本低于 agentrun 要求的最低版本。<code>executable</code> 一行写出路径、找到的版本和要求的版本：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code --path /opt/claude-old/bin
+<span class="warn">[fail]</span> claude-code  executable  /opt/claude-old/bin/claude 2.1.287, requires &gt;= 2.1.288
+<span class="dim">[ok]  </span> claude-code  login       oauth_token
+<span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
+<span class="dim">[skip]</span> claude-code  network     --network none</div>
+<p>升级这个路径上的运行时，或者用 <code>--path</code> 指向新版本所在的目录。各运行时的最低版本见<a href="quickstart.html#runtimes">准备运行时</a>的表。</p>
+
 <h3><code>not logged in. Run claude login</code></h3>
 <p>doctor 发现 claude-code 没有登录。在本机运行 <code>claude login</code>；在容器里传入 <code>CLAUDE_CODE_OAUTH_TOKEN</code>：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code
-<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude 2.1.303
 <span class="warn">[fail]</span> claude-code  login       not logged in. Run claude login, or set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token)
 <span class="warn">[fail]</span> claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. <span class="dim">（后略）</span>
 <span class="dim">[skip]</span> claude-code  network     --network none</div>
@@ -233,7 +278,7 @@ agentrun: codex login file /root/.codex/auth.json not found. Run codex login, or
 <h3>pi 用的模型和你想的不一样</h3>
 <p>pi 遇到拼错的模型名会照样运行，没有设置默认模型时还会改用环境里其他可用的服务商。doctor 的 <code>login</code> 一行会报出这两种情况：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor pi --model deepseek/deepseek-flsh
-<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi
+<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi 1.2.0
 <span class="warn">[fail]</span> pi           login       pi does not know deepseek/deepseek-flsh (from --model): Warning: Model "deepseek-flsh" not found for provider "deepseek". Using custom model id.
 <span class="dim">[ok]  </span> pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 <span class="dim">[skip]</span> pi           network     --network none</div>

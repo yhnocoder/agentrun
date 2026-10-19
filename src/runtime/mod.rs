@@ -3,11 +3,13 @@ pub mod codex;
 pub mod pi;
 
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::cli::{Format, RunArgs, Runtime, SandboxMode};
+use crate::image::Image;
 use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{Record, SandboxKind};
 use crate::sandbox::{PiState, Sandbox, Wrapper};
@@ -33,6 +35,49 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Version(pub u64, pub u64, pub u64);
+
+impl Version {
+    pub(crate) fn find(text: &str) -> Option<Version> {
+        text.split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';'))
+            .find_map(Version::parse)
+    }
+
+    fn parse(word: &str) -> Option<Version> {
+        let word = word.strip_prefix('v').unwrap_or(word);
+        let mut parts = word.splitn(3, '.');
+        let major = number(parts.next()?)?;
+        let minor = number(parts.next()?)?;
+        let rest = parts.next()?;
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .map_or(rest, |end| &rest[..end]);
+        Some(Version(major, minor, number(digits)?))
+    }
+}
+
+fn number(text: &str) -> Option<u64> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
+
+pub(crate) fn min_version(runtime: Runtime) -> Version {
+    match runtime {
+        Runtime::ClaudeCode => claudecode::MIN_VERSION,
+        Runtime::Codex => codex::MIN_VERSION,
+        Runtime::Pi => pi::MIN_VERSION,
     }
 }
 
@@ -119,6 +164,7 @@ pub struct Invocation {
     pub args: RunArgs,
     pub cwd: PathBuf,
     pub prompt: String,
+    pub images: Vec<Image>,
     pub format: Format,
     pub sandbox: Sandbox,
     pub tempdir: PathBuf,
@@ -140,6 +186,7 @@ impl Invocation {
             args,
             cwd,
             prompt,
+            images: Vec::new(),
             format: Format::Jsonl,
             sandbox: Sandbox::new(SandboxMode::Off, Wrapper::None),
             tempdir: PathBuf::new(),
@@ -260,6 +307,57 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(state.dir, std::fs::canonicalize(&state_dir).unwrap());
+    }
+
+    #[test]
+    fn version_is_found_in_each_runtime_version_output() {
+        let cases = [
+            ("2.1.303 (Claude Code)", Some(Version(2, 1, 303))),
+            ("codex-cli 0.159.2", Some(Version(0, 159, 2))),
+            ("1.2.0", Some(Version(1, 2, 0))),
+            ("v22.10.0", Some(Version(22, 10, 0))),
+            ("codex-cli 0.160.0-alpha.3", Some(Version(0, 160, 0))),
+            ("version 1.2", None),
+            ("1.x.3", None),
+            ("+1.2.3", None),
+            ("", None),
+        ];
+        for (text, version) in cases {
+            assert_eq!(Version::find(text), version, "{text}");
+        }
+        assert!(Version(2, 1, 287) < Version(2, 1, 288));
+        assert!(Version(2, 2, 0) > Version(2, 1, 288));
+        assert!(Version(0, 160, 0) > Version(0, 159, 2));
+        assert_eq!(Version(0, 159, 2).to_string(), "0.159.2");
+    }
+
+    #[test]
+    fn min_versions_match_the_documented_tables() {
+        let run_page = include_str!("../../docs/pages/run.html");
+        let quickstart = include_str!("../../docs/pages/quickstart.html");
+        for runtime in [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi] {
+            let run_item = format!("<li>{}: >= ", runtime.name());
+            let documented = run_page
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(run_item.as_str()))
+                .and_then(Version::find);
+            assert_eq!(
+                documented,
+                Some(min_version(runtime)),
+                "run.html {runtime:?}"
+            );
+            let quickstart_row = format!("<code>agentrun {}</code>", runtime.name());
+            let documented = quickstart
+                .lines()
+                .find(|line| line.contains(&quickstart_row))
+                .and_then(|line| line.split(&quickstart_row).nth(1))
+                .and_then(Version::find);
+            assert_eq!(
+                documented,
+                Some(min_version(runtime)),
+                "quickstart.html {runtime:?}"
+            );
+        }
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::cli::{
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
+use crate::image::read_images;
 use crate::network::{self, FilterProxy, ProxyEndpoint};
 use crate::output::{End, EndStatus, Event, Output, write_end};
 use crate::runtime::{Adapter, Invocation, Launch};
@@ -255,7 +256,7 @@ fn set_up(
         });
     }
     drop(hold);
-    let mut plan = plan_lines(&launch, &ready.invocation.session, &ready.invocation.prompt);
+    let mut plan = plan_lines(&launch, &ready.invocation.session);
     plan.push(credential_line);
     let Ready {
         invocation,
@@ -279,11 +280,7 @@ fn dry_run(ready: &mut Ready, proxy_needed: bool) -> Result<Vec<String>, String>
         socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
     });
     let launch = ready.adapter.launch(&ready.executable, &ready.invocation)?;
-    Ok(plan_lines(
-        &launch,
-        &ready.invocation.session,
-        &ready.invocation.prompt,
-    ))
+    Ok(plan_lines(&launch, &ready.invocation.session))
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
@@ -311,6 +308,7 @@ fn prepare(
     let allow_hosts = network::check_usage(args.network, &args.allow_host)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let prompt = read_prompt(caller, &args)?;
+    let images = read_images(&args.image)?;
     let env_args = parse_env_args(&args.env, &caller.env)?;
     let path_dirs = resolve_path_dirs(&args.path)?;
     let raw = match &args.raw {
@@ -333,6 +331,7 @@ fn prepare(
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
     let invocation = Invocation {
+        images,
         format,
         sandbox,
         allow_hosts,
@@ -411,17 +410,11 @@ pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, S
         })
 }
 
-fn plan_lines(launch: &Launch, session: &Session, prompt: &str) -> Vec<String> {
+fn plan_lines(launch: &Launch, session: &Session) -> Vec<String> {
     let command = launch
         .argv
         .iter()
-        .map(|arg| {
-            if arg == prompt {
-                shell_quote(&format!("<prompt {} bytes>", prompt.len()))
-            } else {
-                shell_quote(arg)
-            }
-        })
+        .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()
         .join(" ");
     vec![
@@ -476,7 +469,6 @@ mod tests {
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("two words"), "'two words'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(shell_quote("<prompt 12 bytes>"), "'<prompt 12 bytes>'");
         assert_eq!(shell_quote("修复"), "'修复'");
         assert_eq!(shell_quote("$HOME"), "'$HOME'");
     }

@@ -211,15 +211,16 @@ fn fake_codex_run_without_sandbox() {
     assert_eq!(
         events[1..],
         [
-            json!({"schema": 1, "type": "prompt", "text": "say hi"}),
+            json!({"schema": 1, "type": "prompt", "text": "say hi", "images": []}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "working"}),
-            json!({"schema": 1, "type": "tool", "id": "item_1", "parent": null, "name": "command_execution", "summary": "shell: ls", "denied": false}),
+            json!({"schema": 1, "type": "tool_start", "id": "item_1", "parent": null, "name": "command_execution", "summary": "shell: ls"}),
+            json!({"schema": 1, "type": "tool", "id": "item_1", "parent": null, "name": "command_execution", "summary": "shell: ls", "denied": false, "error": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "done"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "gpt-5.3-codex", "input_tokens": 60, "output_tokens": 7,
-                "cache_read_tokens": 40, "cache_write_tokens": 2, "context_tokens": 102}),
+                "cache_read_tokens": 40, "cache_write_tokens": 2, "cost_usd": null, "context_tokens": 102}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 60, "output_tokens": 7, "cache_read_tokens": 40, "cache_write_tokens": 2,
-                    "by_model": {"gpt-5.3-codex": {"input_tokens": 60, "output_tokens": 7, "cache_read_tokens": 40, "cache_write_tokens": 2}}},
+                "usage": {"input_tokens": 60, "output_tokens": 7, "cache_read_tokens": 40, "cache_write_tokens": 2, "cost_usd": null,
+                    "by_model": {"gpt-5.3-codex": {"input_tokens": 60, "output_tokens": 7, "cache_read_tokens": 40, "cache_write_tokens": 2, "cost_usd": null}}},
                 "result": "done"}),
         ]
     );

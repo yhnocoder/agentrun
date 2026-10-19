@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch};
+use super::{Adapter, Failure, Invocation, Launch, Version};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
+use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
 
+pub(crate) const MIN_VERSION: Version = Version(2, 1, 288);
 pub(crate) const SERVICE_HOST: &str = "api.anthropic.com";
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
@@ -21,6 +23,9 @@ const WEB_FETCH_TOOL: &str = "WebFetch";
 const WEB_SEARCH_TOOL: &str = "WebSearch";
 const SOCAT_LISTEN_VARIABLE: &str = "SOCAT_DEFAULT_LISTEN_IP";
 const SOCAT_LISTEN_IPV4: &str = "4";
+const AUTO_MEMORY_VARIABLE: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+const AUTO_MEMORY_DISABLED: &str = "1";
+const AUTO_MEMORY_SUBDIR: &str = "claude-memory";
 const SUBAGENT_TOOL: &str = "Task";
 const SUBAGENT_TOOL_NAMES: [&str; 2] = ["Agent", "Task"];
 const HANDBACK_TOOL: &str = "SubagentHandback";
@@ -45,6 +50,7 @@ struct LastResult {
     is_error: bool,
     text: Option<String>,
     by_model: Option<Vec<(String, TokenCounts)>>,
+    total_cost_usd: Option<f64>,
 }
 
 struct PendingUsage {
@@ -64,11 +70,35 @@ struct PromptLine<'a> {
 #[derive(Serialize)]
 struct PromptMessage<'a> {
     role: &'static str,
-    content: &'a str,
+    content: PromptContent<'a>,
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
+enum PromptContent<'a> {
+    Text(&'a str),
+    Blocks(Vec<PromptBlock<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum PromptBlock<'a> {
+    Image { source: ImageSource },
+    Text { text: &'a str },
+}
+
+#[derive(Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    media_type: &'static str,
+    data: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Settings<'a> {
+    auto_memory_directory: &'a str,
     sandbox: SandboxSettings<'a>,
 }
 
@@ -219,11 +249,12 @@ impl ClaudeCode {
             .filter(|block| block["type"] == "tool_result")
         {
             let id = string(&block["tool_use_id"]);
+            let is_error = block["is_error"] == Value::Bool(true);
             if self.subagents.contains(&id) {
                 if line["tool_use_result"]["status"] == "async_launched" {
                     continue;
                 }
-                let status = if block["is_error"] == Value::Bool(true) {
+                let status = if is_error {
                     SubagentStatus::Failed
                 } else {
                     SubagentStatus::Finished
@@ -232,7 +263,11 @@ impl ClaudeCode {
                 records.push(Record::SubagentEnd { id, status });
             } else {
                 let denied = self.denied.contains(&id);
-                records.push(Record::ToolEnd { id, denied });
+                records.push(Record::ToolEnd {
+                    id,
+                    denied,
+                    error: Some(is_error),
+                });
             }
         }
         records
@@ -291,6 +326,7 @@ impl Adapter for ClaudeCode {
         let sandboxed = invocation.sandbox.runs();
         let cwd = invocation.cwd.to_string_lossy();
         let tempdir = invocation.tempdir.to_string_lossy();
+        let memory_dir = invocation.tempdir.join(AUTO_MEMORY_SUBDIR);
         let mut tools: Vec<&str> = TOOLS.to_vec();
         let mut allowed: Vec<String> = if sandboxed {
             let mut rules: Vec<String> = ALLOWED_WITH_SANDBOX
@@ -352,6 +388,7 @@ impl Adapter for ClaudeCode {
             argv.push(sandbox_settings(
                 &cwd,
                 &tempdir,
+                &memory_dir.to_string_lossy(),
                 invocation.proxy.as_ref().map(proxy_port),
             ));
         }
@@ -364,17 +401,19 @@ impl Adapter for ClaudeCode {
             argv.push(effort.clone());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
-        let env = if sandboxed {
-            vec![(
+        let mut env = vec![(
+            OsString::from(AUTO_MEMORY_VARIABLE),
+            OsString::from(AUTO_MEMORY_DISABLED),
+        )];
+        if sandboxed {
+            env.push((
                 OsString::from(SOCAT_LISTEN_VARIABLE),
                 OsString::from(SOCAT_LISTEN_IPV4),
-            )]
-        } else {
-            Vec::new()
-        };
+            ));
+        }
         Ok(Launch {
             argv,
-            stdin: prompt_line(&invocation.prompt),
+            stdin: prompt_line(&invocation.prompt, &invocation.images),
             env,
             signal_wrapped_child: false,
             service_hosts: Vec::new(),
@@ -402,6 +441,7 @@ impl Adapter for ClaudeCode {
                             .map(|(model, usage)| (model.clone(), model_usage_counts(usage)))
                             .collect()
                     }),
+                    total_cost_usd: line["total_cost_usd"].as_f64(),
                 });
                 Vec::new()
             }
@@ -416,11 +456,15 @@ impl Adapter for ClaudeCode {
                 records.push(Record::Result { text: text.clone() });
             }
             if let Some(by_model) = &result.by_model {
-                records.push(Record::RunUsage(Usage::sum(
+                let mut usage = Usage::sum(
                     by_model
                         .iter()
                         .map(|(model, counts)| (Some(model.as_str()), counts)),
-                )));
+                );
+                if !by_model.is_empty() && result.total_cost_usd.is_some() {
+                    usage.totals.cost_usd = result.total_cost_usd;
+                }
+                records.push(Record::RunUsage(usage));
             }
         }
         records
@@ -453,8 +497,14 @@ fn proxy_port(proxy: &ProxyEndpoint) -> Value {
     }
 }
 
-fn sandbox_settings(cwd: &str, tempdir: &str, proxy_port: Option<Value>) -> String {
+fn sandbox_settings(
+    cwd: &str,
+    tempdir: &str,
+    memory_dir: &str,
+    proxy_port: Option<Value>,
+) -> String {
     serde_json::to_string(&Settings {
+        auto_memory_directory: memory_dir,
         sandbox: SandboxSettings {
             enabled: true,
             fail_if_unavailable: true,
@@ -473,12 +523,28 @@ fn sandbox_settings(cwd: &str, tempdir: &str, proxy_port: Option<Value>) -> Stri
     .expect("settings serialize")
 }
 
-fn prompt_line(prompt: &str) -> Vec<u8> {
+fn prompt_line(prompt: &str, images: &[Image]) -> Vec<u8> {
+    let content = if images.is_empty() {
+        PromptContent::Text(prompt)
+    } else {
+        let mut blocks: Vec<PromptBlock> = images
+            .iter()
+            .map(|image| PromptBlock::Image {
+                source: ImageSource {
+                    kind: "base64",
+                    media_type: image.kind.media_type(),
+                    data: base64(&image.bytes),
+                },
+            })
+            .collect();
+        blocks.push(PromptBlock::Text { text: prompt });
+        PromptContent::Blocks(blocks)
+    };
     let mut line = serde_json::to_vec(&PromptLine {
         kind: "user",
         message: PromptMessage {
             role: "user",
-            content: prompt,
+            content,
         },
     })
     .expect("prompt serializes");
@@ -548,6 +614,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["output_tokens"].as_u64(),
         cache_read_tokens: usage["cache_read_input_tokens"].as_u64(),
         cache_write_tokens: usage["cache_creation_input_tokens"].as_u64(),
+        cost_usd: None,
     }
 }
 
@@ -557,6 +624,7 @@ fn model_usage_counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["outputTokens"].as_u64(),
         cache_read_tokens: usage["cacheReadInputTokens"].as_u64(),
         cache_write_tokens: usage["cacheCreationInputTokens"].as_u64(),
+        cost_usd: usage["costUSD"].as_f64(),
     }
 }
 
@@ -566,6 +634,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
+    use crate::image::ImageKind;
     use crate::network;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::Session;
@@ -636,7 +705,7 @@ mod tests {
             "--allowedTools".to_string(),
             "Read,Glob,Grep,Edit(//work/repo/**),Write(//work/repo/**),Edit(//tmp/agentrun-abc/**),Write(//tmp/agentrun-abc/**),Task".to_string(),
             "--settings".to_string(),
-            r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{"allowWrite":["/work/repo","/tmp/agentrun-abc"]},"network":{"allowedDomains":[]}}}"#.to_string(),
+            r#"{"autoMemoryDirectory":"/tmp/agentrun-abc/claude-memory","sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{"allowWrite":["/work/repo","/tmp/agentrun-abc"]},"network":{"allowedDomains":[]}}}"#.to_string(),
         ]);
         assert_eq!(argv_without_session_id(&launch), expected);
     }
@@ -679,6 +748,7 @@ mod tests {
     }
 
     const SOCAT_IPV4: (&str, &str) = ("SOCAT_DEFAULT_LISTEN_IP", "4");
+    const NO_AUTO_MEMORY: (&str, &str) = ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
 
     fn has_env(launch: &Launch, pair: (&str, &str)) -> bool {
         launch
@@ -718,7 +788,13 @@ mod tests {
             "Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch"
         );
         assert!(!has_env(&open, SOCAT_IPV4));
-        assert!(open.env.is_empty());
+        assert_eq!(
+            open.env,
+            vec![(
+                OsString::from("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+                OsString::from("1")
+            )]
+        );
     }
 
     #[test]
@@ -761,10 +837,28 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            vec![(
-                OsString::from("SOCAT_DEFAULT_LISTEN_IP"),
-                OsString::from("4")
-            )]
+            vec![
+                (
+                    OsString::from("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+                    OsString::from("1")
+                ),
+                (
+                    OsString::from("SOCAT_DEFAULT_LISTEN_IP"),
+                    OsString::from("4")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_memory_is_off_and_its_directory_is_in_the_session_tempdir() {
+        assert!(has_env(&launch(true, &[]), NO_AUTO_MEMORY));
+        assert!(has_env(&launch(false, &[]), NO_AUTO_MEMORY));
+        let argv = argv_without_session_id(&launch(true, &[]));
+        let settings: Value = serde_json::from_str(argv.last().unwrap()).unwrap();
+        assert_eq!(
+            settings["autoMemoryDirectory"],
+            "/tmp/agentrun-abc/claude-memory"
         );
     }
 
@@ -863,6 +957,37 @@ mod tests {
     }
 
     #[test]
+    fn stdin_puts_the_images_as_base64_blocks_before_the_prompt_text() {
+        let mut invocation = invocation(true, &[]);
+        invocation.images = vec![
+            Image {
+                given: "a.png".to_string(),
+                kind: ImageKind::Png,
+                bytes: b"png".to_vec(),
+            },
+            Image {
+                given: "b.gif".to_string(),
+                kind: ImageKind::Gif,
+                bytes: b"gif!".to_vec(),
+            },
+        ];
+        let launch = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        let text = String::from_utf8(launch.stdin).unwrap();
+        assert_eq!(text.matches('\n').count(), 1);
+        let parsed: Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(
+            parsed,
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "cG5n"}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/gif", "data": "Z2lmIQ=="}},
+                {"type": "text", "text": "hi"}
+            ]}})
+        );
+    }
+
+    #[test]
     fn summary_per_tool_and_path_rules() {
         let cwd = Path::new("/a/b");
         let cases = [
@@ -925,6 +1050,7 @@ mod tests {
                 output_tokens: Some(output),
                 cache_read_tokens: Some(2),
                 cache_write_tokens: Some(3),
+                cost_usd: None,
             },
         }
     }
@@ -1138,14 +1264,25 @@ mod tests {
             adapter.translate(&result("t1")),
             vec![Record::ToolEnd {
                 id: "t1".to_string(),
-                denied: true
+                denied: true,
+                error: Some(true),
             }]
         );
         assert_eq!(
             adapter.translate(&result("t2")),
             vec![Record::ToolEnd {
                 id: "t2".to_string(),
-                denied: false
+                denied: false,
+                error: Some(true),
+            }]
+        );
+        let succeeded = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3"}]}});
+        assert_eq!(
+            adapter.translate(&succeeded),
+            vec![Record::ToolEnd {
+                id: "t3".to_string(),
+                denied: false,
+                error: Some(false),
             }]
         );
         let handback = assistant(
@@ -1166,9 +1303,9 @@ mod tests {
         let mut adapter = ClaudeCode::new();
         let first =
             json!({"type": "result", "is_error": false, "result": "early", "modelUsage": {}});
-        let last = json!({"type": "result", "is_error": false, "result": "final", "modelUsage": {
-            "claude-sonnet-5-5": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4},
-            "claude-haiku-4-5": {"inputTokens": 10, "outputTokens": 20}
+        let last = json!({"type": "result", "is_error": false, "result": "final", "total_cost_usd": 0.75, "modelUsage": {
+            "claude-sonnet-5-5": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4, "costUSD": 0.5},
+            "claude-haiku-4-5": {"inputTokens": 10, "outputTokens": 20, "costUSD": 0.25}
         }});
         assert_eq!(adapter.translate(&first), vec![]);
         assert_eq!(adapter.translate(&last), vec![]);
@@ -1187,7 +1324,44 @@ mod tests {
         assert_eq!(usage.totals.cache_read_tokens, Some(3));
         assert_eq!(usage.totals.cache_write_tokens, Some(4));
         assert_eq!(usage.by_model["claude-haiku-4-5"].cache_read_tokens, None);
+        assert_eq!(usage.totals.cost_usd, Some(0.75));
+        assert_eq!(usage.by_model["claude-sonnet-5-5"].cost_usd, Some(0.5));
+        assert_eq!(usage.by_model["claude-haiku-4-5"].cost_usd, Some(0.25));
         assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn run_cost_is_the_reported_total_unless_no_model_was_called() {
+        let cost = |result: Value| {
+            let mut adapter = ClaudeCode::new();
+            adapter.translate(&result);
+            match adapter.after_exit().pop() {
+                Some(Record::RunUsage(usage)) => usage.totals.cost_usd,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            cost(
+                json!({"type": "result", "total_cost_usd": 0.3, "modelUsage": {
+                    "m": {"inputTokens": 1, "costUSD": 0.25}
+                }})
+            ),
+            Some(0.3)
+        );
+        assert_eq!(
+            cost(
+                json!({"type": "result", "modelUsage": {"m": {"inputTokens": 1, "costUSD": 0.25}}})
+            ),
+            Some(0.25)
+        );
+        assert_eq!(
+            cost(json!({"type": "result", "modelUsage": {"m": {"inputTokens": 1}}})),
+            None
+        );
+        assert_eq!(
+            cost(json!({"type": "result", "total_cost_usd": 0, "modelUsage": {}})),
+            None
+        );
     }
 
     #[test]
