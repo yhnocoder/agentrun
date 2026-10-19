@@ -93,13 +93,6 @@ impl Failure {
     }
 }
 
-pub fn reject_max_turns(args: &RunArgs) -> Result<(), String> {
-    match args.max_turns {
-        Some(_) => Err("--max-turns is only supported by claude-code".to_string()),
-        None => Ok(()),
-    }
-}
-
 pub fn detail_head(text: &str) -> String {
     text.chars().take(DETAIL_MAX_CHARS).collect()
 }

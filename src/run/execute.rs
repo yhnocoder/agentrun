@@ -33,6 +33,29 @@ pub struct Exit {
     pub code: Option<i32>,
     pub signal: Option<Signal>,
     pub timed_out: bool,
+    pub limit: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct Limits {
+    max_turns: Option<u64>,
+    max_tokens: Option<u64>,
+}
+
+impl Limits {
+    fn exceeded(&self, aggregator: &Aggregator) -> Option<String> {
+        let calls = aggregator.main_calls();
+        if let Some(max) = self.max_turns.filter(|max| calls > *max) {
+            return Some(format!(
+                "--max-turns {max} reached: the main agent started turn {calls}"
+            ));
+        }
+        let tokens = aggregator.tokens();
+        if let Some(max) = self.max_tokens.filter(|max| tokens > *max) {
+            return Some(format!("--max-tokens {max} exceeded: {tokens} tokens"));
+        }
+        None
+    }
 }
 
 pub(super) fn execute(
@@ -94,6 +117,10 @@ pub(super) fn execute(
     drop(hold);
 
     let refresh = output.is_rich();
+    let limits = Limits {
+        max_turns: invocation.args.max_turns,
+        max_tokens: invocation.args.max_tokens,
+    };
     let mut relay = Relay::new(
         caller,
         output,
@@ -101,6 +128,7 @@ pub(super) fn execute(
         raw.map(|(_, file)| file),
         debug,
         rich_stderr,
+        limits,
     );
     relay.begin(start_event(&invocation, &launch), &invocation.prompt);
     let wrapped = launch.wrapped;
@@ -116,6 +144,7 @@ pub(super) fn execute(
         code: exit_code,
         signal: caller.signals.first_signal(),
         timed_out: caller.signals.timed_out(),
+        limit: relay.limit.take(),
     };
     let status = relay.finish(&exit, wrapped, &stderr_tail, started);
     if let Some(tempdir) = guards.tempdir.take() {
@@ -276,6 +305,8 @@ struct Relay<'a> {
     raw: Option<File>,
     debug: bool,
     rich_stderr: bool,
+    limits: Limits,
+    limit: Option<String>,
 }
 
 impl<'a> Relay<'a> {
@@ -286,6 +317,7 @@ impl<'a> Relay<'a> {
         raw: Option<File>,
         debug: bool,
         rich_stderr: bool,
+        limits: Limits,
     ) -> Relay<'a> {
         Relay {
             caller,
@@ -295,6 +327,8 @@ impl<'a> Relay<'a> {
             raw,
             debug,
             rich_stderr,
+            limits,
+            limit: None,
         }
     }
 
@@ -330,6 +364,11 @@ impl<'a> Relay<'a> {
         }
         if translated.terminate {
             self.caller.signals.kill_group();
+        } else if self.limit.is_none()
+            && let Some(detail) = self.limits.exceeded(&self.aggregator)
+            && self.caller.signals.stop_for_limit()
+        {
+            self.limit = Some(detail);
         }
     }
 
@@ -520,10 +559,11 @@ pub fn conclude(
     let mut events = aggregator.push(adapter.after_exit()).events;
     let (rest, summary) = aggregator.finish();
     events.extend(rest);
-    let (status, detail) = match (exit.signal, exit.timed_out) {
-        (Some(signal), _) => (EndStatus::Interrupted(signal), String::new()),
-        (None, true) => (EndStatus::Timeout, String::new()),
-        (None, false) => match adapter.failure(exit.code) {
+    let (status, detail) = match (exit.signal, exit.timed_out, &exit.limit) {
+        (Some(signal), _, _) => (EndStatus::Interrupted(signal), String::new()),
+        (None, true, _) => (EndStatus::Timeout, String::new()),
+        (None, false, Some(limit)) => (EndStatus::Limit, limit.clone()),
+        (None, false, None) => match adapter.failure(exit.code) {
             None => (EndStatus::Finished, String::new()),
             Some(Failure::Message(detail)) => (EndStatus::Failed, detail),
             Some(Failure::Unexplained) => (
@@ -558,7 +598,7 @@ mod tests {
 
     use super::*;
     use crate::cli::RunArgs;
-    use crate::output::Record;
+    use crate::output::{Record, Signal};
 
     struct Reported(Option<Failure>);
 
@@ -597,6 +637,7 @@ mod tests {
             code: Some(code),
             signal: None,
             timed_out: false,
+            limit: None,
         };
         let (events, _) = conclude(
             Aggregator::new(false),
@@ -659,6 +700,99 @@ mod tests {
             "pi uses openai/gpt"
         );
         assert_eq!(detail(None, SandboxKind::Bubblewrap, 0, ""), "");
+    }
+
+    fn status(exit: Exit, failure: Option<Failure>) -> (EndStatus, String) {
+        let (events, status) = conclude(
+            Aggregator::new(false),
+            &mut Reported(failure),
+            SandboxKind::None,
+            &exit,
+            "",
+            Instant::now(),
+        );
+        match &events.last().unwrap().body {
+            Body::End(end) => (status, end.detail.clone()),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn limit_comes_after_signals_and_timeout_and_before_failure() {
+        let exit = |signal, timed_out, limit: Option<&str>| Exit {
+            code: None,
+            signal,
+            timed_out,
+            limit: limit.map(str::to_string),
+        };
+        let failed = || Some(Failure::Message("failed".to_string()));
+        assert_eq!(
+            status(exit(Some(Signal::Interrupt), false, Some("over")), failed()),
+            (EndStatus::Interrupted(Signal::Interrupt), String::new())
+        );
+        assert_eq!(
+            status(exit(None, true, Some("over")), failed()),
+            (EndStatus::Timeout, String::new())
+        );
+        assert_eq!(
+            status(exit(None, false, Some("over")), failed()),
+            (EndStatus::Limit, "over".to_string())
+        );
+        assert_eq!(
+            status(exit(None, false, None), failed()),
+            (EndStatus::Failed, "failed".to_string())
+        );
+    }
+
+    fn aggregated(records: Vec<Record>) -> Aggregator {
+        let mut aggregator = Aggregator::new(false);
+        aggregator.push(records);
+        aggregator
+    }
+
+    #[test]
+    fn limits_name_the_option_the_limit_and_the_count() {
+        let call = |parent: Option<&str>| Record::CallStart {
+            parent: parent.map(str::to_string),
+        };
+        let usage = |output| Record::Usage {
+            parent: Some("s1".to_string()),
+            model: None,
+            counts: crate::output::TokenCounts {
+                input_tokens: Some(4),
+                output_tokens: Some(output),
+                cache_read_tokens: None,
+                cache_write_tokens: Some(1),
+            },
+        };
+        let subagent = Record::SubagentStart {
+            id: "s1".to_string(),
+            parent: None,
+            kind: "Explore".to_string(),
+            model: None,
+            description: String::new(),
+        };
+        let limits = |max_turns, max_tokens| Limits {
+            max_turns,
+            max_tokens,
+        };
+        let two_calls = aggregated(vec![
+            subagent.clone(),
+            call(None),
+            call(Some("s1")),
+            call(Some("unknown")),
+        ]);
+        assert_eq!(limits(Some(2), None).exceeded(&two_calls), None);
+        assert_eq!(
+            limits(Some(1), Some(1)).exceeded(&two_calls),
+            Some("--max-turns 1 reached: the main agent started turn 2".to_string())
+        );
+        let tokens = aggregated(vec![subagent, usage(5), usage(0)]);
+        assert_eq!(limits(None, Some(15)).exceeded(&tokens), None);
+        assert_eq!(
+            limits(Some(1), Some(14)).exceeded(&tokens),
+            Some("--max-tokens 14 exceeded: 15 tokens".to_string())
+        );
     }
 
     #[test]

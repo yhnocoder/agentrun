@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, detail_head, reject_max_turns};
+use super::{Adapter, Failure, Invocation, Launch, detail_head};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
@@ -89,23 +89,31 @@ impl Pi {
     }
 
     fn message_start(&mut self, message: &Value) -> Vec<Record> {
-        if message["role"] != "assistant" || self.model_checked {
+        if message["role"] != "assistant" {
             return Vec::new();
         }
-        self.model_checked = true;
-        let Some(expected) = &self.expected else {
-            return Vec::new();
-        };
+        let mut records = vec![Record::CallStart { parent: None }];
+        if !self.model_checked {
+            self.model_checked = true;
+            self.mismatch = self.model_mismatch(message);
+            if self.mismatch.is_some() {
+                records.push(Record::Terminate);
+            }
+        }
+        records
+    }
+
+    fn model_mismatch(&self, message: &Value) -> Option<String> {
+        let expected = self.expected.as_ref()?;
         if assistant_model(message).as_ref() == Some(expected) {
-            return Vec::new();
+            return None;
         }
-        let provider = string(&message["provider"]);
-        let model = string(&message["model"]);
-        self.mismatch = Some(format!(
-            "pi uses {provider}/{model}, which does not match --model {}",
+        Some(format!(
+            "pi uses {}/{}, which does not match --model {}",
+            string(&message["provider"]),
+            string(&message["model"]),
             self.model_option.as_deref().unwrap_or_default()
-        ));
-        vec![Record::Terminate]
+        ))
     }
 
     fn message_end(&mut self, message: &Value) -> Vec<Record> {
@@ -147,7 +155,6 @@ impl Adapter for Pi {
     }
 
     fn check_args(&self, args: &RunArgs) -> Result<(), String> {
-        reject_max_turns(args)?;
         if let Some(model) = &args.model {
             parse_model(model)?;
         }
@@ -1206,13 +1213,11 @@ mod tests {
     }
 
     #[test]
-    fn check_args_rejects_max_turns_before_the_model_format() {
+    fn check_args_checks_the_model_format_and_accepts_the_limits() {
         let setup = Setup::new();
         let check =
             |extra: &[&str]| Pi::new().check_args(&setup.invocation(&[], false, extra).args);
-        let max_turns = Err("--max-turns is only supported by claude-code".to_string());
-        assert_eq!(check(&["--max-turns", "3"]), max_turns);
-        assert_eq!(check(&["--max-turns", "3", "--model", "bad"]), max_turns);
+        assert_eq!(check(&["--max-turns", "3", "--max-tokens", "100"]), Ok(()));
         assert_eq!(
             check(&["--model", "bad"]),
             Err("--model for pi must be provider/model, got 'bad'".to_string())
@@ -1275,7 +1280,11 @@ mod tests {
             let mut adapter = adapter_with_model(&setup, Some(option));
             let records = adapter.translate(&start(provider, model));
             if matches {
-                assert_eq!(records, vec![], "{option} {provider}/{model}");
+                assert_eq!(
+                    records,
+                    vec![Record::CallStart { parent: None }],
+                    "{option} {provider}/{model}"
+                );
                 assert_eq!(
                     adapter.failure(Some(0)),
                     Some(Failure::Message(NO_REPLY_DETAIL.to_string()))
@@ -1283,7 +1292,7 @@ mod tests {
             } else {
                 assert_eq!(
                     records,
-                    vec![Record::Terminate],
+                    vec![Record::CallStart { parent: None }, Record::Terminate],
                     "{option} {provider}/{model}"
                 );
                 assert_eq!(
@@ -1293,17 +1302,23 @@ mod tests {
                     )))
                 );
             }
-            assert_eq!(adapter.translate(&start("other", "model")), vec![]);
+            assert_eq!(
+                adapter.translate(&start("other", "model")),
+                vec![Record::CallStart { parent: None }]
+            );
         }
         let mut unchecked = adapter_with_model(&setup, None);
-        assert_eq!(unchecked.translate(&start("other", "model")), vec![]);
+        assert_eq!(
+            unchecked.translate(&start("other", "model")),
+            vec![Record::CallStart { parent: None }]
+        );
         assert_eq!(unchecked.failure(None), Some(Failure::Unexplained));
         let mut system_first = adapter_with_model(&setup, Some("deepseek/deepseek-flash"));
         let system = json!({"type": "message_start", "message": {"role": "system", "content": ""}});
         assert_eq!(system_first.translate(&system), vec![]);
         assert_eq!(
             system_first.translate(&start("openai", "gpt")),
-            vec![Record::Terminate]
+            vec![Record::CallStart { parent: None }, Record::Terminate]
         );
     }
 
@@ -1464,7 +1479,11 @@ mod tests {
         assert_eq!(checked.failure(Some(1)), Some(Failure::Unexplained));
         assert_eq!(
             checked.translate(&start("openai", "gpt")),
-            vec![Record::Terminate]
+            vec![Record::CallStart { parent: None }, Record::Terminate]
+        );
+        assert_eq!(
+            checked.translate(&start("openai", "gpt")),
+            vec![Record::CallStart { parent: None }]
         );
         assert_eq!(
             checked.failure(Some(1)),

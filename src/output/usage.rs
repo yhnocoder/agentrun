@@ -15,6 +15,18 @@ impl TokenCounts {
         Some(self.input_tokens? + self.cache_read_tokens? + self.cache_write_tokens?)
     }
 
+    pub fn total(&self) -> u64 {
+        [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        ]
+        .into_iter()
+        .flatten()
+        .sum()
+    }
+
     pub fn summary(&self, with_output: bool) -> Vec<String> {
         let input = [
             self.input_tokens,
@@ -117,6 +129,13 @@ mod tests {
             counts(Some(1), None, Some(2), Some(0)).context_tokens(),
             Some(3)
         );
+    }
+
+    #[test]
+    fn total_adds_the_reported_fields() {
+        assert_eq!(counts(Some(1), Some(9), Some(2), Some(3)).total(), 15);
+        assert_eq!(counts(Some(1), None, None, Some(3)).total(), 4);
+        assert_eq!(TokenCounts::default().total(), 0);
     }
 
     #[test]

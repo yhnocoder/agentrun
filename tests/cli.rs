@@ -140,16 +140,20 @@ fn missing_cwd_is_rejected() {
 }
 
 #[test]
-fn max_turns_is_only_for_claude_code() {
+fn limits_are_accepted_by_every_runtime_and_must_be_positive() {
     let env = Env::new();
-    assert_eq!(
-        assert_rejected(&run(&env, &["pi", "--max-turns", "3", "--prompt", "hi"])),
-        "--max-turns is only supported by claude-code"
-    );
-    assert_rejected(&run(
-        &env,
-        &["claude-code", "--max-turns", "0", "--prompt", "hi"],
-    ));
+    for runtime in ["claude-code", "codex", "pi"] {
+        let limits = ["--max-turns", "3", "--max-tokens", "1000"];
+        let detail = assert_rejected(&run(
+            &env,
+            &[&[runtime, "--prompt", "hi"][..], &limits].concat(),
+        ));
+        assert!(detail.ends_with("not found in PATH"), "{runtime}: {detail}");
+        for option in ["--max-turns", "--max-tokens"] {
+            let detail = assert_rejected(&run(&env, &[runtime, option, "0", "--prompt", "hi"]));
+            assert!(detail.contains(option), "{runtime}: {detail}");
+        }
+    }
 }
 
 #[test]
@@ -901,7 +905,7 @@ fn help_and_version_print_to_stdout() {
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .contains("--max-turns")
+            .contains("--max-tokens")
     );
 }
 

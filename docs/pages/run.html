@@ -33,8 +33,8 @@
     <tr><td><code>src/main.rs</code></td><td>入口：安装信号处理，把进程的参数、环境与标准流装进 <code>Caller</code>，调用 <code>run::run</code>，把返回的退出码交给进程</td><td>命令行界面、退出码</td></tr>
     <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
-    <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>一次运行的顺序、退出码</td></tr>
-    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_max_turns</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>一次运行的顺序、轮数与 token 上限、退出码</td></tr>
+    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
     <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>、<code>SERVICE_HOST</code></td><td>claude-code</td></tr>
     <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>Model</code>、<code>parse_model</code>、<code>model_service</code>、<code>session_state</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
     <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
@@ -42,7 +42,7 @@
     <tr><td><code>src/json.rs</code></td><td><code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
   </tbody>
 </table>
-<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只有部分运行时支持的参数，例如 <code>--max-turns</code> 与 pi 的 <code>--model</code> 格式。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对三个运行时相同；运行时之间的差别写在适配器里，以及 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>network::proxy_needed</code>、<code>credential::write_session_credential</code> 这几个与 doctor 共用、按 <code>Runtime</code> 分支的函数里，运行框架只把 <code>Runtime</code> 传给它们。</p>
+<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只对某个运行时有要求的参数，例如 pi 的 <code>--model</code> 格式。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对三个运行时相同；运行时之间的差别写在适配器里，以及 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>network::proxy_needed</code>、<code>credential::write_session_credential</code> 这几个与 doctor 共用、按 <code>Runtime</code> 分支的函数里，运行框架只把 <code>Runtime</code> 传给它们。</p>
 
 <h2>命令行界面</h2>
 <p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>
@@ -60,7 +60,8 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td>标准输入</td><td>前两项都没给时从标准输入读提示词。标准输入是终端时不等待，直接报用法错误；提示词为空也是用法错误</td><td></td></tr>
     <tr><td><code>--model ID</code></td><td>模型，原样传给运行时。pi 必须写成 <code>服务商/模型</code>，并检查 pi 实际使用的模型是否一致，见<a href="#pi">pi 一节</a></td><td>不传，用运行时自己的默认配置</td></tr>
     <tr><td><code>--effort LEVEL</code></td><td>推理强度，传给运行时对应的参数：claude-code 的 <code>--effort</code>、codex 的 <code>model_reasoning_effort</code>、pi 的 <code>--thinking</code>。不检查取值</td><td>不传</td></tr>
-    <tr><td><code>--max-turns N</code></td><td>最多轮数，N 为正整数。只有 claude-code 支持，其他运行时给出时是用法错误</td><td>不限</td></tr>
+    <tr><td><code>--max-turns N</code></td><td>主 agent 最多调用模型 N 次，N 为正整数。主 agent 开始第 N+1 次调用时终止整个进程组，结果是 <code>limit</code>，见<a href="#limits">轮数与 token 上限</a></td><td>不限</td></tr>
+    <tr><td><code>--max-tokens N</code></td><td>全部模型调用（含 subagent）的 token 数之和超过 N 时终止整个进程组，结果是 <code>limit</code>，N 为正整数，见<a href="#limits">轮数与 token 上限</a></td><td>不限</td></tr>
     <tr><td><code>--timeout SECONDS</code></td><td>从运行时启动开始计时，到时终止整个进程组，SECONDS 为正整数，见<a href="session.html#signals">进程、信号与超时</a></td><td>不限</td></tr>
     <tr><td><code>--sandbox on|relax|off</code></td><td>沙箱做不到时怎么办，见<a href="isolation.html#sandbox">沙箱模式</a>。高于环境变量 <code>AGENTRUN_SANDBOX</code></td><td><code>on</code></td></tr>
     <tr><td><code>--network none|full|custom</code></td><td>命令与网页工具能访问哪些主机，见<a href="isolation.html#network">网络</a></td><td><code>none</code></td></tr>
@@ -113,6 +114,16 @@ agentrun variables: (none)</div>
 <p>过滤代理启动失败先于 codex 登录文件与私有目录的检查：两者同时成立时，<code>detail</code> 是过滤代理那一条。</p>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 <p><code>run::run</code> 解析命令行后，把运行时子命令交给运行框架，把 <code>doctor</code> 与 <code>doctor-connect</code> 分别交给 <code>doctor::run</code> 与 <code>doctor::connect</code>。运行时子命令被拒绝时的 <code>end</code> 只由 <code>run::run</code> 输出。</p>
+
+<h3 id="limits">轮数与 token 上限</h3>
+<p><code>--max-turns</code> 与 <code>--max-tokens</code> 由 agentrun 自己计数，不传给运行时，三个运行时接受同样的选项。理由：运行时自带的上限只有 claude-code 有，由 agentrun 计数时同一条命令可以换运行时。</p>
+<ul>
+  <li>一轮是主 agent 的一次模型调用。适配器在一次调用开始时输出 <code>Record::CallStart</code>：claude-code 是某个 <code>parent_tool_use_id</code> 下出现新的 <code>message.id</code>，pi 是 assistant 的 <code>message_start</code>。<code>Aggregator</code> 只数 parent 为 null 的调用，parent 指向没见过的 subagent 时按主 agent 计，与其他事件的 parent 规则相同。主 agent 开始第 N+1 次调用时终止。理由：与 claude-code 自带的 <code>--max-turns</code> 计数相同；不按 <code>usage</code> 事件计数，因为 claude-code 的 <code>usage</code> 要等下一次调用开始才输出，按它计数时 claude-code 比 pi 多一轮。</li>
+  <li>token 数是全部 <code>usage</code> 事件（含 subagent）的 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和，null 按 0 计。运行框架每处理完一行原始输出检查一次，和超过 N 时终止。claude-code 的一次调用在下一次调用开始时才计入，最后一次调用的用量在运行时退出后才输出，不再检查；<code>end.usage</code> 里没有对应 <code>usage</code> 事件的那笔 haiku 调用（见<a href="events.html">事件与输出</a>的用量一节）不计入。</li>
+  <li>终止的方式与 <code>--timeout</code> 相同：向进程组发 SIGTERM，5 秒后 SIGKILL，见<a href="session.html#signals">进程、信号与超时</a>。<code>end.status</code> 为 <code>limit</code>，退出码 4，<code>detail</code> 写出是哪个上限、上限值与实际值，例如 <code>--max-turns 3 reached: the main agent started turn 4</code>、<code>--max-tokens 50000 exceeded: 51234 tokens</code>。两个上限在同一行原始输出上同时超过时，<code>detail</code> 写 <code>--max-turns</code>。</li>
+  <li>超时、上限与信号中先触发的一个决定怎样终止，之后的上限不再生效；上限触发后的宽限期内收到信号，结果是 <code>interrupted</code>。适配器要求终止运行时（例如 pi 的模型不一致）的那一行不检查上限。</li>
+  <li>codex 只在运行结束时输出一次用量（<code>turn.completed</code>），也没有调用开始的事件（codex 0.159.2 实测）。所以 <code>--max-turns</code> 对 codex 不起作用；<code>--max-tokens</code> 在 codex 输出用量时检查，超过时结果是 <code>limit</code>，但 codex 这时已经做完了任务，上限不能在运行中停止 codex。</li>
+</ul>
 
 <h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
@@ -167,6 +178,7 @@ agentrun variables: (none)</div>
     <tr><td>1</td><td><code>failed</code></td><td>有 <code>fail</code> 的检查项</td></tr>
     <tr><td>2</td><td><code>rejected</code>：启动前失败</td><td>用法错误、<code>--env-file</code> 读取失败或凭据写入失败</td></tr>
     <tr><td>3</td><td><code>timeout</code></td><td>不出现</td></tr>
+    <tr><td>4</td><td><code>limit</code>：超过 <code>--max-turns</code> 或 <code>--max-tokens</code></td><td>不出现</td></tr>
     <tr><td>130</td><td><code>interrupted</code>（SIGINT）</td><td>被中断</td></tr>
     <tr><td>143</td><td><code>interrupted</code>（SIGTERM）</td><td>被终止</td></tr>
   </tbody>
@@ -193,7 +205,7 @@ agentrun variables: (none)</div>
   --tools Read,Edit,Write,Glob,Grep,Bash,Task
   --allowedTools &lt;放行列表&gt;
   [--settings &lt;沙箱设置&gt;]
-  [--model ID] [--effort LEVEL] [--max-turns N]
+  [--model ID] [--effort LEVEL]
   &lt;-- 之后的调用方参数&gt;</code></pre>
 <ul>
   <li><code>--setting-sources ""</code> 不加载用户、项目与本地设置，工作目录里的 <code>CLAUDE.md</code> 不进入模型上下文（实测）。因此沙箱设置只来自 <code>--settings</code>。</li>
@@ -230,7 +242,7 @@ agentrun variables: (none)</div>
   </thead>
   <tbody>
     <tr><td><code>system</code>，subtype <code>init</code></td><td><code>permissionMode</code>、<code>model</code>、<code>tools</code></td><td>不输出；用于检查 <code>--no-subagents</code></td></tr>
-    <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略</td></tr>
+    <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略；同一个 <code>parent_tool_use_id</code> 下出现新的 <code>message.id</code> 时记为一次模型调用开始，见<a href="#limits">轮数与 token 上限</a></td></tr>
     <tr><td><code>system</code>，subtype <code>permission_denied</code></td><td><code>tool_use_id</code>、<code>tool_name</code>、<code>decision_reason</code></td><td>把对应的调用标为被拒绝；它出现在对应的 tool_result 之前</td></tr>
     <tr><td><code>user</code>，<code>isReplay</code> 为 true</td><td><code>message.content</code></td><td><code>prompt</code>，只取第一条。它在 <code>system/init</code> 之后、第一个 assistant 之前出现，<code>parent_tool_use_id</code> 为 null。之后出现的 <code>isReplay</code> 消息是后台 subagent 交回的结果（内容以 <code>&lt;agent-message</code> 开头），只写入 <code>--raw</code></td></tr>
     <tr><td><code>user</code>，其他</td><td><code>tool_result</code> 块的 <code>tool_use_id</code>、<code>is_error</code></td><td>对应的调用结束，输出 <code>tool</code></td></tr>
@@ -279,7 +291,7 @@ agentrun variables: (none)</div>
 <ul>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
   <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
-  <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
+  <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--no-subagents</code> 不起作用，也不报错。</li>
   <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>。Linux：
 <pre><code class="language-bash">bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt;
   --bind &lt;pi 状态目录&gt; &lt;pi 状态目录&gt;
@@ -308,7 +320,7 @@ agentrun variables: (none)</div>
     <tr><td><code>tool_execution_end</code></td><td><code>tool</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，<code>denied</code> 为 false（<code>isError</code> 表示执行出错，不是拒绝）。<code>args</code> 不在这个事件里，从对应的 <code>tool_execution_start</code> 取。同一条消息里的多个调用并行执行，结束顺序可能与开始顺序不同</td></tr>
     <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测）；<code>reasoning</code> 与 <code>cost</code> 不进统一事件</td></tr>
     <tr><td>user 的 <code>message_end</code></td><td><code>prompt</code>：全部 text 元素按顺序用换行连接</td></tr>
-    <tr><td>第一个 assistant 的 <code>message_start</code></td><td>不输出；用于模型检查</td></tr>
+    <tr><td>assistant 的 <code>message_start</code></td><td>不输出；记为一次模型调用开始，见<a href="#limits">轮数与 token 上限</a>；第一个用于模型检查</td></tr>
   </tbody>
 </table>
 <p>summary：<code>bash</code> 写 <code>command</code> 的第一行；<code>read</code>、<code>write</code>、<code>edit</code>、<code>ls</code> 写 <code>path</code>（<code>ls</code> 没有 path 时写 <code>.</code>）；<code>grep</code>、<code>find</code> 写 <code>pattern</code>；其他只写工具名。<code>end.result</code> 是最后一个 <code>text</code>。</p>
@@ -373,7 +385,7 @@ agentrun variables: (none)</div>
   <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除。</li>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
-  <li><code>--max-turns</code> 是用法错误。</li>
+  <li><code>--max-turns</code> 不起作用，<code>--max-tokens</code> 只在运行结束时检查，见<a href="#limits">轮数与 token 上限</a>。</li>
 </ul>
 <h3>输出映射</h3>
 <table>

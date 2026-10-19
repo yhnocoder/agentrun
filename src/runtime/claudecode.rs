@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -37,6 +37,7 @@ pub struct ClaudeCode {
     subagents: HashSet<String>,
     denied: HashSet<String>,
     pending_usages: Vec<PendingUsage>,
+    call_ids: HashMap<Option<String>, String>,
     last_result: Option<LastResult>,
 }
 
@@ -142,16 +143,20 @@ impl ClaudeCode {
             }
             Some(pending) => {
                 records.push(usage_record(pending));
-                pending.message_id = message_id;
+                pending.message_id = message_id.clone();
                 pending.model = model;
                 pending.counts = counts;
             }
             None => self.pending_usages.push(PendingUsage {
-                parent,
-                message_id,
+                parent: parent.clone(),
+                message_id: message_id.clone(),
                 model,
                 counts,
             }),
+        }
+        if self.call_ids.get(&parent) != Some(&message_id) {
+            self.call_ids.insert(parent.clone(), message_id);
+            records.push(Record::CallStart { parent });
         }
         records
     }
@@ -354,10 +359,6 @@ impl Adapter for ClaudeCode {
         if let Some(effort) = &invocation.args.effort {
             argv.push("--effort".to_string());
             argv.push(effort.clone());
-        }
-        if let Some(max_turns) = invocation.args.max_turns {
-            argv.push("--max-turns".to_string());
-            argv.push(max_turns.to_string());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
         let env = if sandboxed {
@@ -791,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn model_effort_max_turns_and_caller_arguments_come_last() {
+    fn model_effort_and_caller_arguments_come_last_without_the_limits() {
         let launch = launch(
             false,
             &[
@@ -801,6 +802,8 @@ mod tests {
                 "high",
                 "--max-turns",
                 "7",
+                "--max-tokens",
+                "100",
                 "--",
                 "--include-partial-messages",
                 "--x",
@@ -814,8 +817,6 @@ mod tests {
                 "sonnet",
                 "--effort",
                 "high",
-                "--max-turns",
-                "7",
                 "--include-partial-messages",
                 "--x",
             ]
@@ -925,6 +926,12 @@ mod tests {
         }
     }
 
+    fn call(parent: Option<&str>) -> Record {
+        Record::CallStart {
+            parent: parent.map(str::to_string),
+        }
+    }
+
     #[test]
     fn same_message_id_outputs_one_usage_with_the_last_values() {
         let mut adapter = ClaudeCode::new();
@@ -932,7 +939,7 @@ mod tests {
         let text = json!({"type": "text", "text": "hi"});
         assert_eq!(
             adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", thinking, 5)),
-            vec![]
+            vec![call(None)]
         );
         assert_eq!(
             adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", text.clone(), 9)),
@@ -945,6 +952,7 @@ mod tests {
             adapter.translate(&assistant(None, "m2", "claude-sonnet-5-5", text.clone(), 1)),
             vec![
                 usage(None, 9),
+                call(None),
                 Record::Text {
                     parent: None,
                     text: "hi".to_string()
@@ -970,13 +978,16 @@ mod tests {
         let records = adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", agent("A"), 1));
         assert_eq!(
             records,
-            vec![Record::SubagentStart {
-                id: "A".to_string(),
-                parent: None,
-                kind: "Explore".to_string(),
-                model: Some("haiku".to_string()),
-                description: "look".to_string(),
-            }]
+            vec![
+                call(None),
+                Record::SubagentStart {
+                    id: "A".to_string(),
+                    parent: None,
+                    kind: "Explore".to_string(),
+                    model: Some("haiku".to_string()),
+                    description: "look".to_string(),
+                }
+            ]
         );
         let records = adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", agent("B"), 2));
         assert_eq!(records.len(), 1);
@@ -988,10 +999,13 @@ mod tests {
                 text.clone(),
                 3
             )),
-            vec![Record::Text {
-                parent: Some("A".to_string()),
-                text: "t".to_string()
-            }]
+            vec![
+                call(Some("A")),
+                Record::Text {
+                    parent: Some("A".to_string()),
+                    text: "t".to_string()
+                }
+            ]
         );
         assert_eq!(
             adapter.translate(&assistant(
@@ -1001,10 +1015,13 @@ mod tests {
                 text.clone(),
                 4
             )),
-            vec![Record::Text {
-                parent: Some("B".to_string()),
-                text: "t".to_string()
-            }]
+            vec![
+                call(Some("B")),
+                Record::Text {
+                    parent: Some("B".to_string()),
+                    text: "t".to_string()
+                }
+            ]
         );
         assert_eq!(
             adapter.translate(&assistant(Some("A"), "a1", "claude-sonnet-5-5", text, 5)),
@@ -1036,6 +1053,16 @@ mod tests {
             vec![Record::SubagentEnd {
                 id: "B".to_string(),
                 status: SubagentStatus::Failed
+            }]
+        );
+        assert_eq!(
+            adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", agent("C"), 6)),
+            vec![Record::SubagentStart {
+                id: "C".to_string(),
+                parent: None,
+                kind: "Explore".to_string(),
+                model: Some("haiku".to_string()),
+                description: "look".to_string(),
             }]
         );
     }
@@ -1083,7 +1110,7 @@ mod tests {
             json!({"type": "tool_use", "id": "h", "name": "SubagentHandback", "input": {}}),
             1,
         );
-        assert_eq!(adapter.translate(&handback), vec![]);
+        assert_eq!(adapter.translate(&handback), vec![call(Some("A"))]);
     }
 
     #[test]
@@ -1113,12 +1140,6 @@ mod tests {
         assert_eq!(usage.totals.cache_write_tokens, Some(4));
         assert_eq!(usage.by_model["claude-haiku-4-5"].cache_read_tokens, None);
         assert_eq!(records.len(), 2);
-    }
-
-    #[test]
-    fn check_args_accepts_max_turns() {
-        let invocation = invocation(false, &["--max-turns", "3"]);
-        assert_eq!(ClaudeCode::new().check_args(&invocation.args), Ok(()));
     }
 
     #[test]

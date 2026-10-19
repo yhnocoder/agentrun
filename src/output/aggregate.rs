@@ -36,6 +36,9 @@ pub enum Record {
         parent: Option<String>,
         text: String,
     },
+    CallStart {
+        parent: Option<String>,
+    },
     Usage {
         parent: Option<String>,
         model: Option<String>,
@@ -74,6 +77,7 @@ pub struct Aggregator {
     subagent_parents: HashMap<String, Option<String>>,
     running: Vec<RunningSubagent>,
     started_subagents: u64,
+    main_calls: u64,
     usages: Vec<UsageEntry>,
     run_usage: Option<Usage>,
     result: Option<String>,
@@ -111,6 +115,7 @@ impl Aggregator {
             subagent_parents: HashMap::new(),
             running: Vec::new(),
             started_subagents: 0,
+            main_calls: 0,
             usages: Vec::new(),
             run_usage: None,
             result: None,
@@ -199,6 +204,11 @@ impl Aggregator {
                         .events
                         .push(Event::now(Body::Text(event::Text { parent, text })));
                 }
+                Record::CallStart { parent } => {
+                    if self.known_parent(parent).is_none() {
+                        self.main_calls += 1;
+                    }
+                }
                 Record::Usage {
                     parent,
                     model,
@@ -246,6 +256,14 @@ impl Aggregator {
         };
         let result = self.result.take().or(self.last_main_text.take());
         (events, Summary { usage, result })
+    }
+
+    pub fn main_calls(&self) -> u64 {
+        self.main_calls
+    }
+
+    pub fn tokens(&self) -> u64 {
+        self.usages.iter().map(|entry| entry.counts.total()).sum()
     }
 
     pub fn open_tools(&self) -> OpenTools {

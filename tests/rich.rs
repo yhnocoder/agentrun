@@ -186,6 +186,7 @@ impl Session {
             code: Some(0),
             signal: None,
             timed_out: false,
+            limit: None,
         };
         let aggregator = std::mem::replace(&mut self.aggregator, Aggregator::new(false));
         self.rich.set_open_tools(OpenTools::default());

@@ -86,6 +86,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
                 code: meta.exit_code,
                 signal: None,
                 timed_out: false,
+                limit: None,
             };
             (exit, stderr_tail(&meta.stderr), launch.wrapped)
         }
@@ -94,6 +95,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
                 code: Some(0),
                 signal: None,
                 timed_out: false,
+                limit: None,
             };
             (exit, String::new(), SandboxKind::None)
         }

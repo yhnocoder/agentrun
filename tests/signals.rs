@@ -40,6 +40,8 @@ fn tests() -> Vec<(&'static str, fn())> {
         signal_before_launch_ends_without_start,
         signal_during_a_failing_launch_still_rejects,
         adapter_can_terminate_the_process_group,
+        max_turns_counts_only_calls_of_the_main_agent,
+        max_tokens_counts_every_usage_and_waits_the_grace_period,
         #[cfg(target_os = "linux")]
         signal_during_sandbox_check_kills_the_check,
         first_signal_reaches_the_wrapped_runtime_directly,
@@ -353,6 +355,58 @@ fn adapter_can_terminate_the_process_group() {
     assert_eq!(outcome.end()["detail"], "model mismatch");
     assert_eq!(outcome.end()["exit_code"], Value::Null);
     assert!(outcome.texts().is_empty(), "{:?}", outcome.texts());
+}
+
+fn max_turns_counts_only_calls_of_the_main_agent() {
+    let env = with_claude(concat!(
+        "echo '{\"record\":\"subagent_start\",\"id\":\"s1\",\"parent\":null,\"kind\":\"Explore\",\"description\":\"look\"}'\n",
+        "echo '{\"record\":\"call_start\",\"parent\":null}'\n",
+        "echo '{\"record\":\"call_start\",\"parent\":\"s1\"}'\n",
+        "echo '{\"record\":\"call_start\",\"parent\":\"s1\"}'\n",
+        "echo '{\"record\":\"call_start\",\"parent\":null}'\n",
+        "echo '{\"record\":\"text\",\"parent\":null,\"text\":\"second\"}'\n",
+        "echo '{\"record\":\"call_start\",\"parent\":null}'\n",
+        "sleep 2\n",
+        "echo '{\"record\":\"text\",\"parent\":null,\"text\":\"after\"}'\n",
+    ));
+    let outcome = finish(
+        start(&env, &["--max-turns", "2"], true, Stdio::null()),
+        &env,
+    );
+    assert_between(outcome.elapsed, 0.0, 1.5, &outcome.events);
+    assert_eq!(outcome.code, 4);
+    assert_eq!(outcome.end()["status"], "limit");
+    assert_eq!(
+        outcome.end()["detail"],
+        "--max-turns 2 reached: the main agent started turn 3"
+    );
+    assert_eq!(outcome.end()["exit_code"], Value::Null);
+    assert_eq!(outcome.texts(), ["second"]);
+}
+
+fn max_tokens_counts_every_usage_and_waits_the_grace_period() {
+    let env = with_claude(concat!(
+        "trap '' TERM\n",
+        "echo '{\"record\":\"subagent_start\",\"id\":\"s1\",\"parent\":null,\"kind\":\"Explore\",\"description\":\"look\"}'\n",
+        "echo '{\"record\":\"usage\",\"parent\":null,\"input_tokens\":10,\"output_tokens\":5,\"cache_read_tokens\":20,\"cache_write_tokens\":null}'\n",
+        "echo '{\"record\":\"usage\",\"parent\":\"s1\",\"input_tokens\":10,\"output_tokens\":5,\"cache_read_tokens\":null,\"cache_write_tokens\":1}'\n",
+        "echo '{\"record\":\"text\",\"parent\":null,\"text\":\"under\"}'\n",
+        "echo '{\"record\":\"usage\",\"parent\":\"s1\",\"input_tokens\":1,\"output_tokens\":0,\"cache_read_tokens\":0,\"cache_write_tokens\":0}'\n",
+        "echo '{\"record\":\"text\",\"parent\":null,\"text\":\"over\"}'\n",
+        "sleep 30\n",
+    ));
+    let outcome = finish(
+        start(&env, &["--max-tokens", "51"], true, Stdio::null()),
+        &env,
+    );
+    assert_between(outcome.elapsed, 4.5, 8.0, &outcome.events);
+    assert_eq!(outcome.code, 4);
+    assert_eq!(outcome.end()["status"], "limit");
+    assert_eq!(
+        outcome.end()["detail"],
+        "--max-tokens 51 exceeded: 52 tokens"
+    );
+    assert_eq!(outcome.texts(), ["under", "over"]);
 }
 
 fn first_signal_reaches_the_wrapped_runtime_directly() {
