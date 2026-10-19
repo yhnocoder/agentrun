@@ -59,16 +59,16 @@ pub fn write_script(path: &Path, content: &str) {
 }
 
 pub struct Env {
-    _root: TempDir,
-    root: PathBuf,
+    root: TempDir,
+    real_root: PathBuf,
 }
 
 impl Env {
     pub fn new() -> Env {
         let root = tempfile::tempdir().unwrap();
         let env = Env {
-            root: std::fs::canonicalize(root.path()).unwrap(),
-            _root: root,
+            real_root: std::fs::canonicalize(root.path()).unwrap(),
+            root,
         };
         for dir in [env.bin(), env.tmp(), env.work(), env.home()] {
             std::fs::create_dir(dir).unwrap();
@@ -83,7 +83,7 @@ impl Env {
     }
 
     pub fn root(&self) -> &Path {
-        &self.root
+        self.root.path()
     }
 
     pub fn bin(&self) -> PathBuf {
@@ -95,7 +95,7 @@ impl Env {
     }
 
     pub fn work(&self) -> PathBuf {
-        self.root().join("work")
+        self.real_root.join("work")
     }
 
     pub fn home(&self) -> PathBuf {
