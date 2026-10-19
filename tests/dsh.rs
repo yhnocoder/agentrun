@@ -300,8 +300,7 @@ echo '{"type":"status","phase":"turn_start","turn":1}'
 echo '{"type":"status","phase":"step_start","turn":1,"step":1}'
 echo '{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":1,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"totalTokens":10}}'
 echo '{"type":"status","phase":"step_start","turn":1,"step":2}'
-sleep 30 &
-wait
+while :; do sleep 1; done
 "#;
 
 #[test]

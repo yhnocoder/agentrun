@@ -187,7 +187,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 
 <h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
-<p>按当前环境检查运行时能否使用。不写运行时时检查全部四个，顺序固定为 claude-code、codex、pi、dsh。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。开始检查前，doctor 对每个要检查的运行时调用适配器的 <code>check_args</code>，参数不符合要求时按用法错误处理，例如 pi 的 <code>--model</code> 格式。</p>
+<p>按当前环境检查运行时能否使用。不写运行时时检查全部四个，顺序固定为 claude-code、codex、pi、dsh。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。开始检查前，doctor 对每个要检查的运行时调用适配器的 <code>check_args</code>，参数不符合要求时按用法错误处理，例如 pi 的 <code>--model</code> 格式。不写运行时时四个运行时都要通过这项检查，所以 <code>doctor --model sonnet</code> 会因为 pi 要求 provider/model 格式以退出码 2 结束，只检查 claude-code 时要写成 <code>doctor claude-code --model sonnet</code>。</p>
 <table>
   <thead>
     <tr><th>检查项</th><th>通过条件</th></tr>
