@@ -558,6 +558,33 @@ fn upstream_refusing_connect_gets_502_with_its_status() {
 }
 
 #[test]
+fn upstream_answers_are_read_leniently_up_to_the_first_blank_line() {
+    let cases: [(&'static [u8], &str); 2] = [
+        (
+            b"HTTP/1.1 200 Connection Established\r\nX-Up : 1\r\nX-Fold: a\r\n b\r\n\r\n",
+            "HTTP/1.1 200 Connection Established\r\n",
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nX-Up: 1\n\nHTTP/1.1 200 OK\r\n\r\n",
+            "HTTP/1.1 502 Bad Gateway\r\n",
+        ),
+    ];
+    for (answer, expected) in cases {
+        let port = start_upstream_answering(answer);
+        let running = Running::start(
+            custom(vec![rule("example.com", None)]),
+            upstream_at(ProxyAddress {
+                host: "127.0.0.1".to_string(),
+                port,
+                authorization: None,
+            }),
+        );
+        let response = running.http(&connect_request("example.com:443"));
+        assert!(response.starts_with(expected), "{answer:?}: {response}");
+    }
+}
+
+#[test]
 fn upstream_closing_without_an_answer_gets_502() {
     let port = start_upstream_answering(b"");
     let running = Running::start(
@@ -640,13 +667,20 @@ fn no_proxy_hosts_bypass_the_upstream() {
 }
 
 #[test]
-fn other_request_lines_get_400() {
+fn malformed_request_lines_and_headers_get_400() {
     let running = Running::start(full(), Upstream::default());
     for request in [
         "GET /relative HTTP/1.1\r\nHost: x\r\n\r\n",
         "GET https://example.com/ HTTP/1.1\r\n\r\n",
         "CONNECT example.com HTTP/1.1\r\n\r\n",
         "nonsense\r\n\r\n",
+        "CONNECT example.com:443 HTTP/2.0\r\n\r\n",
+        "GET http://example.com/ HTTP/1.2\r\n\r\n",
+        "GET http://example.com/ HTTP/1.1 junk\r\n\r\n",
+        "GET http://example.com/ HTTP/1.1\r\nX-A: one\r\n two\r\n\r\n",
+        "GET http://example.com/ HTTP/1.1\r\nX-A : one\r\n\r\n",
+        "GET http://example.com/ HTTP/1.1\r\nX(A): one\r\n\r\n",
+        "POST http://example.com/a HTTP/1.1\r\nContent-Length: 4\n\nABCD\r\n\r\nWXYZ",
     ] {
         let response = running.http(request);
         assert!(

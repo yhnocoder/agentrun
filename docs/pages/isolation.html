@@ -184,6 +184,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <ul>
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
   <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成、最长 253 个字节的名字与 IPv4 字面量，其他字节或更长的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
+  <li>请求行的版本只接受 <code>HTTP/1.0</code> 与 <code>HTTP/1.1</code>，<code>CONNECT</code> 也一样。请求行或请求头格式错误时回复 400，不输出 <code>network</code> 事件，包括版本后面还有内容、以空格开头的续行头（obs-fold）、头名与冒号之间有空白、头名含有 token 以外的字符，以及请求头在第一个 <code>\r\n\r\n</code> 之前出现只用 <code>\n</code> 的空行。上游 HTTP 代理对 <code>CONNECT</code> 的回复接受头名后的空白与续行头，状态码是 2xx 时建立隧道。</li>
   <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
   <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 与 dsh 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB；连接目标时依次尝试解析出的每个地址，每个地址最多等 10 秒。</li>

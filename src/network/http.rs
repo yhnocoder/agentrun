@@ -5,12 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use httparse::Status;
-
 use super::address::{HTTP_DEFAULT_PORT, Target, authority_text, parse_host_port, target_text};
 use super::proxy::{
     Client, Decision, Route, Server, UPSTREAM_IDLE_TIMEOUT, admit, connect, copy_until_idle,
-    header_slots, read_head, relay, write_all,
+    header_slots, parses_whole_head, read_head, relay, write_all,
 };
 use crate::output::NetworkReason;
 
@@ -23,9 +21,9 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
     let _ = client.set_read_timeout(None);
     let mut slots = header_slots(&head);
     let mut request = httparse::Request::new(&mut slots);
-    let parsed = request.parse(&head);
-    let (Ok(Status::Complete(_)), Some(method), Some(target), Some(version)) =
-        (parsed, request.method, request.path, request.version)
+    let complete = parses_whole_head(request.parse(&head), &head);
+    let (true, Some(method), Some(target), Some(version)) =
+        (complete, request.method, request.path, request.version)
     else {
         respond(&mut client, "400 Bad Request", "");
         return;
