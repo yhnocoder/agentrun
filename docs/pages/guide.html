@@ -125,9 +125,15 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <h2 id="ci">在脚本与 CI 里判断成败</h2>
 <p>只看退出码就能区分三类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
 <p>在 CI 里建议显式写 <code>--format jsonl</code> 和 <code>--timeout</code>，并在作业开始时对你用的运行时运行一次 <code>agentrun doctor</code>，例如 <code>agentrun doctor claude-code</code>，让环境问题在第一步就暴露出来。</p>
-<p>两种情况不会让结果变成失败：agent 的某次工具调用被拒绝，以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
+<p>三种情况不会让结果变成失败：agent 的某次工具调用被拒绝，某次工具调用执行出错（例如命令的退出码不为 0），以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
+jq -c 'select(.type == "tool" and .error)' run.jsonl
 jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code></pre>
+<p>例如列出执行出错的调用：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --model sonnet --format jsonl --prompt "运行 ls missing.txt，再运行 ls ." &gt; run.jsonl
+<span class="prompt">$</span> jq -r 'select(.type == "tool" and .error) | .summary' run.jsonl
+Bash: ls missing.txt</div>
+<p>被拒绝的调用的 <code>error</code> 为 false，只由第一条命令查出。运行时没有报告调用结果时 <code>error</code> 为 null，第二条命令不会查出这样的调用。字段的完整说明见<a href="events.html">事件与输出</a>。</p>
 
 <h2 id="parallel">同时运行多个 agent</h2>
 <p>需要几个 agent 同时处理不同的任务时，在后台启动多个 agentrun，每个用自己的 <code>--cwd</code>，输出写到各自的文件，再用 <code>wait</code> 等它们都结束：</p>

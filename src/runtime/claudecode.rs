@@ -216,11 +216,12 @@ impl ClaudeCode {
             .filter(|block| block["type"] == "tool_result")
         {
             let id = string(&block["tool_use_id"]);
+            let is_error = block["is_error"] == Value::Bool(true);
             if self.subagents.contains(&id) {
                 if line["tool_use_result"]["status"] == "async_launched" {
                     continue;
                 }
-                let status = if block["is_error"] == Value::Bool(true) {
+                let status = if is_error {
                     SubagentStatus::Failed
                 } else {
                     SubagentStatus::Finished
@@ -229,7 +230,11 @@ impl ClaudeCode {
                 records.push(Record::SubagentEnd { id, status });
             } else {
                 let denied = self.denied.contains(&id);
-                records.push(Record::ToolEnd { id, denied });
+                records.push(Record::ToolEnd {
+                    id,
+                    denied,
+                    error: Some(is_error),
+                });
             }
         }
         records
@@ -1106,14 +1111,25 @@ mod tests {
             adapter.translate(&result("t1")),
             vec![Record::ToolEnd {
                 id: "t1".to_string(),
-                denied: true
+                denied: true,
+                error: Some(true),
             }]
         );
         assert_eq!(
             adapter.translate(&result("t2")),
             vec![Record::ToolEnd {
                 id: "t2".to_string(),
-                denied: false
+                denied: false,
+                error: Some(true),
+            }]
+        );
+        let succeeded = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3"}]}});
+        assert_eq!(
+            adapter.translate(&succeeded),
+            vec![Record::ToolEnd {
+                id: "t3".to_string(),
+                denied: false,
+                error: Some(false),
             }]
         );
         let handback = assistant(

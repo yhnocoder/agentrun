@@ -20,6 +20,7 @@ pub enum Record {
     ToolEnd {
         id: String,
         denied: bool,
+        error: Option<bool>,
     },
     SubagentStart {
         id: String,
@@ -148,10 +149,10 @@ impl Aggregator {
                         })));
                     self.open_tools.push(tool);
                 }
-                Record::ToolEnd { id, denied } => {
+                Record::ToolEnd { id, denied, error } => {
                     if let Some(index) = self.open_tools.iter().position(|tool| tool.id == id) {
                         let tool = self.open_tools.remove(index);
-                        translated.events.push(tool_event(tool, denied));
+                        translated.events.push(tool_event(tool, denied, error));
                     }
                 }
                 Record::SubagentStart {
@@ -229,7 +230,7 @@ impl Aggregator {
     pub fn finish(mut self) -> (Vec<Event>, Summary) {
         let mut events = Vec::new();
         for tool in std::mem::take(&mut self.open_tools) {
-            events.push(tool_event(tool, false));
+            events.push(tool_event(tool, false, None));
         }
         for subagent in std::mem::take(&mut self.running) {
             events.push(self.subagent_end_event(subagent, SubagentStatus::Failed));
@@ -279,13 +280,14 @@ impl Aggregator {
     }
 }
 
-fn tool_event(tool: StartedTool, denied: bool) -> Event {
+fn tool_event(tool: StartedTool, denied: bool, error: Option<bool>) -> Event {
     Event::now(Body::Tool(event::Tool {
         id: tool.id,
         parent: tool.parent,
         name: tool.name,
         summary: tool.summary,
         denied,
+        error: if denied { Some(false) } else { error },
     }))
 }
 
@@ -330,6 +332,7 @@ mod tests {
         Record::ToolEnd {
             id: id.to_string(),
             denied: false,
+            error: Some(false),
         }
     }
 
@@ -414,6 +417,43 @@ mod tests {
         assert_eq!(tool.parent, start.parent);
         assert_eq!(tool.summary, start.summary);
         assert!(!tool.denied);
+        assert_eq!(tool.error, None);
+    }
+
+    #[test]
+    fn denied_call_has_no_error_and_other_calls_keep_the_reported_error() {
+        let mut aggregator = Aggregator::new(false);
+        let end = |id: &str, denied: bool, error: Option<bool>| Record::ToolEnd {
+            id: id.to_string(),
+            denied,
+            error,
+        };
+        let translated = aggregator.push(vec![
+            tool_start("t1", None, "Bash: cat ~/.ssh/id_rsa"),
+            tool_start("t2", None, "Bash: false"),
+            tool_start("t3", None, "Bash: true"),
+            tool_start("t4", None, "Bash: unknown"),
+            end("t1", true, Some(true)),
+            end("t2", false, Some(true)),
+            end("t3", false, Some(false)),
+            end("t4", false, None),
+        ]);
+        let outcomes: Vec<_> = translated.events[4..]
+            .iter()
+            .map(|event| {
+                let tool = ended(event);
+                (tool.id.as_str(), tool.denied, tool.error)
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                ("t1", true, Some(false)),
+                ("t2", false, Some(true)),
+                ("t3", false, Some(false)),
+                ("t4", false, None),
+            ]
+        );
     }
 
     #[test]

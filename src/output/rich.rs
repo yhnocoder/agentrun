@@ -492,6 +492,7 @@ mod tests {
                 name: "Bash".to_string(),
                 summary: String::new(),
                 denied: false,
+                error: Some(false),
             }));
             self.observe(&event, self.panel.started);
         }
