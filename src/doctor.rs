@@ -712,6 +712,7 @@ impl Doctor {
             cwd: None,
             prompt: Some(PROMPT.to_string()),
             prompt_file: None,
+            image: Vec::new(),
             model: self.args.model.clone(),
             effort: None,
             max_turns: None,

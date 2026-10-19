@@ -58,9 +58,9 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
             json!({"schema": 1, "type": "start", "runtime": "claude-code", "sandbox": "none",
                 "network": {"mode": "none", "allow": [], "enforced": false},
                 "deny_read": [], "model": "m1", "cwd": work, "argv": [executable, "--extra"], "env": []}),
-            json!({"schema": 1, "type": "prompt", "text": "hi"}),
+            json!({"schema": 1, "type": "prompt", "text": "hi", "images": []}),
             json!({"schema": 1, "type": "tool_start", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls"}),
-            json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true}),
+            json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true, "error": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "stdin=hi"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "m1", "input_tokens": 10, "output_tokens": 2,
                 "cache_read_tokens": 5, "cache_write_tokens": 1, "cost_usd": null, "context_tokens": 16}),
@@ -244,11 +244,11 @@ fn unfinished_tools_and_subagents_are_closed_before_end() {
     );
     assert_eq!(
         events[7],
-        json!({"schema": 1, "type": "tool", "id": "a", "parent": null, "name": "Bash", "summary": "Bash: sleep", "denied": false})
+        json!({"schema": 1, "type": "tool", "id": "a", "parent": null, "name": "Bash", "summary": "Bash: sleep", "denied": false, "error": null})
     );
     assert_eq!(
         events[8],
-        json!({"schema": 1, "type": "tool", "id": "b", "parent": "s1", "name": "Grep", "summary": "Grep: foo", "denied": false})
+        json!({"schema": 1, "type": "tool", "id": "b", "parent": "s1", "name": "Grep", "summary": "Grep: foo", "denied": false, "error": null})
     );
     assert_eq!(events[9]["id"], "s1");
     assert_eq!(events[9]["status"], "failed");
@@ -439,7 +439,7 @@ fn text_format_shows_note_and_lines() {
         "\n",
         r#"{"record":"tool_start","id":"t1","parent":"s1","name":"Grep","summary":"Grep: foo"}"#,
         "\n",
-        r#"{"record":"tool_end","id":"t1","denied":false}"#,
+        r#"{"record":"tool_end","id":"t1","denied":false,"error":true}"#,
         "\n",
         r#"{"record":"usage","parent":"s1","model":"claude-haiku-4-5","input_tokens":30,"output_tokens":4,"cache_read_tokens":null,"cache_write_tokens":null}"#,
         "\n",
@@ -456,7 +456,7 @@ fn text_format_shows_note_and_lines() {
             "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches",
             "[main] prompt hi",
             "[main] agent start explore#1 (haiku): look around",
-            "[explore#1] tool Grep: foo",
+            "[explore#1] tool Grep: foo (error)",
         ]
     );
     assert!(lines[4].starts_with("[explore#1] agent finished "));

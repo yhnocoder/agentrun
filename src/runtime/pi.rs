@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, reject_max_turns};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
+use crate::image::write_copies;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
 use crate::output::{Record, SandboxKind, TokenCounts};
@@ -57,6 +58,7 @@ pub struct Pi {
     model_checked: bool,
     mismatch: Option<String>,
     prompt_echoed: bool,
+    prompt_with_images: Option<String>,
     last_stop: Option<Stop>,
 }
 
@@ -85,6 +87,7 @@ impl Pi {
             model_checked: false,
             mismatch: None,
             prompt_echoed: false,
+            prompt_with_images: None,
             last_stop: None,
         }
     }
@@ -116,9 +119,12 @@ impl Pi {
                     return Vec::new();
                 }
                 self.prompt_echoed = true;
-                vec![Record::PromptEcho {
-                    text: joined_text(&message["content"]),
-                }]
+                let text = joined_text(&message["content"]);
+                let text = match &self.prompt_with_images {
+                    Some(prompt) if text.starts_with(prompt.as_str()) => prompt.clone(),
+                    _ => text,
+                };
+                vec![Record::PromptEcho { text }]
             }
             Some("assistant") => {
                 let mut records = Vec::new();
@@ -175,6 +181,20 @@ impl Adapter for Pi {
             argv.push(effort.clone());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
+        let copies = write_copies(
+            &invocation.images,
+            &invocation.tempdir,
+            invocation.args.dry_run,
+        )?;
+        if !copies.is_empty() {
+            argv.push("--".to_string());
+            argv.extend(
+                copies
+                    .iter()
+                    .map(|copy| format!("@{}", copy.to_string_lossy())),
+            );
+            self.prompt_with_images = Some(invocation.prompt.trim().to_string());
+        }
         let mut env = Vec::new();
         let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
@@ -231,6 +251,7 @@ impl Adapter for Pi {
             Some("tool_execution_end") => vec![Record::ToolEnd {
                 id: string(&line["toolCallId"]),
                 denied: false,
+                error: line["isError"].as_bool(),
             }],
             Some("message_start") => self.message_start(&line["message"]),
             Some("message_end") => self.message_end(&line["message"]),
@@ -449,6 +470,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
+    use crate::image::{Image, ImageKind};
     use crate::network::ProxyEndpoint;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::{Session, parse_env_args};
@@ -609,6 +631,93 @@ mod tests {
             assert_eq!(launch.argv, fixed("/opt/bin/pi"));
             assert_eq!(launch.stdin, prompt.as_bytes());
         }
+    }
+
+    fn images() -> Vec<Image> {
+        vec![
+            Image {
+                given: "shots/a.png".to_string(),
+                kind: ImageKind::Png,
+                bytes: b"png bytes".to_vec(),
+            },
+            Image {
+                given: "b.webp".to_string(),
+                kind: ImageKind::Webp,
+                bytes: b"webp bytes".to_vec(),
+            },
+        ]
+    }
+
+    #[test]
+    fn images_are_copied_into_the_tempdir_and_passed_as_file_arguments() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(&[], false, &[]);
+        invocation.prompt = "  read these\n".to_string();
+        invocation.images = images();
+        let mut adapter = Pi::new();
+        let launch = adapter
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap();
+        let first = setup.tempdir().join("image-1.png");
+        let second = setup.tempdir().join("image-2.webp");
+        assert_eq!(
+            launch.argv[launch.argv.len() - 3..],
+            [
+                "--".to_string(),
+                format!("@{}", first.display()),
+                format!("@{}", second.display()),
+            ]
+        );
+        assert_eq!(launch.stdin, b"  read these\n");
+        assert_eq!(std::fs::read(&first).unwrap(), b"png bytes");
+        assert_eq!(std::fs::read(&second).unwrap(), b"webp bytes");
+        let echo = json!({"type": "message_end", "message": {"role": "user", "content": [
+            {"type": "text", "text": format!(
+                "read these<file name=\"{}\"></file>\n<file name=\"{}\"></file>\n\n[Image: original 4000x4000, displayed at 2000x2000.]",
+                first.display(),
+                second.display()
+            )},
+            {"type": "image", "data": "aGk=", "mimeType": "image/png"}
+        ]}});
+        assert_eq!(
+            adapter.translate(&echo),
+            vec![Record::PromptEcho {
+                text: "read these".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn echo_that_does_not_start_with_the_prompt_is_kept_as_is() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(&[], false, &[]);
+        invocation.images = images();
+        let mut adapter = Pi::new();
+        adapter
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap();
+        let echo = json!({"type": "message_end", "message": {"role": "user", "content": [
+            {"type": "text", "text": "something else"}
+        ]}});
+        assert_eq!(
+            adapter.translate(&echo),
+            vec![Record::PromptEcho {
+                text: "something else".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn dry_run_names_the_image_copies_without_writing_them() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(&[], false, &["--dry-run"]);
+        invocation.images = images();
+        let launch = Pi::new()
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap();
+        let first = setup.tempdir().join("image-1.png");
+        assert!(launch.argv.contains(&format!("@{}", first.display())));
+        assert!(!first.exists());
     }
 
     fn mounts(argv: &[String]) -> Vec<(&str, &str)> {
@@ -1370,6 +1479,17 @@ mod tests {
             vec![Record::ToolEnd {
                 id: "call_1".to_string(),
                 denied: false,
+                error: Some(true),
+            }]
+        );
+        let unreported =
+            json!({"type": "tool_execution_end", "toolCallId": "call_2", "toolName": "read"});
+        assert_eq!(
+            adapter.translate(&unreported),
+            vec![Record::ToolEnd {
+                id: "call_2".to_string(),
+                denied: false,
+                error: None,
             }]
         );
         let user = json!({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "do"}, {"type": "text", "text": "it"}]}});

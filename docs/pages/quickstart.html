@@ -89,7 +89,7 @@ printf 'def greet(name):\n    return "hello " + name\n' &gt; greet.py</code></pr
 <p>怎么读这段输出：</p>
 <ul>
   <li>每行开头的 <code>[main]</code> 表示这一行来自主 agent。agent 启动 subagent 时，subagent 的行以它自己的标签开头，例如 <code>[explore#1]</code>。</li>
-  <li><code>tool</code> 行是一次完成的工具调用，<code>text</code> 行是 agent 说的话。</li>
+  <li><code>tool</code> 行是一次完成的工具调用，<code>text</code> 行是 agent 说的话。调用被拒绝时 <code>tool</code> 行末尾有 <code>(denied)</code>，执行出错时有 <code>(error)</code>，例如测试没有通过。</li>
   <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出、输入中命中缓存的比例，最后是运行时报告的费用，单位美元。运行时不报告费用时（例如 codex）不显示费用。</li>
 </ul>
 <p>这次运行发生在沙箱里：agent 只能写 <code>hello</code> 目录和一个临时目录，它运行的命令不能联网，它也读不到你自己的运行时配置、插件和会话记录。</p>

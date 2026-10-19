@@ -160,9 +160,9 @@ fn fake_claude_run_without_sandbox() {
     assert_eq!(
         events[1..],
         [
-            json!({"schema": 1, "type": "prompt", "text": "say hi"}),
+            json!({"schema": 1, "type": "prompt", "text": "say hi", "images": []}),
             json!({"schema": 1, "type": "tool_start", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi"}),
-            json!({"schema": 1, "type": "tool", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi", "denied": false}),
+            json!({"schema": 1, "type": "tool", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi", "denied": false, "error": false}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "claude-sonnet-5-5", "input_tokens": 1, "output_tokens": 2,
                 "cache_read_tokens": 3, "cache_write_tokens": 4, "cost_usd": null, "context_tokens": 8}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "hi there"}),
@@ -173,6 +173,34 @@ fn fake_claude_run_without_sandbox() {
                     "by_model": {"claude-sonnet-5-5": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.0125}}},
                 "result": "hi there"}),
         ]
+    );
+}
+
+#[test]
+fn images_go_to_stdin_and_their_names_to_the_prompt_event() {
+    let env = Env::with("claude", FAKE_CLAUDE);
+    let image = env.root().join("shot.png");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDRrest").unwrap();
+    let output = run(
+        &env,
+        &["--sandbox", "off", "--image", image.to_str().unwrap()],
+        "say hi",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let line: Value =
+        serde_json::from_str(&std::fs::read_to_string(env.bin().join("claude.stdin")).unwrap())
+            .unwrap();
+    assert_eq!(
+        line["message"]["content"],
+        json!([
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUnJlc3Q="}},
+            {"type": "text", "text": "say hi"}
+        ])
+    );
+    let events = support::events(&output);
+    assert_eq!(
+        events[1],
+        json!({"schema": 1, "type": "prompt", "text": "say hi", "images": [image.to_str().unwrap()]})
     );
 }
 

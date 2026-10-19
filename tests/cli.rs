@@ -129,6 +129,39 @@ fn non_utf8_prompt_file_is_rejected() {
 }
 
 #[test]
+fn image_that_is_missing_or_not_an_image_is_rejected() {
+    let env = Env::new();
+    let missing = env.root().join("missing.png");
+    let detail = assert_rejected(&run(
+        &env,
+        &["pi", "--prompt", "hi", "--image", missing.to_str().unwrap()],
+    ));
+    assert!(
+        detail.starts_with(&format!("cannot read image {}: ", missing.display())),
+        "{detail}"
+    );
+    let text = env.root().join("notes.png");
+    std::fs::write(&text, "plain text").unwrap();
+    let detail = assert_rejected(&run(
+        &env,
+        &[
+            "claude-code",
+            "--prompt",
+            "hi",
+            "--image",
+            text.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(
+        detail,
+        format!(
+            "image {} is not a png, jpeg, gif or webp file (animated png and jpeg-ls are not supported)",
+            text.display()
+        )
+    );
+}
+
+#[test]
 fn missing_cwd_is_rejected() {
     let env = Env::new();
     let dir = env.root().join("nowhere");

@@ -102,7 +102,15 @@ pub(super) fn execute(
         debug,
         rich_stderr,
     );
-    relay.begin(start_event(&invocation, &launch), &invocation.prompt);
+    relay.begin(
+        start_event(&invocation, &launch),
+        &invocation.prompt,
+        invocation
+            .images
+            .iter()
+            .map(|image| image.given.clone())
+            .collect(),
+    );
     let wrapped = launch.wrapped;
     let tail = spawn_pumps(child, launch.stdin, caller, sender, refresh, rich_stderr);
 
@@ -294,9 +302,9 @@ impl<'a> Relay<'a> {
         }
     }
 
-    fn begin(&mut self, start: Event, prompt: &str) {
+    fn begin(&mut self, start: Event, prompt: &str, images: Vec<String>) {
         self.caller.emit(&mut self.output, &start);
-        for event in self.aggregator.begin(prompt) {
+        for event in self.aggregator.begin(prompt, images) {
             self.caller.emit(&mut self.output, &event);
         }
     }

@@ -10,6 +10,7 @@ use super::{
     Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_max_turns,
 };
 use crate::cli::{NetworkMode, RunArgs, Runtime};
+use crate::image::write_copies;
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::{Record, SandboxKind, TokenCounts};
@@ -74,6 +75,7 @@ const NO_SUBAGENTS_ARGS: [&str; 6] = [
     "--disable",
     "multi_agent_v2",
 ];
+const IMAGE_LIST_SEPARATOR: char = ',';
 const NO_TURN_DETAIL: &str = "codex produced no turn.completed";
 
 #[derive(Default)]
@@ -121,6 +123,7 @@ impl Codex {
         let end = Record::ToolEnd {
             id: id.clone(),
             denied: false,
+            error: item_error(item),
         };
         if self.started_items.remove(&id) {
             vec![end]
@@ -199,6 +202,20 @@ impl Adapter for Codex {
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
         argv.push(invocation.cwd.to_string_lossy().into_owned());
+        for copy in write_copies(
+            &invocation.images,
+            &invocation.tempdir,
+            invocation.args.dry_run,
+        )? {
+            let copy = copy.to_string_lossy().into_owned();
+            if copy.contains(IMAGE_LIST_SEPARATOR) {
+                return Err(format!(
+                    "cannot give images to codex: the path {copy} contains '{IMAGE_LIST_SEPARATOR}', which codex reads as a list separator"
+                ));
+            }
+            argv.push("--image".to_string());
+            argv.push(copy);
+        }
         if invocation.sandbox.runs() {
             let tempdir = if invocation.args.dry_run {
                 invocation.tempdir.clone()
@@ -486,6 +503,18 @@ fn toml_string(text: &str) -> String {
     quoted
 }
 
+fn item_error(item: &Value) -> Option<bool> {
+    let exit_code = item["exit_code"].as_i64();
+    let status = item["status"].as_str();
+    if exit_code.is_some_and(|code| code != 0) || status == Some("failed") {
+        Some(true)
+    } else if status == Some("completed") || (status.is_none() && exit_code == Some(0)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn counts(usage: &Value) -> TokenCounts {
     let field = |name: &str| usage[name].as_u64().unwrap_or(0);
     let cached = field("cached_input_tokens");
@@ -508,6 +537,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
+    use crate::image::{Image, ImageKind};
     use crate::network::{self, ProxyEndpoint};
     use crate::sandbox::{Sandbox, Wrapper};
 
@@ -806,6 +836,73 @@ mod tests {
         );
     }
 
+    fn with_images(setup: &Setup, extra: &[&str]) -> Result<Launch, String> {
+        let _ = std::fs::remove_dir_all(home_path(&setup.tempdir()));
+        let mut invocation = setup.invocation(false, extra);
+        invocation.images = vec![
+            Image {
+                given: "a.png".to_string(),
+                kind: ImageKind::Png,
+                bytes: b"png".to_vec(),
+            },
+            Image {
+                given: "b.jpg".to_string(),
+                kind: ImageKind::Jpeg,
+                bytes: b"jpeg".to_vec(),
+            },
+        ];
+        Codex::new().launch(Path::new("/opt/bin/codex"), &invocation)
+    }
+
+    #[test]
+    fn images_are_copied_and_passed_right_after_the_working_directory() {
+        let setup = Setup::new();
+        let launch = with_images(&setup, &[]).unwrap();
+        let first = setup.tempdir().join("image-1.png");
+        let second = setup.tempdir().join("image-2.jpg");
+        let head = head(&setup);
+        assert_eq!(launch.argv[..head.len()], head);
+        assert_eq!(
+            launch.argv[head.len()..head.len() + 5],
+            [
+                "--image".to_string(),
+                first.to_string_lossy().into_owned(),
+                "--image".to_string(),
+                second.to_string_lossy().into_owned(),
+                "-c".to_string(),
+            ]
+        );
+        assert_eq!(launch.argv.last().unwrap(), "-");
+        assert_eq!(std::fs::read(&first).unwrap(), b"png");
+        assert_eq!(std::fs::read(&second).unwrap(), b"jpeg");
+    }
+
+    #[test]
+    fn dry_run_names_the_image_copies_without_writing_them() {
+        let setup = Setup::new();
+        let launch = with_images(&setup, &["--dry-run"]).unwrap();
+        assert!(launch.argv.contains(&"<tempdir>/image-1.png".to_string()));
+        assert!(!setup.tempdir().join("image-1.png").exists());
+    }
+
+    #[test]
+    fn image_copy_path_with_a_comma_is_a_launch_error() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(false, &["--dry-run"]);
+        invocation.tempdir = PathBuf::from("/tmp/a,b");
+        invocation.images = vec![Image {
+            given: "a.png".to_string(),
+            kind: ImageKind::Png,
+            bytes: b"png".to_vec(),
+        }];
+        assert_eq!(
+            Codex::new()
+                .launch(Path::new("/opt/bin/codex"), &invocation)
+                .unwrap_err(),
+            "cannot give images to codex: the path /tmp/a,b/image-1.png contains ',', which codex reads as a list separator"
+        );
+    }
+
     #[test]
     fn dry_run_writes_the_placeholders() {
         let setup = Setup::new();
@@ -1048,6 +1145,7 @@ mod tests {
                 Record::ToolEnd {
                     id: "item_1".to_string(),
                     denied: false,
+                    error: Some(false),
                 },
             ]
         );
@@ -1144,18 +1242,21 @@ mod tests {
                 summary: "mcp: fs.read".to_string(),
             }]
         );
-        for (id, completed) in [
+        for (id, completed, error) in [
             (
                 "item_1",
                 json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","aggregated_output":"ok","exit_code":0}}),
+                Some(false),
             ),
             (
                 "item_2",
                 json!({"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/repo/a.txt","kind":"add"}]}}),
+                None,
             ),
             (
                 "item_3",
                 json!({"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"fs","tool":"read"}}),
+                None,
             ),
         ] {
             assert_eq!(
@@ -1163,6 +1264,7 @@ mod tests {
                 [Record::ToolEnd {
                     id: id.to_string(),
                     denied: false,
+                    error,
                 }]
             );
         }
@@ -1174,6 +1276,53 @@ mod tests {
             .len(),
             2
         );
+    }
+
+    #[test]
+    fn item_error_comes_from_exit_code_and_status() {
+        let cases = [
+            (
+                json!({"type":"command_execution","exit_code":0,"status":"completed"}),
+                Some(false),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":56,"status":"failed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":1,"status":"completed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":null,"status":"failed"}),
+                Some(true),
+            ),
+            (
+                json!({"type":"command_execution","exit_code":null,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0,"status":"declined"}),
+                None,
+            ),
+            (
+                json!({"type":"command_execution","exit_code":0}),
+                Some(false),
+            ),
+            (
+                json!({"type":"file_change","status":"completed"}),
+                Some(false),
+            ),
+            (json!({"type":"file_change","status":"failed"}), Some(true)),
+            (
+                json!({"type":"mcp_tool_call","status":"failed"}),
+                Some(true),
+            ),
+            (json!({"type":"mcp_tool_call"}), None),
+        ];
+        for (item, error) in cases {
+            assert_eq!(item_error(&item), error, "{item}");
+        }
     }
 
     #[test]
@@ -1192,6 +1341,7 @@ mod tests {
             [Record::ToolEnd {
                 id: "item_1".to_string(),
                 denied: false,
+                error: Some(true),
             }]
         );
         assert_eq!(

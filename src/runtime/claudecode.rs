@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::{Adapter, Failure, Invocation, Launch, Version};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
+use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
@@ -74,7 +75,29 @@ struct PromptLine<'a> {
 #[derive(Serialize)]
 struct PromptMessage<'a> {
     role: &'static str,
-    content: &'a str,
+    content: PromptContent<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum PromptContent<'a> {
+    Text(&'a str),
+    Blocks(Vec<PromptBlock<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum PromptBlock<'a> {
+    Image { source: ImageSource },
+    Text { text: &'a str },
+}
+
+#[derive(Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    media_type: &'static str,
+    data: String,
 }
 
 #[derive(Serialize)]
@@ -235,11 +258,12 @@ impl ClaudeCode {
             .filter(|block| block["type"] == "tool_result")
         {
             let id = string(&block["tool_use_id"]);
+            let is_error = block["is_error"] == Value::Bool(true);
             if self.subagents.contains(&id) {
                 if line["tool_use_result"]["status"] == "async_launched" {
                     continue;
                 }
-                let status = if block["is_error"] == Value::Bool(true) {
+                let status = if is_error {
                     SubagentStatus::Failed
                 } else {
                     SubagentStatus::Finished
@@ -248,7 +272,11 @@ impl ClaudeCode {
                 records.push(Record::SubagentEnd { id, status });
             } else {
                 let denied = self.denied.contains(&id) || denied_by_settings(block);
-                records.push(Record::ToolEnd { id, denied });
+                records.push(Record::ToolEnd {
+                    id,
+                    denied,
+                    error: Some(is_error),
+                });
             }
         }
         records
@@ -402,7 +430,7 @@ impl Adapter for ClaudeCode {
         }
         Ok(Launch {
             argv,
-            stdin: prompt_line(&invocation.prompt),
+            stdin: prompt_line(&invocation.prompt, &invocation.images),
             env,
             signal_wrapped_child: false,
             service_hosts: Vec::new(),
@@ -566,12 +594,28 @@ fn sandbox_settings<'a>(
     }
 }
 
-fn prompt_line(prompt: &str) -> Vec<u8> {
+fn prompt_line(prompt: &str, images: &[Image]) -> Vec<u8> {
+    let content = if images.is_empty() {
+        PromptContent::Text(prompt)
+    } else {
+        let mut blocks: Vec<PromptBlock> = images
+            .iter()
+            .map(|image| PromptBlock::Image {
+                source: ImageSource {
+                    kind: "base64",
+                    media_type: image.kind.media_type(),
+                    data: base64(&image.bytes),
+                },
+            })
+            .collect();
+        blocks.push(PromptBlock::Text { text: prompt });
+        PromptContent::Blocks(blocks)
+    };
     let mut line = serde_json::to_vec(&PromptLine {
         kind: "user",
         message: PromptMessage {
             role: "user",
-            content: prompt,
+            content,
         },
     })
     .expect("prompt serializes");
@@ -661,6 +705,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
+    use crate::image::ImageKind;
     use crate::network;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::Session;
@@ -1031,6 +1076,37 @@ mod tests {
     }
 
     #[test]
+    fn stdin_puts_the_images_as_base64_blocks_before_the_prompt_text() {
+        let mut invocation = invocation(true, &[]);
+        invocation.images = vec![
+            Image {
+                given: "a.png".to_string(),
+                kind: ImageKind::Png,
+                bytes: b"png".to_vec(),
+            },
+            Image {
+                given: "b.gif".to_string(),
+                kind: ImageKind::Gif,
+                bytes: b"gif!".to_vec(),
+            },
+        ];
+        let launch = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        let text = String::from_utf8(launch.stdin).unwrap();
+        assert_eq!(text.matches('\n').count(), 1);
+        let parsed: Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(
+            parsed,
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "cG5n"}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/gif", "data": "Z2lmIQ=="}},
+                {"type": "text", "text": "hi"}
+            ]}})
+        );
+    }
+
+    #[test]
     fn summary_per_tool_and_path_rules() {
         let cwd = Path::new("/a/b");
         let cases = [
@@ -1239,23 +1315,35 @@ mod tests {
             adapter.translate(&result("t1")),
             vec![Record::ToolEnd {
                 id: "t1".to_string(),
-                denied: true
+                denied: true,
+                error: Some(true),
             }]
         );
         assert_eq!(
             adapter.translate(&result("t2")),
             vec![Record::ToolEnd {
                 id: "t2".to_string(),
-                denied: false
+                denied: false,
+                error: Some(true),
             }]
         );
-        let read_denied = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3", "is_error": true,
+        let succeeded = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3"}]}});
+        assert_eq!(
+            adapter.translate(&succeeded),
+            vec![Record::ToolEnd {
+                id: "t3".to_string(),
+                denied: false,
+                error: Some(false),
+            }]
+        );
+        let read_denied = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t4", "is_error": true,
             "content": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"}]}});
         assert_eq!(
             adapter.translate(&read_denied),
             vec![Record::ToolEnd {
-                id: "t3".to_string(),
-                denied: true
+                id: "t4".to_string(),
+                denied: true,
+                error: Some(true),
             }]
         );
         let handback = assistant(

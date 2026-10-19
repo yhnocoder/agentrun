@@ -41,6 +41,22 @@ agentrun claude-code --prompt-file task.md
 agentrun claude-code &lt; task.md</code></pre>
 <p>长提示词放在文件里，避免 shell 的引号问题。同时给出两种方式，或者提示词为空，agentrun 都会报用法错误。</p>
 
+<h2 id="images">让 agent 看图片</h2>
+<p>需要模型看截图、设计稿或照片时，用 <code>--image</code> 把图片和提示词一起传入。有多张图片时重复这个选项，模型按你给出的顺序看到它们：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --format text --image screenshot.png --prompt "图里写的是什么？只回答图里的文字。"
+<span class="dim">[main]</span> prompt 图里写的是什么？只回答图里的文字。 (+1 image)
+<span class="dim">[main]</span> text ZEBRA 4721
+<span class="dim">[end]</span> finished 6.3s  in 17.8k  out 26  cached 74%</div>
+<p>text 与 rich 格式在 prompt 一行的末尾写出图片的张数。图片可以放在任何你能读到的位置，不需要放进工作目录。在 jsonl 输出里，<code>prompt</code> 事件的 <code>images</code> 列出你给的路径，可以用来核对这次运行带了哪些图片：</p>
+<pre><code class="language-json">{
+  "schema": 1,
+  "type": "prompt",
+  "time": "2026-10-19T03:14:26.078Z",
+  "text": "图里写的是什么？只回答图里的文字。",
+  "images": ["screenshot.png"]
+}</code></pre>
+<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、不是普通文件、类型不对（包括动画 PNG）或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。传法的细节见<a href="run.html#images">图片</a>。</p>
+
 <h2 id="network">让 agent 访问网络</h2>
 <p>默认情况下，agent 运行的命令不能联网。运行时自己访问模型服务不受影响。需要联网时有两种放开方式：</p>
 <table>
@@ -137,9 +153,15 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <h2 id="ci">在脚本与 CI 里判断成败</h2>
 <p>只看退出码就能区分三类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
 <p>在 CI 里建议显式写 <code>--format jsonl</code> 和 <code>--timeout</code>，并在作业开始时对你用的运行时运行一次 <code>agentrun doctor</code>，例如 <code>agentrun doctor claude-code</code>，让环境问题在第一步就暴露出来。</p>
-<p>两种情况不会让结果变成失败：agent 的某次工具调用被拒绝，以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
+<p>三种情况不会让结果变成失败：agent 的某次工具调用被拒绝，某次工具调用执行出错（例如命令的退出码不为 0），以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
+jq -c 'select(.type == "tool" and .error)' run.jsonl
 jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code></pre>
+<p>例如列出执行出错的调用：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --model sonnet --format jsonl --prompt "运行 ls missing.txt，再运行 ls ." &gt; run.jsonl
+<span class="prompt">$</span> jq -r 'select(.type == "tool" and .error) | .summary' run.jsonl
+Bash: ls missing.txt</div>
+<p>被拒绝的调用的 <code>error</code> 为 false，只由第一条命令查出。运行时没有报告调用结果时 <code>error</code> 为 null，第二条命令不会查出这样的调用。字段的完整说明见<a href="events.html">事件与输出</a>。</p>
 <p>要记录每次运行的花费，从 <code>end</code> 事件读 <code>usage.cost_usd</code>，单位是美元：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --format jsonl --prompt "回复 OK" &gt; run.jsonl
 <span class="prompt">$</span> jq -c 'select(.type == "end") | {status, cost_usd: .usage.cost_usd}' run.jsonl
