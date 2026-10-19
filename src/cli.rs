@@ -26,6 +26,8 @@ pub enum Command {
     Codex(RunArgs),
     #[command(about = "Run pi in the sandbox", after_help = RUN_AFTER_HELP)]
     Pi(RunArgs),
+    #[command(about = "Run dsh (DeepSeek Harness) in the sandbox", after_help = RUN_AFTER_HELP)]
+    Dsh(RunArgs),
     #[command(about = "Check whether the runtimes can be used in this environment")]
     Doctor(DoctorArgs),
     #[command(hide = true)]
@@ -53,6 +55,7 @@ impl Command {
             Command::ClaudeCode(args) => Parsed::Run(Runtime::ClaudeCode, Box::new(args)),
             Command::Codex(args) => Parsed::Run(Runtime::Codex, Box::new(args)),
             Command::Pi(args) => Parsed::Run(Runtime::Pi, Box::new(args)),
+            Command::Dsh(args) => Parsed::Run(Runtime::Dsh, Box::new(args)),
             Command::Doctor(args) => Parsed::Doctor(args),
             Command::DoctorConnect(args) => Parsed::Connect(args),
         }
@@ -67,6 +70,8 @@ pub enum Runtime {
     Codex,
     #[serde(rename = "pi")]
     Pi,
+    #[serde(rename = "dsh")]
+    Dsh,
 }
 
 impl Runtime {
@@ -75,6 +80,7 @@ impl Runtime {
             Runtime::ClaudeCode => "claude-code",
             Runtime::Codex => "codex",
             Runtime::Pi => "pi",
+            Runtime::Dsh => "dsh",
         }
     }
 
@@ -83,6 +89,7 @@ impl Runtime {
             Runtime::ClaudeCode => "claude",
             Runtime::Codex => "codex",
             Runtime::Pi => "pi",
+            Runtime::Dsh => "dsh",
         }
     }
 }
@@ -137,7 +144,7 @@ pub struct RunArgs {
         value_name = "N",
         value_parser = positive,
         help_heading = MODEL_AND_LIMITS,
-        help = "Stop the runtime when the main agent starts model call N+1 (claude-code and pi)"
+        help = "Stop the runtime when the main agent starts model call N+1 (claude-code, pi and dsh)"
     )]
     pub max_turns: Option<u64>,
     #[arg(
@@ -145,7 +152,7 @@ pub struct RunArgs {
         value_name = "N",
         value_parser = positive,
         help_heading = MODEL_AND_LIMITS,
-        help = "Stop the runtime when the tokens of all model calls exceed N (claude-code and pi)"
+        help = "Stop the runtime when the tokens of all model calls exceed N (claude-code, pi and dsh)"
     )]
     pub max_tokens: Option<u64>,
     #[arg(
@@ -272,7 +279,7 @@ pub struct DoctorArgs {
     #[arg(
         value_enum,
         value_name = "RUNTIME",
-        help = "Runtimes to check, in the order claude-code, codex, pi (default: all)"
+        help = "Runtimes to check, in the order claude-code, codex, pi, dsh (default: all)"
     )]
     pub runtimes: Vec<Runtime>,
     #[arg(long, value_name = "ID", help = "Model, checked for every runtime")]
@@ -397,21 +404,34 @@ pub(crate) fn default_format(stdout_is_terminal: bool) -> Format {
 }
 
 pub(crate) const MISSING_COMMAND: &str =
-    "no command given: use claude-code, codex, pi or doctor; see agentrun --help";
+    "no command given: use claude-code, codex, pi, dsh or doctor; see agentrun --help";
 
 pub(crate) fn usage_error_detail(rendered: &str) -> String {
-    let joined = rendered
+    let mut joined = String::new();
+    let mut in_list = false;
+    for line in rendered
         .lines()
         .take_while(|line| !line.starts_with("Usage:") && !line.starts_with("For more information"))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .fold(String::new(), |mut joined, line| {
-            if !joined.is_empty() {
-                joined.push_str(if joined.ends_with(':') { " " } else { "; " });
-            }
-            joined.push_str(line);
-            joined
-        });
+    {
+        let text = line.trim();
+        if text.is_empty() {
+            in_list = false;
+            continue;
+        }
+        let indented = line.starts_with(char::is_whitespace);
+        if !joined.is_empty() {
+            joined.push_str(if joined.ends_with(':') {
+                in_list = indented;
+                " "
+            } else if in_list && indented {
+                ", "
+            } else {
+                in_list = false;
+                "; "
+            });
+        }
+        joined.push_str(text);
+    }
     joined
         .strip_prefix("error: ")
         .map(str::to_string)
@@ -473,6 +493,20 @@ mod tests {
         assert_eq!(
             usage_error_detail(rendered),
             "the following required arguments were not provided: --session-dir <DIR>"
+        );
+    }
+
+    #[test]
+    fn usage_error_detail_joins_listed_items_with_commas() {
+        let rendered = "error: the following required arguments were not provided:\n  --host <HOST>\n  --port <PORT>\n\nUsage: agentrun doctor-connect --host <HOST> --port <PORT>\n\nFor more information, try '--help'.\n";
+        assert_eq!(
+            usage_error_detail(rendered),
+            "the following required arguments were not provided: --host <HOST>, --port <PORT>"
+        );
+        let rendered = "error: unexpected argument '--promt' found\n\n  tip: a similar argument exists: '--prompt'\n  tip: to pass '--promt' as a value, use '-- --promt'\n\nUsage: agentrun pi [OPTIONS]\n";
+        assert_eq!(
+            usage_error_detail(rendered),
+            "unexpected argument '--promt' found; tip: a similar argument exists: '--prompt'; tip: to pass '--promt' as a value, use '-- --promt'"
         );
     }
 

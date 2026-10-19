@@ -83,7 +83,7 @@ fn no_arguments_print_help_to_stderr() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.starts_with("Run claude-code, codex and pi"),
+        stderr.starts_with("Run claude-code, codex, pi and dsh"),
         "{stderr}"
     );
     assert!(stderr.contains("Usage: agentrun <COMMAND>"), "{stderr}");
@@ -95,7 +95,7 @@ fn missing_subcommand_names_only_public_commands() {
     let detail = assert_rejected(&run(&Env::new(), &["--"]));
     assert_eq!(
         detail,
-        "no command given: use claude-code, codex, pi or doctor; see agentrun --help"
+        "no command given: use claude-code, codex, pi, dsh or doctor; see agentrun --help"
     );
 }
 

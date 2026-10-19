@@ -1,0 +1,8 @@
+{"type":"session","sessionId":"session-1e61b8c3-ae93-40ed-a4a0-7cdf202d33f2","cwd":"/tmp/agentrun-probe-c85f75d4/no-subagents-dsh"}
+{"type":"status","phase":"turn_start","turn":1}
+{"type":"status","phase":"step_start","turn":1,"step":1}
+{"type":"thinking","text":"We need answer exact tool names, comma separated, nothing else. Need list from available functions: bash, create_goal, edit, exit_plan_mode, get_goal, glob, grep, job_kill, job_list, job_output, read, read_image, skill, todo_write, update_goal, working_directory, write. Maybe also? Count. Need just comma separated. No extra. Ensure exact names."}
+{"type":"text","text":"bash, create_goal, edit, exit_plan_mode, get_goal, glob, grep, job_kill, job_list, job_output, read, read_image, skill, todo_write, update_goal, working_directory, write"}
+{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":3323,"outputTokens":136,"cacheReadTokens":256,"cacheWriteTokens":0,"totalTokens":3715}}
+{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}
+{"type":"final","text":"bash, create_goal, edit, exit_plan_mode, get_goal, glob, grep, job_kill, job_list, job_output, read, read_image, skill, todo_write, update_goal, working_directory, write"}

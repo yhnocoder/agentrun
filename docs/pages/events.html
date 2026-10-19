@@ -22,7 +22,7 @@
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
 <h1>事件与输出</h1>
-<p class="lead">三个运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
+<p class="lead">各运行时的输出各不相同，agentrun 把它们转成<mark>同一种带版本号的事件流</mark>，并统一判定成败。本页写事件的字段、subagent 与用量的规则、<code>end.status</code> 的判定，以及 jsonl、text、rich 三种输出格式。各运行时的原始输出怎么映射到这些事件，见<a href="run.html">运行</a>。</p>
 
 <h2 id="code">代码位置</h2>
 <table>
@@ -55,7 +55,7 @@ interface EventBase {
 // 运行时进程启动后输出一次
 interface StartEvent extends EventBase {
   type: "start"
-  runtime: "claude-code" | "codex" | "pi"
+  runtime: "claude-code" | "codex" | "pi" | "dsh"
   sandbox: "seatbelt" | "bubblewrap" | "codex" | "none"
   network: {
     mode: "none" | "full" | "custom"
@@ -335,34 +335,34 @@ interface Usage extends TokenCounts {
   "session_id": null
 }</code></pre>
 <h3>提示词</h3>
-<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。<code>images</code> 列出调用方用 <code>--image</code> 给出的路径，不转成绝对路径，路径里不是 UTF-8 的字节换成 U+FFFD；不写图片内容，也不写 agentrun 在会话临时目录里写的副本路径，见<a href="run.html#images">图片</a>。</p>
+<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 与 dsh 不回显（codex 0.159.2 与 dsh 0.2.1-rc.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。<code>images</code> 列出调用方用 <code>--image</code> 给出的路径，不转成绝对路径，路径里不是 UTF-8 的字节换成 U+FFFD；不写图片内容，也不写 agentrun 在会话临时目录里写的副本路径，见<a href="run.html#images">图片</a>。</p>
 
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
 <h3>tool 事件在调用结束时输出</h3>
 <p><code>tool</code> 在收到这次调用的结果时输出，因为调用是否被拒绝、是否出错要在调用之后才知道。运行时结束时还没有结果的调用，在 <code>end</code> 之前补发。被拒绝的调用不改变 <code>end.status</code>：运行时会把拒绝结果交还模型，由模型决定下一步，是否算失败由调用方根据 <code>denied</code> 判断。不提供「被拒绝即停止」的选项。</p>
 <p>调用开始时先输出 <code>tool_start</code>，调用方据此显示正在执行的工具。同一次调用的 <code>tool_start</code> 与 <code>tool</code> 的 <code>id</code>、<code>parent</code>、<code>name</code>、<code>summary</code> 相同，<code>parent</code> 在调用开始时按已经启动的 subagent 确定，结束时沿用。每个 <code>tool_start</code> 之后都有一个同 <code>id</code> 的 <code>tool</code>，包括在 <code>end</code> 之前补发的。运行时只在调用结束时才报告这次调用的，<code>tool_start</code> 与 <code>tool</code> 一起输出。</p>
-<p><code>denied</code> 只表示运行时权限机制的拒绝，例如 claude-code 的 auto 模式分类器拒绝一条命令。被沙箱拦下的命令表现为命令出错，<code>denied</code> 为 false，<code>error</code> 为 true。pi 没有权限机制，<code>denied</code> 恒为 false。</p>
+<p><code>denied</code> 只表示运行时权限机制的拒绝，例如 claude-code 的 auto 模式分类器拒绝一条命令。被沙箱拦下的命令表现为命令出错，<code>denied</code> 为 false，<code>error</code> 为 true。pi 没有权限机制，dsh 在 agentrun 下关闭了它自己的审批（见<a href="run.html#dsh">dsh 一节</a>），两者的 <code>denied</code> 恒为 false。</p>
 <p><code>error</code> 表示这次调用执行了但出错，例如命令的退出码不为 0、要读的文件不存在。取值来自运行时自己的报告，每个运行时用哪个字段见<a href="run.html">运行</a>页各运行时的输出映射。被拒绝的调用没有执行，<code>error</code> 为 false。理由：claude-code 拒绝一次调用时，交还模型的结果也标为出错，只看 <code>error</code> 会把拒绝算成执行出错。运行时没有报告时 <code>error</code> 为 null，在 <code>end</code> 之前补发的 <code>tool</code> 也为 null。出错的调用同样不改变 <code>end.status</code>，理由与被拒绝的调用相同。</p>
 
 <h3>subagent 与 parent</h3>
 <p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool_start</code>、<code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code> 与 <code>subagent_end</code>，不输出 <code>tool_start</code> 与 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
 <p>主 agent 与多个 subagent 可以同时运行，它们的事件在流里交错出现。<code>id</code> 是运行时给出的工具调用 id，较长，用于关联事件；<code>number</code> 用于显示。</p>
 <p>运行结束时还没结束的 subagent，在 <code>end</code> 之前补发 <code>status</code> 为 <code>failed</code> 的 <code>subagent_end</code>，<code>duration_ms</code> 记到运行结束时。subagent 失败不改变 <code>end.status</code>，理由是主 agent 可能已经处理了它的失败并完成任务。</p>
-<p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭；pi 没有 subagent。codex 的输出里没有 subagent 的启动事件与 subagent 内部的事件，所以 codex 的事件流里没有 <code>subagent_start</code> 与 <code>subagent_end</code>，subagent 做的事不出现在事件流里（codex 0.159.2 实测）。</p>
+<p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code、codex 与 dsh 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭；pi 没有 subagent。codex 的输出里没有 subagent 的启动事件与 subagent 内部的事件，所以 codex 的事件流里没有 <code>subagent_start</code> 与 <code>subagent_end</code>，subagent 做的事不出现在事件流里（codex 0.159.2 实测）。dsh 只输出主会话的事件，启动 subagent 的调用按普通工具调用输出 <code>tool_start</code> 与 <code>tool</code>，同样没有 <code>subagent_start</code> 与 <code>subagent_end</code>。</p>
 
 <h3>用量</h3>
 <p>用量属于一次模型调用，一次调用会产生多个 <code>tool</code> 与 <code>text</code> 事件，所以用量单独成一个 <code>usage</code> 事件，不附在其他事件上。</p>
 <ul>
-  <li>claude-code 与 pi 每次模型调用都报告用量与模型，每次调用输出一个 <code>usage</code> 事件。codex 每轮结束时报告一次，每轮一个 <code>usage</code> 事件。</li>
-  <li><code>input_tokens</code> 不含缓存命中的部分，三个运行时含义一致；<code>context_tokens</code> 是 <code>input_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和。</li>
-  <li>运行时没报告的字段为 null。codex 的事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null。</li>
+  <li>claude-code 与 pi 每次模型调用都报告用量与模型，每次调用输出一个 <code>usage</code> 事件。codex 每轮结束时报告一次，每轮一个 <code>usage</code> 事件。dsh 每一步（一次模型调用及其工具调用）结束时报告一次，每步一个 <code>usage</code> 事件。</li>
+  <li><code>input_tokens</code> 不含缓存命中的部分，四个运行时含义一致；<code>context_tokens</code> 是 <code>input_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和。</li>
+  <li>运行时没报告的字段为 null。codex 与 dsh 的事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null。</li>
   <li>运行时自己生成、没有调用模型的消息（claude-code 里 model 为 <code>&lt;synthetic&gt;</code> 的错误文字）不输出 <code>usage</code>。</li>
 </ul>
-<p><code>end.usage</code> 取运行时自己报告的整次运行总量；运行时没有总量时（pi、codex）取全部 <code>usage</code> 事件的合计。claude-code 的总量里有它内部的一笔 haiku 调用（auto 模式的分类器），这笔调用没有对应的 <code>usage</code> 事件，所以 <code>end.usage</code> 可能大于 <code>usage</code> 事件之和。理由：与实际计费一致。<code>subagent_end.usage</code> 是 parent 链上属于这个 subagent 的 <code>usage</code> 事件之和，只用于展示，已经包含在 <code>end.usage</code> 里。</p>
+<p><code>end.usage</code> 取运行时自己报告的整次运行总量；运行时没有总量时（pi、codex、dsh）取全部 <code>usage</code> 事件的合计。claude-code 的总量里有它内部的一笔 haiku 调用（auto 模式的分类器），这笔调用没有对应的 <code>usage</code> 事件，所以 <code>end.usage</code> 可能大于 <code>usage</code> 事件之和。理由：与实际计费一致。<code>subagent_end.usage</code> 是 parent 链上属于这个 subagent 的 <code>usage</code> 事件之和，只用于展示，已经包含在 <code>end.usage</code> 里。</p>
 <p><code>end.usage</code> 的字段为 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>、<code>cost_usd</code>，另有 <code>by_model</code> 按模型给出同样的五个字段，模型未知时键为 <code>unknown</code>。合计只加非 null 的值，所有来源都没报告的字段为 null；一次运行没有任何用量时五个总量为 null，<code>by_model</code> 为 <code>{}</code>。</p>
 <h3 id="cost">费用</h3>
-<p><code>cost_usd</code> 是运行时自己报告的费用，单位美元，agentrun 不按单价计算。三个运行时报告的范围不同：</p>
+<p><code>cost_usd</code> 是运行时自己报告的费用，单位美元，agentrun 不按单价计算。各运行时报告的范围不同：</p>
 <table>
   <thead>
     <tr><th>运行时</th><th><code>usage</code> 事件</th><th><code>end.usage</code></th><th><code>subagent_end.usage</code></th></tr>
@@ -371,6 +371,7 @@ interface Usage extends TokenCounts {
     <tr><td>claude-code</td><td>null，逐次调用的用量里没有费用</td><td>总量取最后一个 result 的 <code>total_cost_usd</code>，<code>by_model</code> 取 <code>modelUsage</code> 各模型的 <code>costUSD</code>。总量用运行时自己的合计，与 token 字段不同，不保证等于 <code>by_model</code> 之和；样本里两者相等</td><td>null</td></tr>
     <tr><td>pi</td><td>这次调用的 <code>usage.cost.total</code></td><td><code>usage</code> 事件之和</td><td>没有 subagent</td></tr>
     <tr><td>codex</td><td>null</td><td>null</td><td>没有这个事件</td></tr>
+    <tr><td>dsh</td><td>null</td><td>null</td><td>没有这个事件</td></tr>
   </tbody>
 </table>
 <ul>
@@ -390,7 +391,7 @@ interface Usage extends TokenCounts {
     <tr><td><code>interrupted</code></td><td>agentrun 收到 SIGINT 或 SIGTERM，以第一个信号为准</td><td>130 或 143</td></tr>
     <tr><td><code>timeout</code></td><td>超过 <code>--timeout</code></td><td>3</td></tr>
     <tr><td><code>limit</code></td><td>超过 <code>--max-turns</code> 或 <code>--max-tokens</code>（由 agentrun 自己计数），且运行时没有满足 <code>finished</code> 的条件，见<a href="run.html#limits">轮数与 token 上限</a></td><td>4</td></tr>
-    <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="run.html">运行</a>。三个运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>
+    <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="run.html">运行</a>。各运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>
     <tr><td><code>finished</code></td><td>以上都不成立</td><td>0</td></tr>
   </tbody>
 </table>

@@ -1,0 +1,6 @@
+{"type":"session","sessionId":"session-47db7f80-e432-4498-b3f0-ccc929017b77","cwd":"/tmp/agentrun-probe-c85f75d4/cred-error-dsh"}
+{"type":"status","phase":"turn_start","turn":1}
+{"type":"status","phase":"step_start","turn":1,"step":1}
+{"type":"status","phase":"step_end","turn":1,"step":1}
+{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"Authentication Fails, Your api key: ****alid is invalid (request_id: 3dde78c7-e9a1-4903-a1d2-e16197b216ab)","code":"AUTH","status":401}}}
+{"type":"final","text":""}
