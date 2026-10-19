@@ -194,6 +194,7 @@ impl Session {
             SandboxKind::None,
             &exit,
             "",
+            None,
             self.started,
         );
         self.emit(&events);

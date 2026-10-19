@@ -24,6 +24,7 @@ use crate::runtime::{
     Adapter, DETAIL_MAX_CHARS, Failure, Invocation, Launch, PrivateDir, detail_tail,
 };
 use crate::sandbox::wrapper_failure;
+use crate::transcript;
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
 const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
@@ -154,7 +155,12 @@ pub(super) fn execute(
         timed_out: caller.signals.timed_out(),
         limit: relay.limit.take(),
     };
-    let status = relay.finish(&exit, wrapped, &stderr_tail, started);
+    let store = invocation
+        .args
+        .session_dir
+        .as_deref()
+        .map(|dir| transcript::store(dir, invocation.runtime));
+    let status = relay.finish(&exit, wrapped, &stderr_tail, store.as_deref(), started);
     if let Some(tempdir) = guards.tempdir.take() {
         finish_tempdir(tempdir, debug);
     }
@@ -342,6 +348,27 @@ impl<'a> Relay<'a> {
         }
     }
 
+    fn save_transcript(&mut self, store: &Path) -> Option<String> {
+        let saved = self.adapter.transcript()?;
+        match transcript::save(&saved, store) {
+            Ok(()) => Some(saved.id),
+            Err(detail) => {
+                self.error_line(&format!("agentrun: cannot save the session: {detail}"));
+                None
+            }
+        }
+    }
+
+    fn error_line(&mut self, line: &str) {
+        if self.rich_stderr {
+            let line = format!("{line}\n");
+            self.caller
+                .with_stdout(|stdout| self.output.stderr(stdout, line.as_bytes()));
+        } else {
+            self.caller.print_error_line(line);
+        }
+    }
+
     fn line(&mut self, content: &[u8]) {
         if let Some(file) = self.raw.as_mut() {
             let _ = file.write_all(content);
@@ -353,13 +380,7 @@ impl<'a> Relay<'a> {
         }
         if self.debug {
             for line in &translated.debug {
-                let line = format!("[debug] {line}\n");
-                if self.rich_stderr {
-                    self.caller
-                        .with_stdout(|stdout| self.output.stderr(stdout, line.as_bytes()));
-                } else {
-                    self.caller.print_error_line(line.trim_end());
-                }
+                self.error_line(&format!("[debug] {line}"));
             }
         }
         if translated.terminate {
@@ -392,14 +413,17 @@ impl<'a> Relay<'a> {
         exit: &Exit,
         wrapped: SandboxKind,
         stderr_tail: &str,
+        store: Option<&Path>,
         started: Instant,
     ) -> EndStatus {
+        let session_id = store.and_then(|store| self.save_transcript(store));
         let (events, status) = conclude(
             self.aggregator,
             self.adapter.as_mut(),
             wrapped,
             exit,
             stderr_tail,
+            session_id,
             started,
         );
         for event in &events {
@@ -551,6 +575,7 @@ pub fn conclude(
     wrapped: SandboxKind,
     exit: &Exit,
     stderr_tail: &str,
+    session_id: Option<String>,
     started: Instant,
 ) -> (Vec<Event>, EndStatus) {
     let mut events = aggregator.push(adapter.after_exit()).events;
@@ -578,6 +603,7 @@ pub fn conclude(
         duration_ms: elapsed_ms(started),
         usage: summary.usage,
         result: summary.result,
+        session_id,
     })));
     (events, status)
 }
@@ -597,6 +623,7 @@ mod tests {
     use super::*;
     use crate::cli::RunArgs;
     use crate::output::{Record, Signal};
+    use crate::transcript::Transcript;
 
     struct Reported(Option<Failure>);
 
@@ -628,6 +655,10 @@ mod tests {
         fn failure(&self, _: Option<i32>) -> Option<Failure> {
             self.0.clone()
         }
+
+        fn transcript(&self) -> Option<Transcript> {
+            None
+        }
     }
 
     fn detail(failure: Option<Failure>, wrapped: SandboxKind, code: i32, stderr: &str) -> String {
@@ -643,6 +674,7 @@ mod tests {
             wrapped,
             &exit,
             &stderr_tail(stderr),
+            None,
             Instant::now(),
         );
         match &events.last().unwrap().body {
@@ -707,6 +739,7 @@ mod tests {
             SandboxKind::None,
             &exit,
             "",
+            None,
             Instant::now(),
         );
         match &events.last().unwrap().body {

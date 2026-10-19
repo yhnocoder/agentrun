@@ -958,3 +958,83 @@ fn help_starts_with_package_description() {
     let help = String::from_utf8(output.stdout).unwrap();
     assert_eq!(help.lines().next(), Some(env!("CARGO_PKG_DESCRIPTION")));
 }
+
+#[test]
+fn resume_needs_session_dir() {
+    let env = Env::new();
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--resume",
+            "0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b",
+            "--prompt",
+            "hi",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        "the following required arguments were not provided: --session-dir <DIR>"
+    );
+    assert_eq!(end["session_id"], Value::Null);
+}
+
+#[test]
+fn resume_rejects_a_session_saved_by_another_runtime() {
+    let env = Env::with("pi", "#!/bin/sh\nexit 0\n");
+    let session_dir = env.root().join("sessions");
+    std::fs::create_dir_all(session_dir.join("claude-code")).unwrap();
+    std::fs::write(
+        session_dir.join("claude-code/0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b.jsonl"),
+        "{}\n",
+    )
+    .unwrap();
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--session-dir",
+            session_dir.to_str().unwrap(),
+            "--resume",
+            "0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b",
+            "--prompt",
+            "hi",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        format!(
+            "no saved pi session 0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b in {}",
+            session_dir.join("pi").display()
+        )
+    );
+    assert!(!session_dir.join("pi").exists());
+}
+
+#[test]
+fn session_dir_is_not_created_when_the_run_is_rejected() {
+    let env = Env::new();
+    let session_dir = env.root().join("sessions");
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--session-dir",
+            session_dir.to_str().unwrap(),
+            "--prompt",
+            "hi",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        support::events(&output).pop().unwrap()["status"],
+        "rejected"
+    );
+    assert!(!session_dir.exists());
+}

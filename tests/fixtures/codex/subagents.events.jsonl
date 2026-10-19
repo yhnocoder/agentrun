@@ -2,4 +2,4 @@
 {"schema":1,"type":"text","parent":null,"text":"I’ll start both subagents in parallel and wait for them to finish.\n"}
 {"schema":1,"type":"text","parent":null,"text":"done"}
 {"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":4289,"output_tokens":181,"cache_read_tokens":42624,"cache_write_tokens":0,"cost_usd":null,"context_tokens":46913}
-{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":4289,"output_tokens":181,"cache_read_tokens":42624,"cache_write_tokens":0,"cost_usd":null,"by_model":{"unknown":{"input_tokens":4289,"output_tokens":181,"cache_read_tokens":42624,"cache_write_tokens":0,"cost_usd":null}}},"result":"done"}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":4289,"output_tokens":181,"cache_read_tokens":42624,"cache_write_tokens":0,"cost_usd":null,"by_model":{"unknown":{"input_tokens":4289,"output_tokens":181,"cache_read_tokens":42624,"cache_write_tokens":0,"cost_usd":null}}},"result":"done","session_id":null}
