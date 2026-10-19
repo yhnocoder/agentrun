@@ -34,16 +34,17 @@
     <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
     <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>一次运行的顺序、退出码</td></tr>
-    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_max_turns</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>Version</code>（<code>find</code>）、<code>min_version</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>、<code>transcript</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_max_turns</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>Version</code>（<code>find</code>）、<code>min_version</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
     <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOST</code></td><td>claude-code</td></tr>
     <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>MIN_VERSION</code>、<code>Model</code>、<code>parse_model</code>、<code>model_service</code>、<code>session_state</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
     <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
+    <tr><td><code>src/transcript.rs</code></td><td><code>Saved</code>、<code>Transcript</code>、<code>store</code>、<code>create_store</code>、<code>locate</code>、<code>find_file</code>、<code>find_file_within</code>、<code>copy_into</code>、<code>save</code></td><td>保存与继续会话</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code>、<code>selected</code>、<code>COMMAND_TIMEOUT</code>、<code>USAGE_EXIT_CODE</code></td><td>doctor 检查</td></tr>
     <tr><td><code>src/image.rs</code></td><td><code>Image</code>、<code>ImageKind</code>、<code>read_images</code>、<code>write_copies</code>、<code>base64</code></td><td>图片</td></tr>
     <tr><td><code>src/json.rs</code></td><td><code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
   </tbody>
 </table>
-<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只有部分运行时支持的参数，例如 <code>--max-turns</code> 与 pi 的 <code>--model</code> 格式。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对三个运行时相同；运行时之间的差别写在适配器里，以及 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>network::proxy_needed</code>、<code>credential::write_session_credential</code> 这几个与 doctor 共用、按 <code>Runtime</code> 分支的函数里，运行框架只把 <code>Runtime</code> 传给它们。</p>
+<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只有部分运行时支持的参数，例如 <code>--max-turns</code> 与 pi 的 <code>--model</code> 格式。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量、是否由包裹命令启动、模型服务主机，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>），<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。<code>transcript</code> 在运行时退出后返回这次运行留下的会话记录：会话 id 与要移进 <code>--session-dir</code> 的文件和目录；没有给出 <code>--session-dir</code> 或运行时没有留下记录时返回 <code>None</code>，见<a href="#sessions">保存与继续会话</a>。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对三个运行时相同；运行时之间的差别写在适配器里，以及 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>network::proxy_needed</code>、<code>credential::write_session_credential</code> 这几个与 doctor 共用、按 <code>Runtime</code> 分支的函数里，运行框架只把 <code>Runtime</code> 传给它们。</p>
 
 <h2>命令行界面</h2>
 <p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>
@@ -71,6 +72,8 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--env KEY[=VALUE]</code></td><td>给会话设置一个环境变量，可重复。只写 KEY 时取调用方环境里的同名变量，见<a href="session.html#env">会话环境</a></td><td>无</td></tr>
     <tr><td><code>--env-file FILE</code></td><td>从文件读取环境变量，可重复，按给出的顺序加载</td><td>无</td></tr>
     <tr><td><code>--no-subagents</code></td><td>不允许 agent 启动 subagent。pi 没有 subagent，给出时不起作用</td><td>允许</td></tr>
+    <tr><td><code>--session-dir DIR</code></td><td>把这次运行的会话记录保存到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end</code> 事件的 <code>session_id</code> 给出会话 id，见<a href="#sessions">保存与继续会话</a></td><td>不保存</td></tr>
+    <tr><td><code>--resume ID</code></td><td>继续 <code>--session-dir</code> 里保存的会话 ID。只给 <code>--resume</code> 不给 <code>--session-dir</code> 是用法错误</td><td>新会话</td></tr>
     <tr><td><code>--format rich|text|jsonl</code></td><td>标准输出的格式，见<a href="events.html">事件与输出</a></td><td>标准输出是终端时 <code>rich</code>，否则 <code>jsonl</code></td></tr>
     <tr><td><code>--raw FILE</code></td><td>把运行时的原始标准输出逐行写入这个文件，包括无法解析的行</td><td>不写</td></tr>
     <tr><td><code>--debug</code></td><td>在标准错误输出实际执行的命令、会话 PATH、被删除与被设置的环境变量名、凭据写入情况、沙箱检查结果、临时目录的路径与 codex 私有目录的路径（<code>codex home: </code>）；保留本次运行的临时目录与 codex 私有目录；没有给 <code>--raw</code> 时，原始输出写入临时目录里的 <code>raw.jsonl</code></td><td>不开</td></tr>
@@ -120,6 +123,7 @@ agentrun variables: (none)</div>
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败。</li>
+  <li><code>--session-dir</code> 的目录创建失败，或 <code>--resume</code> 给出的会话在 <code>--session-dir</code> 里找不到。</li>
   <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
   <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>。</li>
   <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的状态目录创建失败或 Seatbelt 配置文件写不出、codex 的登录文件不存在或私有目录创建失败。</li>
@@ -127,6 +131,38 @@ agentrun variables: (none)</div>
 <p>过滤代理启动失败先于 codex 登录文件与私有目录的检查：两者同时成立时，<code>detail</code> 是过滤代理那一条。</p>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 <p><code>run::run</code> 解析命令行后，把运行时子命令交给运行框架，把 <code>doctor</code> 与 <code>doctor-connect</code> 分别交给 <code>doctor::run</code> 与 <code>doctor::connect</code>。运行时子命令被拒绝时的 <code>end</code> 只由 <code>run::run</code> 输出。</p>
+
+<h2 id="sessions">保存与继续会话</h2>
+<p>给出 <code>--session-dir DIR</code> 时，agentrun 在运行时退出后把这次运行的会话记录移到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end.session_id</code> 是会话 id。下一次运行给出同一个 <code>--session-dir</code> 与 <code>--resume &lt;会话 id&gt;</code>，运行时接着这段会话继续：会话 id 不变，新内容追加到同一份记录。不给 <code>--session-dir</code> 时三个运行时都不保存会话。<code>--resume</code> 只从 <code>DIR</code> 读，不读用户自己的会话记录；codex 与 pi 运行期间把记录写在私有目录或会话临时目录里，claude-code 的新会话运行期间写在用户的配置目录里，见下表与<a href="isolation.html#config">配置与账号</a>。</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --session-dir ~/agent-sessions --format text --prompt "Remember the word PELICAN. Reply only OK."
+[main] prompt Remember the word PELICAN. Reply only OK.
+[main] text OK
+[end] finished 1.8s  in 2.2k  out 2  cached 93%  $0.0001  session 01a152a2-6878-70d1-8e7f-3877dfb11836
+<span class="prompt">$</span> agentrun pi --session-dir ~/agent-sessions --resume 01a152a2-6878-70d1-8e7f-3877dfb11836 --format text --prompt "What word did I ask you to remember? One word."
+[main] prompt What word did I ask you to remember? One word.
+[main] text PELICAN
+[end] finished 2.0s  in 2.2k  out 5  cached 92%  $0.0001  session 01a152a2-6878-70d1-8e7f-3877dfb11836</div>
+<ul>
+  <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。目录在所有启动前检查通过之后才创建，<code>--dry-run</code> 与被拒绝的运行不创建目录。<code>DIR</code> 要放在工作目录与会话临时目录之外：沙箱里的 agent 能写这两处，<code>DIR</code> 在里面时 agent 能改写已保存的会话。</li>
+  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 必须是完整的会话 id，三个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
+  <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。源与目标不在同一个文件系统时先复制再删除源。</li>
+  <li>继续时 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）。<code>--model</code> 等选项每次照常传给运行时。</li>
+  <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex 与 pi 后结束的那次覆盖先结束的那次。</li>
+</ul>
+<table>
+  <thead>
+    <tr><th>运行时</th><th>新会话</th><th>继续会话</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>不加 <code>--no-session-persistence</code>，仍传新生成的 <code>--session-id</code>。claude-code 把记录写在 <code>&lt;配置目录&gt;/projects/&lt;由 cwd 转换的目录名&gt;/&lt;id&gt;.jsonl</code>，subagent 的记录在同级的 <code>&lt;id&gt;/</code>；配置目录是会话环境里的 <code>CLAUDE_CONFIG_DIR</code>，未设时为 <code>~/.claude</code>。运行结束后 agentrun 在 <code>projects/</code> 的各个子目录里按文件名找 <code>&lt;id&gt;.jsonl</code>（只读目录列表，不读文件内容），把它与 <code>&lt;id&gt;/</code> 移到 <code>DIR/claude-code/</code>，<code>&lt;由 cwd 转换的目录名&gt;</code> 变空时删除。目录里还有别的内容时保留。会话环境里既没有 <code>CLAUDE_CONFIG_DIR</code> 也没有 <code>HOME</code> 时仍加 <code>--no-session-persistence</code>，不保存，<code>session_id</code> 为 null</td><td>用 <code>--resume &lt;DIR/claude-code/&lt;id&gt;.jsonl&gt;</code> 代替 <code>--session-id</code>。claude-code 直接在这个文件末尾追加，subagent 的记录写在它旁边的 <code>&lt;id&gt;/</code>，不写配置目录（2.1.288 与 2.1.303 实测，2.1.303 在 macOS 上用钥匙串登录同样如此）</td></tr>
+    <tr><td>codex</td><td>记录在私有目录里的 <code>sessions/YYYY/MM/DD/rollout-&lt;时间&gt;-&lt;id&gt;.jsonl</code>，id 取 <code>thread.started</code> 的 <code>thread_id</code>。运行结束后移到 <code>DIR/codex/</code>。subagent 的记录不保存</td><td>启动前把保存的文件复制进私有目录的 <code>sessions/</code>，argv 在最后的 <code>-</code> 之前加 <code>resume &lt;id&gt;</code>。codex 在 <code>sessions/</code> 下按 id 找到文件并在末尾追加。运行结束后 agentrun 在 <code>sessions/</code> 下取文件名含这个 id、修改时间最新的文件，移回 <code>DIR/codex/</code> 覆盖原文件（0.159.2 与 0.163.0 用模拟的模型服务实测，0.160.1 在 macOS 上用真实模型实测）</td></tr>
+    <tr><td>pi</td><td><code>--no-session</code> 换成 <code>--session-dir &lt;会话临时目录&gt;/pi-session</code>，id 取输出里 <code>session</code> 行的 <code>id</code>。运行结束后把记录移到 <code>DIR/pi/</code></td><td>启动前把保存的文件复制进 <code>&lt;会话临时目录&gt;/pi-session/</code>，传 <code>--session &lt;复制后的路径&gt;</code>，运行结束后移回 <code>DIR/pi/</code> 覆盖原文件。不用 pi 的 <code>--session-id</code>：它只在与第一次相同的 cwd 下找得到会话，换一个 cwd 会新建一个 id 相同的会话（1.2.0 实测）</td></tr>
+  </tbody>
+</table>
+<ul>
+  <li>claude-code 的新会话写在用户的配置目录里，运行结束后才移走。理由：claude-code 不能把新会话直接写到别的位置（<code>--resume</code> 指向空文件、不存在的文件或只有元数据行没有对话的文件时都报 <code>No conversation found</code>，2.1.303 实测）；改 <code>CLAUDE_CONFIG_DIR</code> 会改变 claude-code 读登录信息的位置：Linux 上登录文件在配置目录里，macOS 上钥匙串里的登录条目名随配置目录改变（未实测）。代价是运行期间这份记录出现在用户自己的 <code>claude --resume</code> 列表里，agentrun 被 SIGKILL 时它留在那里。</li>
+  <li>pi 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。前提是 <code>DIR</code> 在工作目录与会话临时目录之外。理由：pi 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
+</ul>
 
 <h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
@@ -203,8 +239,8 @@ agentrun variables: (none)</div>
   --permission-mode dontAsk|auto
   --setting-sources ""
   --strict-mcp-config
-  --no-session-persistence
-  --session-id &lt;新生成的 UUID v4&gt;
+  [--no-session-persistence]
+  --session-id &lt;新生成的 UUID v4&gt; | --resume &lt;保存的会话文件&gt;
   --tools Read,Edit,Write,Glob,Grep,Bash,Task
   --allowedTools &lt;放行列表&gt;
   [--settings &lt;沙箱设置&gt;]
@@ -214,7 +250,7 @@ agentrun variables: (none)</div>
   <li><code>--setting-sources ""</code> 不加载用户、项目与本地设置，工作目录里的 <code>CLAUDE.md</code> 不进入模型上下文（实测）。因此沙箱设置只来自 <code>--settings</code>。</li>
   <li>会话环境设置 <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>，关闭 auto-memory。理由：<code>--setting-sources ""</code> 不关闭它，claude-code 仍把用户的 <code>~/.claude/projects/&lt;项目&gt;/memory/MEMORY.md</code> 放进模型上下文；设置这个变量后，请求里不再有这个文件的内容与 memory 的说明（claude 2.1.288 与 2.1.303 云端实测）。这个变量在 <code>--env</code> 之后设置，调用方不能用 <code>--env</code> 改回。</li>
   <li><code>--strict-mcp-config</code> 不加载任何 MCP 服务器。</li>
-  <li><code>--session-id</code> 每次新生成，与 <code>--no-session-persistence</code> 一起用。理由：在 Claude Code 会话里运行 agentrun 时，<code>claude -p</code> 子进程会继承父会话的 id，把记录写进父会话，只加 <code>--no-session-persistence</code> 不能避免。</li>
+  <li>新会话的 <code>--session-id</code> 每次新生成。理由：在 Claude Code 会话里运行 agentrun 时，<code>claude -p</code> 子进程会继承父会话的 id，把记录写进父会话，只加 <code>--no-session-persistence</code> 不能避免。没有给出 <code>--session-dir</code> 时另加 <code>--no-session-persistence</code>；给出时不加，继续会话时用 <code>--resume</code> 代替 <code>--session-id</code>，见<a href="#sessions">保存与继续会话</a>。</li>
   <li><code>--tools</code> 限定可用的内置工具，去掉网页工具与技能等。<code>--allowedTools</code> 放行列出的工具，不经权限判断。Bash 不在放行列表里：沙箱打开时由 <code>autoAllowBashIfSandboxed</code> 自动放行，沙箱没有运行时由 auto 模式逐条判断。只用 <code>--tools</code> 而不放行时，auto 模式会拒绝 Write，且结果仍报告成功（实测）。</li>
   <li>沙箱打开时权限模式是 <code>dontAsk</code>，放行列表是 <code>Read,Glob,Grep,Task</code> 加上 <code>Edit(//&lt;cwd&gt;/**)</code>、<code>Write(//&lt;cwd&gt;/**)</code>、<code>Edit(//&lt;会话临时目录&gt;/**)</code>、<code>Write(//&lt;会话临时目录&gt;/**)</code>；沙箱没有运行时权限模式是 <code>auto</code>，放行列表是 <code>Read,Edit,Write,Glob,Grep,Task</code>。理由见<a href="isolation.html">沙箱与网络</a>。规则里的绝对路径以 <code>//</code> 开头，只写一个 <code>/</code> 时规则不匹配（实测）。</li>
   <li>启动 subagent 的工具在参数与 <code>system/init</code> 的工具列表里叫 <code>Task</code>，在输出的 <code>tool_use</code> 里叫 <code>Agent</code>，两个名字都要识别。<code>--no-subagents</code> 从 <code>--tools</code> 与 <code>--allowedTools</code> 里去掉 <code>Task</code>，生效与否看 init 的工具列表里有没有 <code>Task</code>。</li>
@@ -294,7 +330,8 @@ agentrun variables: (none)</div>
 
 <h2 id="pi">pi</h2>
 <h3>参数</h3>
-<pre><code class="language-bash">&lt;pi 的绝对路径&gt; -p --mode json --no-session
+<pre><code class="language-bash">&lt;pi 的绝对路径&gt; -p --mode json
+  --no-session | --session-dir &lt;临时目录&gt;/pi-session | --session &lt;临时目录&gt;/pi-session/&lt;文件名&gt;
   --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files
   --no-approve --offline
   --tools read,bash,edit,write,grep,find,ls
@@ -377,7 +414,7 @@ agentrun variables: (none)</div>
   --disable computer_use --disable browser_use --disable browser_use_external
   --disable in_app_browser --disable daemon_auto_start
   [-m ID] [-c model_reasoning_effort="LEVEL"]
-  &lt;-- 之后的调用方参数&gt; -</code></pre>
+  &lt;-- 之后的调用方参数&gt; [resume &lt;会话 id&gt;] -</code></pre>
 <ul>
   <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#codex-home">私有配置目录</a>；它不出现在 argv、<code>start.env</code> 与 <code>set:</code> 行里。最后的 <code>-</code> 表示从标准输入读提示词，提示词原文写入标准输入后关闭。</li>
   <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
@@ -397,7 +434,7 @@ agentrun variables: (none)</div>
   <li>写进 <code>-c</code> 值的字符串按 TOML 基本字符串写：外加双引号，<code>\</code> 写成 <code>\\</code>，<code>"</code> 写成 <code>\"</code>，控制字符写成 <code>\uXXXX</code>。用于会话临时目录路径、<code>--effort</code> 的值与主机名。</li>
   <li><code>--dry-run</code> 时会话临时目录写成 <code>&lt;tempdir&gt;</code>，私有目录写成 <code>&lt;tempdir&gt;-codex</code>（只在环境里，不在 argv 里）。</li>
   <li>登录文件的检查与私有目录的创建由 <code>Codex::launch</code> 做。用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）不存在、也没有给出 <code>AGENTRUN_CODEX_AUTH</code> 时启动前报错，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>codex login file &lt;路径&gt; not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</code>。私有目录创建失败的 <code>detail</code> 为 <code>cannot create the codex home directory &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
-  <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除。</li>
+  <li>不加 <code>--ephemeral</code>：加了以后 subagent 无法启动（报 <code>no rollout found for thread id</code>，codex 0.159.2 实测）。会话记录写进私有目录，随它一起删除；给出 <code>--session-dir</code> 时先移到 <code>DIR/codex/</code>，见<a href="#sessions">保存与继续会话</a>。<code>resume</code> 子命令没有自己的 <code>-C</code>，写在它前面的 <code>-C</code>、<code>-c</code>、<code>--disable</code>、<code>-m</code> 照常生效（0.159.2 与 0.163.0 实测）。</li>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
   <li><code>--max-turns</code> 是用法错误。</li>

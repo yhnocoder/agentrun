@@ -91,7 +91,7 @@ GREETING='hello world'</code></pre>
 <h2 id="tmpdir">会话临时目录</h2>
 <p>工具在 <code>$TMPDIR</code>（未设或为空时为 <code>/tmp</code>）下创建 <code>agentrun-&lt;随机后缀&gt;</code>，权限 0700。会话的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向它，沙箱把它加入可写路径。正常结束、失败、超时与被中断时都删除它；给了 <code>--debug</code> 时保留，路径写到标准错误。claude-code 的沙箱把命令看到的 <code>TMPDIR</code> 改成名为 <code>claude-&lt;uid&gt;</code> 的目录：Linux 上它在会话临时目录之下（云端与本机 Linux 实测）；macOS 上它是 <code>/tmp/claude-&lt;uid&gt;</code>，由同一用户的所有 claude 会话共用（macOS 实测）。macOS 上的这个差异被接受，agentrun 不为此限制会话临时目录的位置。</p>
 <p>理由：工作目录里不出现临时文件；只开放这一个目录，不把整个 <code>/tmp</code> 设为可写，因为 <code>/tmp</code> 由整台机器共用，里面有其他程序的文件与 socket。</p>
-<p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>。</p>
+<p>agentrun 自己的文件也放在这里：pi 包裹用的 Seatbelt 配置 <code>seatbelt.sb</code>、过滤代理的 Unix socket、<code>--debug</code> 下的 <code>raw.jsonl</code>，以及给出 <code>--session-dir</code> 时 pi 的会话记录 <code>pi-session/</code>（运行结束后移到 <code>--session-dir</code>，见<a href="run.html#sessions">保存与继续会话</a>）。</p>
 
 <h2 id="runtime-home">pi 的状态目录与 codex 的私有配置目录</h2>
 <h3 id="pi-state">pi 使用用户的状态目录</h3>
@@ -105,7 +105,7 @@ GREETING='hello world'</code></pre>
     <tr><th>位置</th><th>内容</th></tr>
   </thead>
   <tbody>
-    <tr><td>与会话临时目录同级的 <code>agentrun-&lt;同一后缀&gt;-codex/</code>，<code>CODEX_HOME</code> 指向它</td><td><code>auth.json</code>：指向用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）的符号链接。codex 运行中在这里写它自己的数据库与缓存</td></tr>
+    <tr><td>与会话临时目录同级的 <code>agentrun-&lt;同一后缀&gt;-codex/</code>，<code>CODEX_HOME</code> 指向它</td><td><code>auth.json</code>：指向用户登录文件（<code>$CODEX_HOME/auth.json</code>，未设时为 <code>~/.codex/auth.json</code>）的符号链接。继续会话时另有 <code>sessions/</code> 下复制进来的会话记录，见<a href="run.html#sessions">保存与继续会话</a>。codex 运行中在这里写它自己的数据库、缓存与会话记录</td></tr>
   </tbody>
 </table>
 <p>用户登录文件的位置按应用 <code>--env-file</code> 与 <code>--env</code> 之后的会话环境计算。调用方给出的 <code>CODEX_HOME</code> 只决定从哪里带入登录文件，组装环境的最后一步把这个变量改为指向私有目录。</p>

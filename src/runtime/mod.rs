@@ -14,6 +14,7 @@ use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{Record, SandboxKind};
 use crate::sandbox::{PiState, Sandbox, Wrapper};
 use crate::session::Session;
+use crate::transcript::{Saved, Transcript};
 use claudecode::ClaudeCode;
 use codex::Codex;
 use pi::Pi;
@@ -28,6 +29,7 @@ pub trait Adapter {
     fn translate(&mut self, line: &Value) -> Vec<Record>;
     fn after_exit(&mut self) -> Vec<Record>;
     fn failure(&self, exit_code: Option<i32>) -> Option<Failure>;
+    fn transcript(&self) -> Option<Transcript>;
 }
 
 pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
@@ -166,6 +168,7 @@ pub struct Invocation {
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
     pub proxy: Option<ProxyEndpoint>,
+    pub resume: Option<Saved>,
 }
 
 impl Invocation {
@@ -188,6 +191,7 @@ impl Invocation {
             session,
             allow_hosts: Vec::new(),
             proxy: None,
+            resume: None,
         }
     }
 }

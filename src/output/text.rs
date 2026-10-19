@@ -110,6 +110,10 @@ impl TextFormatter {
                     line.push_str("  ");
                     line.push_str(&cost(usd));
                 }
+                if let Some(id) = &end.session_id {
+                    line.push_str("  session ");
+                    line.push_str(id);
+                }
                 if !end.detail.is_empty() {
                     line.push_str("  ");
                     line.push_str(&single_line(&end.detail));
@@ -239,6 +243,7 @@ mod tests {
                 by_model: Default::default(),
             },
             result: None,
+            session_id: None,
         }))
     }
 
@@ -475,6 +480,14 @@ mod tests {
                 TokenCounts::default()
             )),
             vec!["[end] rejected claude not found in PATH"]
+        );
+        let mut saved = end(EndStatus::Failed, "boom", counts(None, Some(3), None, None));
+        if let Body::End(end) = &mut saved.body {
+            end.session_id = Some("0199-a".to_string());
+        }
+        assert_eq!(
+            text.lines(&saved),
+            vec!["[end] failed 31.3s  out 3  session 0199-a  boom"]
         );
     }
 

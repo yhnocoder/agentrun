@@ -153,6 +153,7 @@ interface EndEvent extends EventBase {
   duration_ms: number        // 从 agentrun 开始解析命令行到输出 end
   usage: Usage
   result: string | null      // 主 agent 最后一段文字
+  session_id: string | null  // 这次运行保存进 --session-dir 的会话 id，没有保存时为 null
 }
 
 interface TokenCounts {
@@ -324,7 +325,8 @@ interface Usage extends TokenCounts {
       }
     }
   },
-  "result": "测试全部通过。"
+  "result": "测试全部通过。",
+  "session_id": null
 }</code></pre>
 <h3>提示词</h3>
 <p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。<code>images</code> 列出调用方用 <code>--image</code> 给出的路径，不转成绝对路径，路径里不是 UTF-8 的字节换成 U+FFFD；不写图片内容，也不写 agentrun 在会话临时目录里写的副本路径，见<a href="run.html#images">图片</a>。</p>
@@ -389,6 +391,7 @@ interface Usage extends TokenCounts {
   <li><code>detail</code>：<code>failed</code> 时是运行时给出的错误信息，没有时是标准错误的最后 500 个字符，再没有时是一句固定说明；<code>rejected</code> 时是原因与修正方法；其余为空字符串。</li>
   <li><code>result</code>：主 agent 最后一段文字，没有时为 null。调用方只需要答案时读这一项。</li>
   <li><code>interrupted</code> 与 <code>timeout</code> 时，<code>result</code> 与 <code>usage</code> 照常取已经收到的内容。</li>
+  <li><code>session_id</code>：给出 <code>--session-dir</code> 且运行时留下了会话记录时，是保存进去的会话 id，可以传给下一次运行的 <code>--resume</code>；其余为 null。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行只要留下了记录也照样保存，见<a href="run.html#sessions">保存与继续会话</a>。</li>
 </ul>
 
 <h2>text 格式</h2>
@@ -402,7 +405,7 @@ interface Usage extends TokenCounts {
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net denied 主机:端口 (原因)</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
-  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、费用与 <code>detail</code>；费用写成 <code>$</code> 加四位小数，例如 <code>$0.0437</code>，<code>end.usage.cost_usd</code> 为 null 时省去；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、费用、<code>session 会话id</code>（<code>session_id</code> 不为 null 时）与 <code>detail</code>；费用写成 <code>$</code> 加四位小数，例如 <code>$0.0437</code>，<code>end.usage.cost_usd</code> 为 null 时省去；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
   <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
   <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
   <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>

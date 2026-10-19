@@ -12,6 +12,7 @@ use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
+use crate::transcript::{Transcript, find_file};
 
 pub(crate) const MIN_VERSION: Version = Version(2, 1, 288);
 pub(crate) const SERVICE_HOST: &str = "api.anthropic.com";
@@ -33,6 +34,9 @@ const SYNTHETIC_MODEL: &str = "<synthetic>";
 const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
 const RANDOM_SOURCE: &str = "/dev/urandom";
+const CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
+const CONFIG_HOME_SUBDIR: &str = ".claude";
+const PROJECTS_SUBDIR: &str = "projects";
 
 #[derive(Default)]
 pub struct ClaudeCode {
@@ -43,6 +47,16 @@ pub struct ClaudeCode {
     denied: HashSet<String>,
     pending_usages: Vec<PendingUsage>,
     last_result: Option<LastResult>,
+    session_id: String,
+    saving: Saving,
+}
+
+#[derive(Default, PartialEq, Eq)]
+enum Saving {
+    #[default]
+    Off,
+    FromProjects(PathBuf),
+    InPlace,
 }
 
 struct LastResult {
@@ -314,7 +328,19 @@ impl Adapter for ClaudeCode {
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
         self.cwd = invocation.cwd.clone();
         self.no_subagents = invocation.args.no_subagents;
-        let session_id = session_id()?;
+        self.session_id = match &invocation.resume {
+            Some(saved) => saved.id.clone(),
+            None => session_id()?,
+        };
+        self.saving = match (&invocation.args.session_dir, &invocation.resume) {
+            (None, _) => Saving::Off,
+            (Some(_), Some(_)) => Saving::InPlace,
+            (Some(_), None) => invocation
+                .session
+                .runtime_dir(&invocation.cwd, CONFIG_DIR_VARIABLE, CONFIG_HOME_SUBDIR)
+                .map(|dir| Saving::FromProjects(dir.join(PROJECTS_SUBDIR)))
+                .unwrap_or(Saving::Off),
+        };
         let sandboxed = invocation.sandbox.runs();
         let cwd = invocation.cwd.to_string_lossy();
         let tempdir = invocation.tempdir.to_string_lossy();
@@ -367,14 +393,26 @@ impl Adapter for ClaudeCode {
             "--setting-sources".to_string(),
             String::new(),
             "--strict-mcp-config".to_string(),
-            "--no-session-persistence".to_string(),
-            "--session-id".to_string(),
-            session_id,
+        ];
+        if self.saving == Saving::Off {
+            argv.push("--no-session-persistence".to_string());
+        }
+        match &invocation.resume {
+            Some(saved) => {
+                argv.push("--resume".to_string());
+                argv.push(saved.file.to_string_lossy().into_owned());
+            }
+            None => {
+                argv.push("--session-id".to_string());
+                argv.push(self.session_id.clone());
+            }
+        }
+        argv.extend([
             "--tools".to_string(),
             tools.join(","),
             "--allowedTools".to_string(),
             allowed.join(","),
-        ];
+        ]);
         if sandboxed {
             argv.push("--settings".to_string());
             argv.push(sandbox_settings(
@@ -475,6 +513,31 @@ impl Adapter for ClaudeCode {
             None => Some(Failure::Message(NO_RESULT_DETAIL.to_string())),
             Some(_) => None,
         }
+    }
+
+    fn transcript(&self) -> Option<Transcript> {
+        let (entries, emptied_dir) = match &self.saving {
+            Saving::Off => return None,
+            Saving::InPlace => (Vec::new(), None),
+            Saving::FromProjects(projects) => {
+                let file = std::fs::read_dir(projects)
+                    .ok()?
+                    .flatten()
+                    .find_map(|entry| find_file(&entry.path(), &self.session_id))?;
+                let dir = file.with_file_name(&self.session_id);
+                let project = file.parent().map(Path::to_path_buf);
+                let mut entries = vec![file];
+                if dir.is_dir() {
+                    entries.push(dir);
+                }
+                (entries, project)
+            }
+        };
+        Some(Transcript {
+            id: self.session_id.clone(),
+            entries,
+            emptied_dir,
+        })
     }
 }
 
@@ -1320,5 +1383,115 @@ mod tests {
         assert_eq!(adapter.failure(Some(0)), Some(Failure::Unexplained));
         adapter.translate(&json!({"type": "result", "is_error": true, "result": ""}));
         assert_eq!(adapter.failure(Some(0)), Some(Failure::Unexplained));
+    }
+
+    const SAVED_ID: &str = "0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b";
+
+    fn saved_session(file: &Path) -> crate::transcript::Saved {
+        crate::transcript::Saved {
+            id: SAVED_ID.to_string(),
+            file: file.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn session_dir_keeps_the_session_and_resume_passes_the_saved_file() {
+        let root = tempfile::tempdir().unwrap();
+        let (adapter, configured) = with_config_dir(root.path(), &["--session-dir", "/saved"]);
+        let new = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &configured)
+            .unwrap();
+        assert!(adapter.saving != Saving::Off);
+        assert!(!new.argv.contains(&"--no-session-persistence".to_string()));
+        assert!(new.argv.contains(&"--session-id".to_string()));
+        assert!(!new.argv.contains(&"--resume".to_string()));
+
+        let without_config = launch(false, &["--session-dir", "/saved"]);
+        assert!(
+            without_config
+                .argv
+                .contains(&"--no-session-persistence".to_string())
+        );
+
+        let file = PathBuf::from(format!("/saved/claude-code/{SAVED_ID}.jsonl"));
+        let mut invocation = invocation(false, &["--session-dir", "/saved", "--resume", SAVED_ID]);
+        invocation.resume = Some(saved_session(&file));
+        let resumed = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        let index = resumed
+            .argv
+            .iter()
+            .position(|arg| arg == "--resume")
+            .unwrap();
+        assert_eq!(resumed.argv[index + 1], file.to_string_lossy());
+        assert!(!resumed.argv.contains(&"--session-id".to_string()));
+        assert!(
+            !resumed
+                .argv
+                .contains(&"--no-session-persistence".to_string())
+        );
+    }
+
+    fn with_config_dir(config: &Path, extra: &[&str]) -> (ClaudeCode, Invocation) {
+        let mut invocation = invocation(false, extra);
+        invocation.session = Session::assemble(
+            Runtime::ClaudeCode,
+            &[(
+                OsString::from("CLAUDE_CONFIG_DIR"),
+                config.as_os_str().to_owned(),
+            )],
+            &[],
+            &[],
+            &[],
+        );
+        let mut adapter = ClaudeCode::new();
+        adapter
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        (adapter, invocation)
+    }
+
+    #[test]
+    fn transcript_of_a_new_session_comes_from_the_config_projects_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config");
+        let (adapter, _) = with_config_dir(&config, &["--session-dir", "/saved"]);
+        assert_eq!(adapter.transcript(), None);
+        let project = config.join("projects/-work-repo");
+        std::fs::create_dir_all(project.join(&adapter.session_id).join("subagents")).unwrap();
+        let file = project.join(format!("{}.jsonl", adapter.session_id));
+        std::fs::write(&file, "{}\n").unwrap();
+        std::fs::create_dir_all(config.join("projects/-other")).unwrap();
+        assert_eq!(
+            adapter.transcript(),
+            Some(Transcript {
+                id: adapter.session_id.clone(),
+                entries: vec![file, project.join(&adapter.session_id)],
+                emptied_dir: Some(project),
+            })
+        );
+
+        let (unsaved, _) = with_config_dir(&config, &[]);
+        assert_eq!(unsaved.transcript(), None);
+    }
+
+    #[test]
+    fn transcript_of_a_resumed_session_is_already_in_place() {
+        let file = PathBuf::from(format!("/saved/claude-code/{SAVED_ID}.jsonl"));
+        let mut invocation = invocation(false, &["--session-dir", "/saved", "--resume", SAVED_ID]);
+        invocation.resume = Some(saved_session(&file));
+        let mut adapter = ClaudeCode::new();
+        adapter
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        assert_eq!(
+            adapter.transcript(),
+            Some(Transcript {
+                id: SAVED_ID.to_string(),
+                entries: Vec::new(),
+                emptied_dir: None,
+            })
+        );
     }
 }

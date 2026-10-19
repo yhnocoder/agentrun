@@ -723,6 +723,8 @@ impl Doctor {
             env: self.args.env.clone(),
             env_file: self.args.env_file.clone(),
             no_subagents: false,
+            session_dir: None,
+            resume: None,
             format: Some(Format::Jsonl),
             raw: None,
             debug: self.args.debug,

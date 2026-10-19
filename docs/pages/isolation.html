@@ -210,16 +210,17 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </table>
 <p>后两个主机取自 codex 0.159.2 内置的地址，没有实测。只放行前两个时，令牌过期的那次运行刷新失败，API key 登录完全不能用。</p>
 
-<h2>配置与账号</h2>
+<h2 id="config">配置与账号</h2>
 <p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
-  <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，关闭 auto-memory，不保存会话，每次传一个新生成的会话 id。沙箱打开时 auto-memory 目录改到会话临时目录，agent 不能写用户的 memory 目录。</li>
+  <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，关闭 auto-memory，新会话每次传一个新生成的会话 id。沙箱打开时 auto-memory 目录改到会话临时目录，agent 不能写用户的 memory 目录。</li>
   <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#codex-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
-  <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
+  <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>
+<p>三个运行时默认都不保存会话。调用方给出 <code>--session-dir</code> 时，运行结束后会话记录移到那个目录，<code>--resume</code> 只从那里读，不读用户自己的会话记录。运行期间 codex 的记录在私有目录里，pi 的记录在会话临时目录里；claude-code 的新会话写在用户配置目录的 <code>projects/</code> 里，结束后才移走，带来的风险见<a href="#residual">剩余风险</a>，做法见<a href="run.html#sessions">保存与继续会话</a>。</p>
 <p>账号由登录方式决定。会话环境按运行时删除会改变登录方式的变量，容器里的凭据由环境变量写入登录文件，见<a href="session.html">会话环境</a>。</p>
 
-<h2>剩余风险</h2>
+<h2 id="residual">剩余风险</h2>
 <table>
   <thead>
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
@@ -230,6 +231,12 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>pi</td><td>能读用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。agent 可以把状态目录里的 <code>auth.json</code> 换成指向其他文件的符号链接，之后带 <code>AGENTRUN_PI_AUTH</code> 运行时，agentrun 把凭据写到那个文件，这个文件可以在沙箱之外，见<a href="session.html#credentials">凭据</a>。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能写容器内任何位置、能联网，边界是容器</td></tr>
   </tbody>
 </table>
+<p>保存会话（<code>--session-dir</code>）的剩余风险：</p>
+<ul>
+  <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。只有给出 <code>--session-dir</code> 时这样做，不给时仍加 <code>--no-session-persistence</code>，不写记录。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行同样在结束时移走（云端实测 <code>interrupted</code> 与 <code>timeout</code>）。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在用户的配置目录里。运行期间用户在同一个工作目录里运行 <code>claude --continue</code> 可能接上这次运行的会话，用户写进去的内容在运行结束时随记录一起被移到 <code>--session-dir</code>。</li>
+  <li>pi 的记录在运行期间放在会话临时目录里，沙箱里的 agent 能改写这次会话的记录，改写后的内容随记录一起保存，下次继续时进入模型上下文。其他会话的记录 agent 写不到。</li>
+  <li><code>--session-dir</code> 放在工作目录或会话临时目录之内时，沙箱里的 agent 能改写已保存的全部会话，改写的内容在下次继续时进入模型上下文。agentrun 不检查这一点，由调用方把目录放在两者之外。</li>
+</ul>
 <p>过滤代理本身的剩余风险：</p>
 <ul>
   <li>HTTPS 只按 <code>CONNECT</code> 的主机名与端口判定，TLS 里的 SNI 与 <code>Host</code> 不检查。放行的主机如果和别的站点共用 IP 并按 SNI 选站点，隧道里可以访问那些站点。</li>
