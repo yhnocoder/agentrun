@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use httparse::Status;
+
 use super::address::{Target, is_private, target_text};
 use super::http::handle_http;
 use super::rule::{Allowance, Policy};
@@ -365,11 +367,16 @@ fn tunnel_through(
         HeadError::Read(error) => upstream_failure(error),
     })?;
     let _ = stream.set_read_timeout(None);
-    let status = String::from_utf8_lossy(&head);
-    let code = status
-        .split(' ')
-        .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())
+    let mut slots = header_slots(&head);
+    let mut response = httparse::Response::new(&mut slots);
+    let mut config = httparse::ParserConfig::default();
+    config
+        .allow_spaces_after_header_name_in_responses(true)
+        .allow_obsolete_multiline_headers_in_responses(true);
+    let parsed = config.parse_response(&mut response, &head);
+    let code = response
+        .code
+        .filter(|_| parses_whole_head(parsed, &head))
         .ok_or(INVALID_UPSTREAM_RESPONSE)?;
     if (200..300).contains(&code) {
         Ok((stream, leftover))
@@ -465,6 +472,14 @@ pub(super) fn read_head(
         };
         buffer.extend_from_slice(&chunk[..count]);
     }
+}
+
+pub(super) fn header_slots(head: &[u8]) -> Vec<httparse::Header<'_>> {
+    vec![httparse::EMPTY_HEADER; head.iter().filter(|byte| **byte == b'\n').count()]
+}
+
+pub(super) fn parses_whole_head(parsed: httparse::Result<usize>, head: &[u8]) -> bool {
+    matches!(parsed, Ok(Status::Complete(length)) if length == head.len())
 }
 
 fn find_blank_line(buffer: &[u8]) -> Option<usize> {

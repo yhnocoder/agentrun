@@ -4,6 +4,8 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
+use uuid::Uuid;
+use uuid::fmt::Hyphenated;
 
 use crate::cli::Runtime;
 use crate::runtime::dsh;
@@ -11,7 +13,6 @@ use crate::runtime::dsh;
 const FILE_SUFFIX: &str = ".jsonl";
 const STAGED_SUFFIX: &str = ".agentrun-saving";
 const REPLACED_SUFFIX: &str = ".agentrun-replaced";
-const UUID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Saved {
@@ -82,11 +83,7 @@ fn saved(store: &Path, runtime: Runtime, id: &str) -> Option<PathBuf> {
 }
 
 fn is_session_id(id: &str) -> bool {
-    let groups: Vec<&str> = id.split('-').collect();
-    groups.len() == UUID_GROUPS.len()
-        && groups.iter().zip(UUID_GROUPS).all(|(group, length)| {
-            group.len() == length && group.chars().all(|c| c.is_ascii_hexdigit())
-        })
+    id.len() == Hyphenated::LENGTH && Uuid::try_parse(id).is_ok()
 }
 
 pub fn find_file(dir: &Path, id: &str) -> Option<PathBuf> {

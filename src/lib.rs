@@ -1,7 +1,6 @@
 pub mod cli;
 mod credential;
 pub mod doctor;
-mod encoding;
 mod image;
 mod json;
 pub mod network;
