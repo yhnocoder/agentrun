@@ -28,7 +28,7 @@ use crate::sandbox::wrapper_failure;
 use crate::transcript;
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
-pub(crate) const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
 pub struct Exit {

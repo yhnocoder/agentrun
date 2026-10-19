@@ -60,7 +60,9 @@ pub(crate) fn url_host(url: &str) -> Option<String> {
     let host_port = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    parse_host_port(host_port, Some(0)).map(|target| target.host)
+    parse_host_port(host_port, Some(0))
+        .map(|target| target.host)
+        .filter(|host| !host.contains(':'))
 }
 
 pub(super) fn normalize_host(host: &str) -> Option<String> {
@@ -106,7 +108,8 @@ mod tests {
             ("https://API.DeepSeek.com/v1?x=1", Some("api.deepseek.com")),
             ("http://127.0.0.1:8080/", Some("127.0.0.1")),
             ("https://a:b@host.example#f", Some("host.example")),
-            ("https://[::1]:443/", Some("::1")),
+            ("https://[::1]:443/", None),
+            ("http://host.example:abc/", None),
             ("https://host.example.:8443", Some("host.example")),
             ("https:///path", None),
             ("api.deepseek.com", None),

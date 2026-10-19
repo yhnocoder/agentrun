@@ -490,3 +490,31 @@ fn sandboxed_run_sets_the_proxy_variables() {
     assert!(proxy.contains("NO_PROXY=\n"), "{proxy}");
     assert!(env.leftovers().is_empty());
 }
+
+#[test]
+fn an_unreadable_base_url_is_rejected_before_dsh_starts() {
+    if !support::sandbox_available() {
+        eprintln!("skipped: the sandbox is not available");
+        return;
+    }
+    let env = Env::with("dsh", "#!/bin/sh\ntouch \"$PWD/started\"\n");
+    for url in [
+        "http://[::1]:8080",
+        "https://host.example:abc",
+        "api.deepseek.com",
+    ] {
+        let output = command(&env, &["--network", "none", "--prompt", "hi"])
+            .env("DEEPSEEK_BASE_URL", url)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{url}: {output:?}");
+        let end = support::events(&output).pop().unwrap();
+        assert_eq!(end["status"], "rejected");
+        assert_eq!(
+            end["detail"],
+            "cannot tell which host dsh's model service uses from DEEPSEEK_BASE_URL. Use --network custom --allow-host <host of the model service>"
+        );
+    }
+    assert!(!env.work().join("started").exists());
+    assert!(env.leftovers().is_empty());
+}
