@@ -105,6 +105,17 @@ pub enum SandboxKind {
     None,
 }
 
+impl SandboxKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            SandboxKind::Seatbelt => "seatbelt",
+            SandboxKind::Bubblewrap => "bubblewrap",
+            SandboxKind::Codex => "codex",
+            SandboxKind::None => "none",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NetworkInfo {
     pub mode: NetworkMode,

@@ -24,11 +24,12 @@ use crate::network::{self, FilterProxy, ProxyEndpoint};
 use crate::output::{End, EndStatus, Event, Output, write_end};
 use crate::runtime::{self, Adapter, Invocation, Launch};
 use crate::sandbox;
-use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
+use crate::session::{SessionInputs, find_executable};
 use crate::transcript::{self, Saved};
 use execute::execute;
 use signal::SharedWriter;
 
+pub(crate) use execute::read_lines;
 pub use execute::{Exit, conclude, stderr_tail, translate_line};
 pub use signal::Signals;
 
@@ -311,18 +312,12 @@ fn prepare(
     let (args, resume) = resolve_session_dir(runtime, args)?;
     let prompt = read_prompt(caller, &args)?;
     let images = read_images(&args.image)?;
-    let env_args = parse_env_args(&args.env, &caller.env)?;
-    let path_dirs = resolve_path_dirs(&args.path)?;
+    let inputs = SessionInputs::read(&args.env, &args.path, &args.env_file, &caller.env)?;
     let raw = match &args.raw {
         Some(path) => Some((path.clone(), create_raw(path)?)),
         None => None,
     };
-    let env_files = args
-        .env_file
-        .iter()
-        .map(|path| read_env_file(path))
-        .collect::<Result<Vec<_>, _>>()?;
-    let session = Session::assemble(runtime, &caller.env, &path_dirs, &env_files, &env_args);
+    let session = inputs.assemble(runtime, &caller.env);
     let denied_reads =
         runtime::denied_reads(runtime, &args, &session, &cwd, &tempdir_base(caller))?;
     let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;

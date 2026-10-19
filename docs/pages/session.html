@@ -30,7 +30,7 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>home_placeholder</code>、<code>CODEX_AUTH_VARIABLE</code>、<code>PI_AUTH_VARIABLE</code>、<code>parse_env_args</code>、<code>read_env_file</code>、<code>resolve_path_dirs</code>、<code>find_executable</code>、<code>is_executable</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
+    <tr><td><code>src/session.rs</code></td><td><code>Session</code>（<code>assemble</code>、<code>runtime_dir</code>）、<code>home_placeholder</code>、<code>CODEX_AUTH_VARIABLE</code>、<code>PI_AUTH_VARIABLE</code>、<code>SessionInputs</code>（<code>read</code>、<code>assemble</code>）、<code>find_executable</code>、<code>is_executable</code></td><td>环境变量、<code>--env</code>、env 文件格式、PATH</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>create_tempdir</code></td><td>会话临时目录</td></tr>
     <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>会话临时目录、进程、信号与超时</td></tr>
     <tr><td><code>src/runtime/pi.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/sandbox/mod.rs</code></td><td><code>pi.rs</code> 的 <code>user_state_dir</code>、<code>STATE_HOME_SUBDIR</code>、<code>LOGIN_FILE</code>；<code>sandbox/mod.rs</code> 的 <code>PiState</code>；<code>codex.rs</code> 的 <code>user_home</code>、<code>HOME_SUBDIR</code>、<code>LOGIN_FILE</code>、<code>login_file</code>、<code>check_login</code>、<code>create_home</code></td><td>pi 的状态目录与 codex 的私有配置目录、多个运行同时进行</td></tr>

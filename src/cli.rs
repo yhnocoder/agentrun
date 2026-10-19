@@ -77,7 +77,7 @@ impl Runtime {
     }
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Default)]
 pub struct RunArgs {
     #[arg(long, value_name = "DIR", help = "Working directory of the session")]
     pub cwd: Option<PathBuf>,
@@ -258,9 +258,10 @@ pub enum SandboxMode {
     Off,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
+    #[default]
     None,
     Full,
     Custom,

@@ -525,7 +525,7 @@ mod tests {
     use crate::image::{Image, ImageKind};
     use crate::network::ProxyEndpoint;
     use crate::sandbox::{Sandbox, Wrapper};
-    use crate::session::{Session, parse_env_args};
+    use crate::session::SessionInputs;
 
     struct Setup {
         root: TempDir,
@@ -576,8 +576,9 @@ mod tests {
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value)))
                 .collect();
-            let env_args = parse_env_args(&args.env, &caller_env).unwrap();
-            let session = Session::assemble(runtime, &caller_env, &[], &[], &env_args);
+            let session = SessionInputs::read(&args.env, &[], &[], &caller_env)
+                .unwrap()
+                .assemble(runtime, &caller_env);
             let wrapper = if sandboxed {
                 Wrapper::Bubblewrap {
                     bwrap: PathBuf::from("/usr/bin/bwrap"),

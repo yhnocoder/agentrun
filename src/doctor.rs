@@ -19,17 +19,15 @@ use crate::network::{
     FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, check_usage, in_cidr,
     proxy_environment,
 };
-use crate::output::{Network, NetworkReason, Signal};
+use crate::output::{Network, NetworkReason, SandboxKind, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
-use crate::run::{Caller, create_tempdir, shell_quote};
+use crate::run::{Caller, create_tempdir, read_lines, shell_quote};
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{self, Adapter, Invocation, Version, codex};
 use crate::sandbox::{
     self, BWRAP_PREFIX, CANNOT_START_HINT, Sandbox, UNAVAILABLE_PREFIX, Wrapped, Wrapper,
 };
-use crate::session::{
-    Session, find_executable, home_placeholder, parse_env_args, read_env_file, resolve_path_dirs,
-};
+use crate::session::{Session, SessionInputs, find_executable, home_placeholder};
 
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const USAGE_EXIT_CODE: u8 = 2;
@@ -261,24 +259,21 @@ fn plan(caller: &Caller, args: &DoctorArgs) -> Result<Plan, String> {
         .copied()
         .filter(|runtime| args.runtimes.is_empty() || args.runtimes.contains(runtime))
         .collect();
-    if let (true, Some(model)) = (runtimes.contains(&Runtime::Pi), &args.model) {
-        pi::parse_model(model)?;
+    let checked = RunArgs {
+        model: args.model.clone(),
+        ..RunArgs::default()
+    };
+    for runtime in &runtimes {
+        runtime::builtin(*runtime).check_args(&checked)?;
     }
     let allow_hosts = check_usage(args.network, &args.allow_host)?;
     let cwd = std::env::current_dir()
         .map_err(|error| format!("cannot read the current directory: {error}"))?;
-    let env_args = parse_env_args(&args.env, &caller.env)?;
-    let path_dirs = resolve_path_dirs(&args.path)?;
-    let env_files = args
-        .env_file
-        .iter()
-        .map(|path| read_env_file(path))
-        .collect::<Result<Vec<_>, _>>()?;
+    let inputs = SessionInputs::read(&args.env, &args.path, &args.env_file, &caller.env)?;
     let targets = runtimes
         .into_iter()
         .map(|runtime| {
-            let session =
-                Session::assemble(runtime, &caller.env, &path_dirs, &env_files, &env_args);
+            let session = inputs.assemble(runtime, &caller.env);
             let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;
             Ok(Target {
                 runtime,
@@ -436,22 +431,7 @@ impl Doctor {
         }
         let stdout = child.stdout.take().expect("stdout is piped");
         let (line_sender, lines) = mpsc::channel();
-        thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = Vec::new();
-            loop {
-                line.clear();
-                match reader.read_until(b'\n', &mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-                if line_sender.send(std::mem::take(&mut line)).is_err() {
-                    break;
-                }
-            }
-        });
+        thread::spawn(move || read_lines(stdout, |line| line_sender.send(line).is_ok()));
         let mut stderr = child.stderr.take().expect("stderr is piped");
         let (stderr_sender, stderr_bytes) = mpsc::channel();
         thread::spawn(move || {
@@ -721,31 +701,16 @@ impl Doctor {
 
     fn run_args(&self) -> RunArgs {
         RunArgs {
-            cwd: None,
             prompt: Some(PROMPT.to_string()),
-            prompt_file: None,
-            image: Vec::new(),
             model: self.args.model.clone(),
-            effort: None,
-            max_turns: None,
-            max_tokens: None,
-            timeout: None,
             sandbox: Some(SandboxMode::Off),
-            network: NetworkMode::None,
-            allow_host: Vec::new(),
-            deny_read: Vec::new(),
             no_default_deny_read: true,
             path: self.args.path.clone(),
             env: self.args.env.clone(),
             env_file: self.args.env_file.clone(),
-            no_subagents: false,
-            session_dir: None,
-            resume: None,
             format: Some(Format::Jsonl),
-            raw: None,
             debug: self.args.debug,
-            dry_run: false,
-            runtime_args: Vec::new(),
+            ..RunArgs::default()
         }
     }
 
@@ -815,16 +780,7 @@ impl Doctor {
             runtime::default_denied_reads(target.runtime, &target.session, &self.cwd);
         denied_reads.push(dirs.base.join(UNREADABLE_FILE));
         match &sandbox.wrapper {
-            Wrapper::Bubblewrap { .. } => Ok(Wrap::Bubblewrap(sandbox::wrap(
-                sandbox,
-                &dirs.work,
-                &dirs.tmp,
-                state.as_ref(),
-                &denied_reads,
-                proxy,
-                false,
-            )?)),
-            Wrapper::Seatbelt => Ok(Wrap::Seatbelt(sandbox::wrap(
+            Wrapper::Bubblewrap { .. } | Wrapper::Seatbelt => Ok(Wrap::Sandbox(sandbox::wrap(
                 sandbox,
                 &dirs.work,
                 &dirs.tmp,
@@ -1172,23 +1128,21 @@ struct Dirs {
 }
 
 enum Wrap {
-    Bubblewrap(Wrapped),
-    Seatbelt(Wrapped),
+    Sandbox(Wrapped),
     Codex { prefix: Vec<String> },
 }
 
 impl Wrap {
     fn name(&self) -> &'static str {
         match self {
-            Wrap::Bubblewrap(_) => "bubblewrap",
-            Wrap::Seatbelt(_) => "seatbelt",
-            Wrap::Codex { .. } => "codex",
+            Wrap::Sandbox(wrapped) => wrapped.kind.name(),
+            Wrap::Codex { .. } => SandboxKind::Codex.name(),
         }
     }
 
     fn argv(&self, executable: Option<&Path>, inner: &[String]) -> Vec<String> {
         match self {
-            Wrap::Bubblewrap(wrapped) | Wrap::Seatbelt(wrapped) => wrapped.argv(inner),
+            Wrap::Sandbox(wrapped) => wrapped.argv(inner),
             Wrap::Codex { prefix } => {
                 let mut argv = vec![
                     executable
@@ -1205,7 +1159,7 @@ impl Wrap {
     fn env(&self, doctor: &Doctor) -> Vec<(OsString, OsString)> {
         match self {
             Wrap::Codex { .. } => doctor.codex_env(),
-            _ => Vec::new(),
+            Wrap::Sandbox(_) => Vec::new(),
         }
     }
 }
