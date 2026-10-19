@@ -136,6 +136,7 @@ fn detached_process_is_killed_after_timeout() {
     let outcome = finish(start(&env, &["--timeout", "3"], true, Stdio::null()), &env);
     assert_eq!(outcome.code, 3);
     assert_eq!(outcome.end()["status"], "timeout");
+    assert_eq!(outcome.end()["detail"], "--timeout 3 reached");
     assert_sleeper_gone(&env.root().join("pid"));
 }
 
@@ -241,7 +242,7 @@ fn timeout_terminates_the_runtime() {
     assert_eq!(outcome.code, 3);
     assert_eq!(outcome.end()["status"], "timeout");
     assert_eq!(outcome.end()["exit_code"], Value::Null);
-    assert_eq!(outcome.end()["detail"], "");
+    assert_eq!(outcome.end()["detail"], "--timeout 3 reached");
     assert_eq!(outcome.end()["result"], "ready");
 }
 

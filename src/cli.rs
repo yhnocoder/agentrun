@@ -10,7 +10,8 @@ use serde::Serialize;
     version,
     about,
     arg_required_else_help = false,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    after_help = "Documentation: https://yhnocoder.github.io/agentrun/"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -19,19 +20,28 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    #[command(about = "Run claude-code")]
+    #[command(about = "Run claude-code in the sandbox", after_help = RUN_AFTER_HELP)]
     ClaudeCode(RunArgs),
-    #[command(about = "Run codex")]
+    #[command(about = "Run codex in the sandbox", after_help = RUN_AFTER_HELP)]
     Codex(RunArgs),
-    #[command(about = "Run pi")]
+    #[command(about = "Run pi in the sandbox", after_help = RUN_AFTER_HELP)]
     Pi(RunArgs),
-    #[command(about = "Run dsh (DeepSeek Harness)")]
+    #[command(about = "Run dsh (DeepSeek Harness) in the sandbox", after_help = RUN_AFTER_HELP)]
     Dsh(RunArgs),
     #[command(about = "Check whether the runtimes can be used in this environment")]
     Doctor(DoctorArgs),
     #[command(hide = true)]
     DoctorConnect(ConnectArgs),
 }
+
+const RUN_AFTER_HELP: &str = "Exit codes: 0 finished, 1 failed, 2 rejected before start, 3 timeout, 4 limit, 130 or 143 interrupted\nDocumentation: https://yhnocoder.github.io/agentrun/pages/guide.html";
+
+const PROMPT: &str = "Prompt";
+const MODEL_AND_LIMITS: &str = "Model and limits";
+const ISOLATION: &str = "Sandbox, network and reads";
+const ENVIRONMENT: &str = "Session environment";
+const SAVED_SESSIONS: &str = "Saved sessions";
+const OUTPUT: &str = "Output";
 
 pub enum Parsed {
     Run(Runtime, Box<RunArgs>),
@@ -87,121 +97,180 @@ impl Runtime {
 
 #[derive(Args, Debug, Clone)]
 pub struct RunArgs {
-    #[arg(long, value_name = "DIR", help = "Working directory of the session")]
-    pub cwd: Option<PathBuf>,
     #[arg(
         long,
         value_name = "TEXT",
         conflicts_with = "prompt_file",
-        help = "Prompt text"
+        help_heading = PROMPT,
+        help = "Prompt text; without --prompt or --prompt-file the prompt is read from standard input"
     )]
     pub prompt: Option<String>,
-    #[arg(long, value_name = "FILE", help = "Read the prompt from a file")]
+    #[arg(
+        long,
+        value_name = "FILE",
+        help_heading = PROMPT,
+        help = "Read the prompt from a file"
+    )]
     pub prompt_file: Option<PathBuf>,
     #[arg(
         long,
         value_name = "FILE",
+        help_heading = PROMPT,
         help = "Image given to the model with the prompt (png, jpeg, gif, webp), repeatable"
     )]
     pub image: Vec<PathBuf>,
-    #[arg(long, value_name = "ID", help = "Model, passed to the runtime as is")]
+    #[arg(
+        long,
+        value_name = "DIR",
+        help_heading = PROMPT,
+        help = "Working directory of the session (default: current directory)"
+    )]
+    pub cwd: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "ID",
+        help_heading = MODEL_AND_LIMITS,
+        help = "Model, passed to the runtime as is; pi needs provider/model"
+    )]
     pub model: Option<String>,
-    #[arg(long, value_name = "LEVEL", help = "Reasoning effort")]
+    #[arg(
+        long,
+        value_name = "LEVEL",
+        help_heading = MODEL_AND_LIMITS,
+        help = "Reasoning effort, passed to the runtime as is"
+    )]
     pub effort: Option<String>,
     #[arg(
         long,
         value_name = "N",
-        value_parser = clap::value_parser!(u64).range(1..),
-        help = "Terminate the runtime when the main agent starts model call N+1 (not codex)"
+        value_parser = positive,
+        help_heading = MODEL_AND_LIMITS,
+        help = "Stop the runtime when the main agent starts model call N+1 (claude-code, pi and dsh)"
     )]
     pub max_turns: Option<u64>,
     #[arg(
         long,
         value_name = "N",
-        value_parser = clap::value_parser!(u64).range(1..),
-        help = "Terminate the runtime when the tokens of all model calls exceed N (not codex)"
+        value_parser = positive,
+        help_heading = MODEL_AND_LIMITS,
+        help = "Stop the runtime when the tokens of all model calls exceed N (claude-code, pi and dsh)"
     )]
     pub max_tokens: Option<u64>,
     #[arg(
         long,
         value_name = "SECONDS",
-        value_parser = clap::value_parser!(u64).range(1..),
-        help = "Terminate the runtime after this many seconds"
+        value_parser = positive,
+        help_heading = MODEL_AND_LIMITS,
+        help = "Stop the runtime after this many seconds"
     )]
     pub timeout: Option<u64>,
     #[arg(
         long,
+        help_heading = MODEL_AND_LIMITS,
+        help = "Do not allow the agent to start subagents"
+    )]
+    pub no_subagents: bool,
+    #[arg(
+        long,
         value_enum,
-        help = "What to do when the sandbox is not available (default: AGENTRUN_SANDBOX, or on)"
+        help_heading = ISOLATION,
+        help = "Sandbox mode (default: AGENTRUN_SANDBOX, or on)"
     )]
     pub sandbox: Option<SandboxMode>,
-    #[arg(long, value_enum, default_value_t = NetworkMode::None, help = "Which hosts commands may reach")]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = NetworkMode::None,
+        help_heading = ISOLATION,
+        help = "Which hosts the agent's commands may reach"
+    )]
     pub network: NetworkMode,
-    #[arg(long, value_name = "HOST[:PORT]", help = "Allowed host, repeatable")]
+    #[arg(
+        long,
+        value_name = "HOST[:PORT]",
+        help_heading = ISOLATION,
+        help = "Host allowed with --network custom, repeatable; *.example.com matches subdomains"
+    )]
     pub allow_host: Vec<String>,
     #[arg(
         long,
         value_name = "PATH",
-        help = "File or directory the agent may not read, repeatable"
+        help_heading = ISOLATION,
+        help = "File or directory the agent may not read, repeatable, added to the built-in list"
     )]
     pub deny_read: Vec<PathBuf>,
     #[arg(
         long,
+        help_heading = ISOLATION,
         help = "Do not deny reading the built-in list of credential paths"
     )]
     pub no_default_deny_read: bool,
     #[arg(
         long,
         value_name = "DIR",
+        help_heading = ENVIRONMENT,
         help = "Directory prepended to the session PATH, repeatable"
     )]
     pub path: Vec<PathBuf>,
     #[arg(
         long,
         value_name = "KEY[=VALUE]",
-        help = "Environment variable for the session, repeatable"
+        help_heading = ENVIRONMENT,
+        help = "Environment variable for the session, repeatable; KEY alone takes the value from your environment"
     )]
     pub env: Vec<String>,
     #[arg(
         long,
         value_name = "FILE",
+        help_heading = ENVIRONMENT,
         help = "Read environment variables from a file, repeatable"
     )]
     pub env_file: Vec<PathBuf>,
-    #[arg(long, help = "Do not allow the agent to start subagents")]
-    pub no_subagents: bool,
     #[arg(
         long,
         value_name = "DIR",
-        help = "Save the session in this directory so that --resume can continue it"
+        help_heading = SAVED_SESSIONS,
+        help = "Save the session in this directory, outside --cwd, so that --resume can continue it"
     )]
     pub session_dir: Option<PathBuf>,
     #[arg(
         long,
         value_name = "ID",
         requires = "session_dir",
-        help = "Continue the session with this id saved in --session-dir"
+        help_heading = SAVED_SESSIONS,
+        help = "Continue the session with this full id saved in --session-dir"
     )]
     pub resume: Option<String>,
-    #[arg(long, value_enum, help = "Format of standard output")]
+    #[arg(
+        long,
+        value_enum,
+        help_heading = OUTPUT,
+        help = "Format of standard output (default: rich on a terminal, otherwise jsonl)"
+    )]
     pub format: Option<Format>,
     #[arg(
         long,
         value_name = "FILE",
+        help_heading = OUTPUT,
         help = "Write the raw output of the runtime to this file"
     )]
     pub raw: Option<PathBuf>,
     #[arg(
         long,
+        help_heading = OUTPUT,
         help = "Print diagnostics to standard error and keep the session temporary directory"
     )]
     pub debug: bool,
-    #[arg(long, help = "Run the checks and print the command without running it")]
+    #[arg(
+        long,
+        help_heading = OUTPUT,
+        help = "Run the checks and print the command without running it"
+    )]
     pub dry_run: bool,
     #[arg(
         last = true,
         value_name = "ARGS",
-        help = "Arguments passed to the runtime"
+        help = "Arguments passed to the runtime after the ones agentrun sets; they can override the sandbox settings"
     )]
     pub runtime_args: Vec<String>,
 }
@@ -219,12 +288,21 @@ pub struct DoctorArgs {
     #[arg(
         long,
         value_enum,
-        help = "What to do when the sandbox is not available (default: AGENTRUN_SANDBOX, or on)"
+        help = "Sandbox mode (default: AGENTRUN_SANDBOX, or on)"
     )]
     pub sandbox: Option<SandboxMode>,
-    #[arg(long, value_enum, default_value_t = NetworkMode::None, help = "Which hosts commands may reach")]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = NetworkMode::None,
+        help = "Which hosts the agent's commands may reach; the check runs only for full and custom"
+    )]
     pub network: NetworkMode,
-    #[arg(long, value_name = "HOST[:PORT]", help = "Allowed host, repeatable")]
+    #[arg(
+        long,
+        value_name = "HOST[:PORT]",
+        help = "Host allowed with --network custom, repeatable"
+    )]
     pub allow_host: Vec<String>,
     #[arg(
         long,
@@ -261,24 +339,40 @@ pub struct ConnectArgs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum SandboxMode {
+    #[value(help = "Refuse to run when the sandbox cannot start")]
     On,
+    #[value(help = "Run without the sandbox when it cannot start")]
     Relax,
+    #[value(help = "Run without the sandbox, for example in a docker container")]
     Off,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
+    #[value(help = "No network for commands; the runtime still reaches its model service")]
     None,
+    #[value(help = "Any public host, and web search")]
     Full,
+    #[value(help = "Only the hosts given with --allow-host")]
     Custom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Format {
+    #[value(help = "Lines with a status bar, for a terminal")]
     Rich,
+    #[value(help = "One line per event, for logs")]
     Text,
+    #[value(help = "One JSON event per line, for programs")]
     Jsonl,
+}
+
+fn positive(value: &str) -> Result<u64, String> {
+    match value.parse::<u64>() {
+        Ok(number) if number > 0 => Ok(number),
+        _ => Err("expected a positive integer".to_string()),
+    }
 }
 
 pub(crate) fn prescan_format(args: &[OsString]) -> Option<Format> {
@@ -310,14 +404,35 @@ pub(crate) fn default_format(stdout_is_terminal: bool) -> Format {
     }
 }
 
+pub(crate) const MISSING_COMMAND: &str =
+    "no command given: use claude-code, codex, pi, dsh or doctor; see agentrun --help";
+
 pub(crate) fn usage_error_detail(rendered: &str) -> String {
-    let joined = rendered
+    let mut joined = String::new();
+    let mut in_list = false;
+    for line in rendered
         .lines()
         .take_while(|line| !line.starts_with("Usage:") && !line.starts_with("For more information"))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
+    {
+        let text = line.trim();
+        if text.is_empty() {
+            in_list = false;
+            continue;
+        }
+        let indented = line.starts_with(char::is_whitespace);
+        if !joined.is_empty() {
+            joined.push_str(if joined.ends_with(':') {
+                in_list = indented;
+                " "
+            } else if in_list && indented {
+                ", "
+            } else {
+                in_list = false;
+                "; "
+            });
+        }
+        joined.push_str(text);
+    }
     joined
         .strip_prefix("error: ")
         .map(str::to_string)
@@ -374,11 +489,34 @@ mod tests {
     }
 
     #[test]
+    fn usage_error_detail_continues_a_line_that_ends_with_a_colon() {
+        let rendered = "error: the following required arguments were not provided:\n  --session-dir <DIR>\n\nUsage: agentrun pi --session-dir <DIR> --resume <ID>\n\nFor more information, try '--help'.\n";
+        assert_eq!(
+            usage_error_detail(rendered),
+            "the following required arguments were not provided: --session-dir <DIR>"
+        );
+    }
+
+    #[test]
+    fn usage_error_detail_joins_listed_items_with_commas() {
+        let rendered = "error: the following required arguments were not provided:\n  --host <HOST>\n  --port <PORT>\n\nUsage: agentrun doctor-connect --host <HOST> --port <PORT>\n\nFor more information, try '--help'.\n";
+        assert_eq!(
+            usage_error_detail(rendered),
+            "the following required arguments were not provided: --host <HOST>, --port <PORT>"
+        );
+        let rendered = "error: unexpected argument '--promt' found\n\n  tip: a similar argument exists: '--prompt'\n  tip: to pass '--promt' as a value, use '-- --promt'\n\nUsage: agentrun pi [OPTIONS]\n";
+        assert_eq!(
+            usage_error_detail(rendered),
+            "unexpected argument '--promt' found; tip: a similar argument exists: '--prompt'; tip: to pass '--promt' as a value, use '-- --promt'"
+        );
+    }
+
+    #[test]
     fn usage_error_detail_is_one_line() {
         let rendered = "error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: agentrun pi [OPTIONS]\n\nFor more information, try '--help'.\n";
         assert_eq!(
             usage_error_detail(rendered),
-            "unexpected argument '--bogus' found tip: to pass '--bogus' as a value, use '-- --bogus'"
+            "unexpected argument '--bogus' found; tip: to pass '--bogus' as a value, use '-- --bogus'"
         );
     }
 }

@@ -8,6 +8,7 @@ use crate::json::first_line;
 pub struct TextFormatter {
     sandbox: SandboxMode,
     sandbox_reason: String,
+    notes: Vec<String>,
     labels: HashMap<String, String>,
     subagent_models: HashMap<String, String>,
 }
@@ -17,6 +18,7 @@ impl TextFormatter {
         TextFormatter {
             sandbox,
             sandbox_reason: sandbox_reason.to_string(),
+            notes: Vec::new(),
             labels: HashMap::new(),
             subagent_models: HashMap::new(),
         }
@@ -24,7 +26,11 @@ impl TextFormatter {
 
     pub fn lines(&mut self, event: &Event) -> Vec<String> {
         match &event.body {
-            Body::Start(start) => self.note(start.sandbox).into_iter().collect(),
+            Body::Start(start) => self
+                .note(start.sandbox)
+                .into_iter()
+                .chain(self.notes.iter().map(|note| format!("[note] {note}")))
+                .collect(),
             Body::Prompt(prompt) => vec![format!(
                 "[main] prompt {}{}",
                 first_line(&prompt.text),
@@ -121,6 +127,10 @@ impl TextFormatter {
                 vec![line]
             }
         }
+    }
+
+    pub fn add_note(&mut self, note: String) {
+        self.notes.push(note);
     }
 
     fn note(&self, sandbox: SandboxKind) -> Option<String> {
