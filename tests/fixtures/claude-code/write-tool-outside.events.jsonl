@@ -1,5 +1,7 @@
 {"schema":1,"type":"prompt","text":"Use only the Write tool, never a shell command. Write the text: outside into two files: /root/agentrun-probe-outside-7c0bba66 and /tmp/agentrun-probe-outside-7c0bba66. Reply with one line per file saying whether the write succeeded or was blocked, quoting any error."}
+{"schema":1,"type":"tool_start","id":"toolu_016hngkh8iB4dBZzu2SMUdi5","parent":null,"name":"Write","summary":"Write: /root/agentrun-probe-outside-7c0bba66"}
 {"schema":1,"type":"tool","id":"toolu_016hngkh8iB4dBZzu2SMUdi5","parent":null,"name":"Write","summary":"Write: /root/agentrun-probe-outside-7c0bba66","denied":true}
+{"schema":1,"type":"tool_start","id":"toolu_01Rm1n57n5uR4YUQVFW9r97C","parent":null,"name":"Write","summary":"Write: /tmp/agentrun-probe-outside-7c0bba66"}
 {"schema":1,"type":"tool","id":"toolu_01Rm1n57n5uR4YUQVFW9r97C","parent":null,"name":"Write","summary":"Write: /tmp/agentrun-probe-outside-7c0bba66","denied":true}
 {"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":17,"cache_read_tokens":8411,"cache_write_tokens":2256,"context_tokens":10669}
 {"schema":1,"type":"text","parent":null,"text":"/root/agentrun-probe-outside-7c0bba66: blocked. Error: \"Permission to use Write has been denied because Claude Code is running in don't ask mode.\"\n/tmp/agentrun-probe-outside-7c0bba66: blocked. Error: \"Permission to use Write has been denied because Claude Code is running in don't ask mode.\""}

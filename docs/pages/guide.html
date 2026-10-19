@@ -167,6 +167,15 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 </table>
 <p>这些输出都只写变量名，不写变量的值，也不写提示词。</p>
 
+<h3 id="running-tool">在你的程序里显示正在执行的工具</h3>
+<p>你的程序读 <code>--format jsonl</code>，想在一次工具调用执行期间显示 agent 正在做什么时，读 <code>tool_start</code> 事件。agentrun 在一次工具调用开始时输出 <code>tool_start</code>，在调用结束时输出同 <code>id</code> 的 <code>tool</code>：</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --format jsonl --prompt "Run sleep 3 with bash, then count the lines in hello.txt with wc, then reply in one short sentence" \
+    | jq -r --unbuffered 'select(.type == "tool_start" or .type == "tool") | "\(.time) \(.type) \(.summary)"'
+2026-10-19T03:02:35.820Z tool_start bash: sleep 3 &amp;&amp; wc -l hello.txt
+2026-10-19T03:02:38.839Z tool bash: sleep 3 &amp;&amp; wc -l hello.txt</div>
+<p>命令开始时就输出了 <code>tool_start</code>，3 秒后命令结束时才输出 <code>tool</code>。收到 <code>tool_start</code> 时，把它的 <code>summary</code> 显示为正在执行的工具；收到同 <code>id</code> 的 <code>tool</code> 时，这次调用结束。主 agent 与 subagent 的调用可以同时进行，用 <code>id</code> 对应开始与结束，用 <code>parent</code> 区分是哪个 agent 的调用。每个 <code>tool_start</code> 之后都会有同 <code>id</code> 的 <code>tool</code>，运行被中断或超时也一样，在 <code>end</code> 之前给出。</p>
+<p>两个事件的字段见<a href="events.html#event-types">事件与输出</a>。</p>
+
 <h2 id="safety">agent 能做什么、不能做什么</h2>
 <table>
   <thead>

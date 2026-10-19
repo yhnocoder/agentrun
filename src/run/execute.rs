@@ -16,8 +16,8 @@ use super::{Caller, Guards, Resources, create_raw, elapsed_ms};
 use crate::cli::Runtime;
 use crate::network::{FilterProxy, Policy};
 use crate::output::{
-    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, OpenTools, Output,
-    REFRESH_PERIOD, SandboxKind, Signal, Start, Translated,
+    Aggregator, Body, End, EndStatus, Event, Network, NetworkInfo, Output, REFRESH_PERIOD,
+    SandboxKind, Signal, Start, Translated,
 };
 use crate::process_tree;
 use crate::runtime::{
@@ -311,9 +311,6 @@ impl<'a> Relay<'a> {
             let _ = file.write_all(b"\n");
         }
         let translated = translate_line(content, self.adapter.as_mut(), &mut self.aggregator);
-        if self.output.is_rich() {
-            self.output.set_open_tools(self.aggregator.open_tools());
-        }
         for event in &translated.events {
             self.caller.emit(&mut self.output, event);
         }
@@ -355,9 +352,6 @@ impl<'a> Relay<'a> {
         stderr_tail: &str,
         started: Instant,
     ) -> EndStatus {
-        if self.output.is_rich() {
-            self.output.set_open_tools(OpenTools::default());
-        }
         let (events, status) = conclude(
             self.aggregator,
             self.adapter.as_mut(),

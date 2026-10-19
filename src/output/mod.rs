@@ -8,7 +8,7 @@ use std::io::Write;
 
 use crate::cli::{Format, SandboxMode};
 
-pub use aggregate::{Aggregator, OpenTools, Record, Translated};
+pub use aggregate::{Aggregator, Record, Translated};
 pub use event::{Event, SandboxKind, SubagentStatus};
 pub use rich::Rich;
 pub use text::TextFormatter;
@@ -42,12 +42,6 @@ impl Output {
             Format::Text | Format::Rich => {
                 Output::Text(TextFormatter::new(sandbox, sandbox_reason))
             }
-        }
-    }
-
-    pub fn set_open_tools(&mut self, open_tools: OpenTools) {
-        if let Output::Rich(rich) = self {
-            rich.set_open_tools(open_tools);
         }
     }
 
