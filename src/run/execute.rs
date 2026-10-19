@@ -358,10 +358,11 @@ impl<'a> Relay<'a> {
         let saved = self.adapter.transcript()?;
         match transcript::save(&saved, store) {
             Ok(()) => Some(saved.id),
-            Err(detail) => {
+            Err(error) => {
                 self.unsaved = true;
-                let kept = saved
-                    .entries
+                let detail = error.detail;
+                let kept = error
+                    .kept
                     .iter()
                     .map(|entry| entry.display().to_string())
                     .collect::<Vec<_>>()
