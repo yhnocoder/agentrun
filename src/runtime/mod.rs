@@ -508,6 +508,19 @@ mod tests {
             default_denied_reads(Runtime::Codex, &env_session(Runtime::Codex, &[]), cwd),
             Vec::<PathBuf>::new()
         );
+        let dsh = env_session(
+            Runtime::Dsh,
+            &[
+                ("HOME", "/nonexistent/home"),
+                ("DSH_HOME", "/nonexistent/dsh"),
+            ],
+        );
+        assert!(!dsh.env.contains_key(OsStr::new("DSH_HOME")));
+        let paths = default_denied_reads(Runtime::Dsh, &dsh, cwd);
+        for path in ["/nonexistent/dsh/.env", "/nonexistent/dsh/sessions"] {
+            assert!(paths.contains(&PathBuf::from(path)), "{path}");
+        }
+        assert!(!paths.contains(&PathBuf::from("/nonexistent/home/.dsh/.env")));
     }
 
     #[test]

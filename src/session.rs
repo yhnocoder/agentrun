@@ -19,6 +19,7 @@ pub struct Session {
     pub path: OsString,
     pub set: Vec<String>,
     pub removed: Vec<String>,
+    pub removed_values: BTreeMap<OsString, OsString>,
     pub agentrun_variables: Vec<String>,
     pub sandbox: Option<OsString>,
     pub codex_auth: Option<OsString>,
@@ -40,9 +41,10 @@ impl Session {
             .filter(|name| removed_by(runtime, name))
             .cloned()
             .collect();
-        for name in &removed_names {
-            env.remove(name);
-        }
+        let removed_values: BTreeMap<OsString, OsString> = removed_names
+            .iter()
+            .filter_map(|name| env.remove(name).map(|value| (name.clone(), value)))
+            .collect();
 
         let mut set: Vec<String> = Vec::new();
         let explicit = env_files
@@ -77,6 +79,7 @@ impl Session {
             path,
             set,
             removed: lossy_names(&removed_names),
+            removed_values,
             agentrun_variables: lossy_names(&agentrun_names),
             sandbox,
             codex_auth,

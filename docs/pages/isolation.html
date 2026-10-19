@@ -137,7 +137,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   </tbody>
 </table>
 <ul>
-  <li><code>~</code> 与这四个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。运行 dsh 时会话环境里已经删除了 <code>DSH_HOME</code>（见<a href="session.html">会话环境</a>），所以取 <code>~/.dsh</code>。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。</li>
+  <li><code>~</code> 与这四个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。运行 dsh 时会话环境里已经删除了 <code>DSH_HOME</code>（见<a href="session.html">会话环境</a>），这时取调用方环境里原来的 <code>DSH_HOME</code>（<code>Session</code> 的 <code>removed_values</code>），没有时取 <code>~/.dsh</code>。理由：用户自己运行 dsh 时，key 与会话记录在这个目录里。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。</li>
   <li>agent 的工具与命令不需要读这几个会话记录路径：codex 与 dsh 用私有目录（<code>CODEX_HOME</code>、<code>DSH_HOME</code>）；claude-code 沙箱里的 memory 目录在会话临时目录，没有 <code>--session-dir</code> 时用 <code>--no-session-persistence</code> 不写记录，给出时由 claude 进程在运行期间把记录写进 <code>projects/</code>、继续会话时从 <code>--session-dir</code> 读取，都在沙箱外，不受读取限制，见<a href="run.html#sessions">保存与继续会话</a>。所以四个运行时都挡住它们。</li>
   <li>pi 的整个进程在沙箱里，要读写自己的登录文件来登录和刷新令牌，所以运行 pi 时不挡它。claude-code 与 codex 的进程在沙箱外读写自己的登录文件，只有它们的工具与命令受读取限制，所以运行它们时自己的登录文件也挡住。dsh 的整个进程在沙箱里，但用会话环境里的 <code>DEEPSEEK_API_KEY</code> 与私有 <code>DSH_HOME</code>，不读用户的 <code>~/.dsh</code>，所以运行 dsh 时它自己的 <code>.env</code> 也挡住。</li>
   <li><code>--deny-read</code> 的相对路径按 agentrun 的当前目录展开成绝对路径。以 <code>~</code> 开头的路径是用法错误（退出码 2），<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: ~ is not expanded, give the full path</code>，因为 <code>~/.env</code> 会被当成当前目录下名为 <code>~</code> 的目录，什么也挡不住。</li>

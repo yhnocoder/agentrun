@@ -317,7 +317,12 @@ impl Adapter for Dsh {
 }
 
 pub(crate) fn user_home(session: &Session, cwd: &Path) -> Option<PathBuf> {
-    session.runtime_dir(cwd, HOME_VARIABLE, USER_HOME_SUBDIR)
+    session
+        .removed_values
+        .get(OsStr::new(HOME_VARIABLE))
+        .filter(|home| !home.is_empty())
+        .map(|home| cwd.join(home))
+        .or_else(|| session.runtime_dir(cwd, HOME_VARIABLE, USER_HOME_SUBDIR))
 }
 
 pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
