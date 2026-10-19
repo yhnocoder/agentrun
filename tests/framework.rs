@@ -596,3 +596,22 @@ fn replay_fake_fixture() {
         "fix the tests",
     );
 }
+
+#[test]
+fn limit_reached_on_the_last_lines_is_reported_after_the_runtime_exits() {
+    let env = with_output(concat!(
+        r#"{"record":"usage","parent":null,"model":"m1","input_tokens":100,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0}"#,
+        "\n",
+        r#"{"record":"text","parent":null,"text":"done"}"#,
+    ));
+    for _ in 0..20 {
+        let outcome = run(&env, &["--max-tokens", "10"], false);
+        let events = outcome.events();
+        let end = events.last().unwrap();
+        assert_eq!(outcome.code, 4, "{end}");
+        assert_eq!(end["status"], "limit");
+        assert_eq!(end["detail"], "--max-tokens 10 exceeded: 105 tokens");
+        assert_eq!(end["result"], "done");
+    }
+    assert!(env.leftovers().is_empty());
+}

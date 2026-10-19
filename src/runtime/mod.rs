@@ -93,14 +93,15 @@ impl Failure {
     }
 }
 
-pub fn reject_limits(args: &RunArgs) -> Result<(), String> {
+pub fn reject_limits(runtime: Runtime, args: &RunArgs) -> Result<(), String> {
     let option = match (args.max_turns, args.max_tokens) {
         (Some(_), _) => "--max-turns",
         (None, Some(_)) => "--max-tokens",
         (None, None) => return Ok(()),
     };
     Err(format!(
-        "{option} is not supported by codex: codex reports usage only when the run ends, so agentrun cannot stop it during the run"
+        "{option} is not supported by {name}: {name} reports usage only when the run ends, so agentrun cannot stop it during the run",
+        name = runtime.name()
     ))
 }
 

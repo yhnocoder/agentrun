@@ -313,7 +313,7 @@ interface Usage extends TokenCounts {
 <p><code>end.usage</code> 的字段为 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>，另有 <code>by_model</code> 按模型给出同样的四个字段，模型未知时键为 <code>unknown</code>。所有来源都没报告的字段为 null；一次运行没有任何用量时四个总量为 null，<code>by_model</code> 为 <code>{}</code>。</p>
 
 <h2 id="status">end.status</h2>
-<p>按表中从上到下的顺序取第一个成立的状态。理由：超时、到达上限或被中断时，运行时可能已经输出了失败事件（例如 claude-code 收到 SIGINT 后的 result 为错误），这时调用方需要知道的是超时或中断。</p>
+<p>按表中从上到下的顺序取第一个成立的状态。理由：超时、到达上限或被中断时，运行时可能已经输出了失败事件（例如 claude-code 收到 SIGINT 后的 result 为错误），这时调用方需要知道的是超时、上限或中断。</p>
 <table>
   <thead>
     <tr><th>status</th><th>条件</th><th>agentrun 退出码</th></tr>

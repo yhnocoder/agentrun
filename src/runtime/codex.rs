@@ -153,7 +153,7 @@ impl Adapter for Codex {
     }
 
     fn check_args(&self, args: &RunArgs) -> Result<(), String> {
-        reject_limits(args)
+        reject_limits(Runtime::Codex, args)
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
