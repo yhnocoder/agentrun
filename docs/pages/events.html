@@ -381,7 +381,7 @@ interface Usage extends TokenCounts {
     <tr><td><code>rejected</code></td><td>启动前失败，情形见<a href="run.html#preflight">启动前检查</a></td><td>2</td></tr>
     <tr><td><code>interrupted</code></td><td>agentrun 收到 SIGINT 或 SIGTERM，以第一个信号为准</td><td>130 或 143</td></tr>
     <tr><td><code>timeout</code></td><td>超过 <code>--timeout</code></td><td>3</td></tr>
-    <tr><td><code>limit</code></td><td>超过 <code>--max-turns</code> 或 <code>--max-tokens</code>（由 agentrun 自己计数），并且 agentrun 因此终止了运行时，或者运行时已经退出、没有满足 <code>finished</code> 的条件，见<a href="run.html#limits">轮数与 token 上限</a></td><td>4</td></tr>
+    <tr><td><code>limit</code></td><td>超过 <code>--max-turns</code> 或 <code>--max-tokens</code>（由 agentrun 自己计数），且运行时没有满足 <code>finished</code> 的条件，见<a href="run.html#limits">轮数与 token 上限</a></td><td>4</td></tr>
     <tr><td><code>failed</code></td><td>运行时的失败条件成立，见<a href="run.html">运行</a>。三个运行时共有的条件：退出码非 0；正常退出却没有输出结果事件；运行中发现沙箱启动失败</td><td>1</td></tr>
     <tr><td><code>finished</code></td><td>以上都不成立</td><td>0</td></tr>
   </tbody>

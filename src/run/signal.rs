@@ -35,12 +35,6 @@ impl Signal {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LimitStop {
-    Terminated,
-    AfterExit,
-}
-
 #[derive(Clone)]
 pub struct Signals {
     shared: Arc<Shared>,
@@ -270,16 +264,16 @@ impl Signals {
         }
     }
 
-    pub fn stop_for_limit(&self) -> Option<LimitStop> {
+    pub fn stop_for_limit(&self) -> bool {
         let mut state = self.shared.lock();
         match &mut state.phase {
             Phase::Running(running) if !running.terminating => {
                 running.terminate(SIGTERM);
                 self.shared.changed.notify_all();
-                Some(LimitStop::Terminated)
+                true
             }
-            Phase::Finishing => Some(LimitStop::AfterExit),
-            _ => None,
+            Phase::Finishing => true,
+            _ => false,
         }
     }
 
@@ -489,22 +483,22 @@ mod tests {
     #[test]
     fn limit_terminates_only_a_runtime_that_is_not_terminating_yet() {
         let (signals, _) = preparing();
-        assert_eq!(signals.stop_for_limit(), None);
+        assert!(!signals.stop_for_limit());
         let mut child = sleeper();
         signals.running(child.id() as i32, None, false);
         signals.shared.receive(Signal::Interrupt);
-        assert_eq!(signals.stop_for_limit(), None);
+        assert!(!signals.stop_for_limit());
         assert_eq!(child.wait().unwrap().signal(), Some(SIGINT));
         signals.finishing();
 
         let (signals, _) = preparing();
         let mut child = sleeper();
         signals.running(child.id() as i32, None, false);
-        assert_eq!(signals.stop_for_limit(), Some(LimitStop::Terminated));
-        assert_eq!(signals.stop_for_limit(), None);
+        assert!(signals.stop_for_limit());
+        assert!(!signals.stop_for_limit());
         assert_eq!(child.wait().unwrap().signal(), Some(SIGTERM));
         signals.finishing();
-        assert_eq!(signals.stop_for_limit(), Some(LimitStop::AfterExit));
+        assert!(signals.stop_for_limit());
         assert_eq!(signals.first_signal(), None);
         assert!(!signals.timed_out());
     }

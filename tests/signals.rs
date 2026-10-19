@@ -42,7 +42,7 @@ fn tests() -> Vec<(&'static str, fn())> {
         adapter_can_terminate_the_process_group,
         max_turns_counts_only_calls_of_the_main_agent,
         max_tokens_counts_every_usage_and_waits_the_grace_period,
-        limit_is_kept_when_the_runtime_exits_0_on_sigterm,
+        limit_follows_how_the_runtime_exits_on_sigterm,
         #[cfg(target_os = "linux")]
         signal_during_sandbox_check_kills_the_check,
         first_signal_reaches_the_wrapped_runtime_directly,
@@ -410,26 +410,27 @@ fn max_tokens_counts_every_usage_and_waits_the_grace_period() {
     assert_eq!(outcome.texts(), ["under", "over"]);
 }
 
-fn limit_is_kept_when_the_runtime_exits_0_on_sigterm() {
-    let env = with_claude(concat!(
-        "trap 'echo \"{\\\"record\\\":\\\"text\\\",\\\"parent\\\":null,\\\"text\\\":\\\"stopped\\\"}\"; exit 0' TERM\n",
-        "echo '{\"record\":\"usage\",\"parent\":null,\"input_tokens\":10,\"output_tokens\":5,\"cache_read_tokens\":0,\"cache_write_tokens\":0}'\n",
-        "sleep 30 &\n",
-        "wait\n",
-    ));
-    let outcome = finish(
-        start(&env, &["--max-tokens", "10"], true, Stdio::null()),
-        &env,
-    );
-    assert_between(outcome.elapsed, 0.0, 4.0, &outcome.events);
-    assert_eq!(outcome.code, 4);
-    assert_eq!(outcome.end()["status"], "limit");
-    assert_eq!(outcome.end()["exit_code"], 0);
-    assert_eq!(
-        outcome.end()["detail"],
-        "--max-tokens 10 exceeded: 15 tokens"
-    );
-    assert_eq!(outcome.texts(), ["stopped"]);
+fn limit_follows_how_the_runtime_exits_on_sigterm() {
+    for (code, status, exit_code) in [(0, "finished", 0), (143, "limit", 4)] {
+        let env = with_claude(&format!(
+            concat!(
+                "trap 'echo \"{{\\\"record\\\":\\\"text\\\",\\\"parent\\\":null,\\\"text\\\":\\\"stopped\\\"}}\"; exit {}' TERM\n",
+                "echo '{{\"record\":\"usage\",\"parent\":null,\"input_tokens\":10,\"output_tokens\":5,\"cache_read_tokens\":0,\"cache_write_tokens\":0}}'\n",
+                "sleep 30 &\n",
+                "wait\n",
+            ),
+            code
+        ));
+        let outcome = finish(
+            start(&env, &["--max-tokens", "10"], true, Stdio::null()),
+            &env,
+        );
+        assert_between(outcome.elapsed, 0.0, 4.0, &outcome.events);
+        assert_eq!(outcome.code, exit_code);
+        assert_eq!(outcome.end()["status"], status);
+        assert_eq!(outcome.end()["exit_code"], code);
+        assert_eq!(outcome.texts(), ["stopped"]);
+    }
 }
 
 fn first_signal_reaches_the_wrapped_runtime_directly() {
