@@ -626,6 +626,15 @@ fn session_dir_inside_the_working_directory_gets_a_note() {
     };
     let stdout = text_run(&sessions);
     assert_eq!(stdout.lines().next(), Some(note.as_str()), "{stdout}");
+    let link = env.root().join("link-to-work");
+    std::os::unix::fs::symlink(env.work(), &link).unwrap();
+    let through_link = link.join("new/sessions");
+    let stdout = text_run(&through_link);
+    let note = format!(
+        "[note] --session-dir {} is inside the working directory. The agent can change the saved sessions",
+        through_link.display()
+    );
+    assert_eq!(stdout.lines().next(), Some(note.as_str()), "{stdout}");
     let stdout = text_run(&env.root().join("outside"));
     assert!(!stdout.contains("[note]"), "{stdout}");
 }
