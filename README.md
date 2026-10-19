@@ -93,11 +93,11 @@ Check the environment first. Each line is one check of one runtime:
 
 ```console
 $ agentrun doctor claude-code pi
-[ok]   claude-code  executable  /opt/node22/bin/claude
+[ok]   claude-code  executable  /opt/node22/bin/claude 2.1.303
 [ok]   claude-code  login       oauth_token
 [ok]   claude-code  sandbox     bubblewrap: wrote inside, blocked outside
 [skip] claude-code  network     --network none
-[ok]   pi           executable  /opt/node22/bin/pi
+[ok]   pi           executable  /opt/node22/bin/pi 1.2.0
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 [ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 [skip] pi           network     --network none

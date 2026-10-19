@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, detail_head, reject_max_turns};
+use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, reject_max_turns};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
@@ -12,6 +12,7 @@ use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{self, PiState};
 use crate::session::Session;
 
+pub(crate) const MIN_VERSION: Version = Version(1, 0, 1);
 const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const STATE_HOME_SUBDIR: &str = ".pi/agent";
 const SERVICE_HOSTS: [(&str, &str); 5] = [
