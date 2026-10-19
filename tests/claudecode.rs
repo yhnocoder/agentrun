@@ -387,6 +387,16 @@ fn resume_reads_the_session_dir_with_the_default_read_restrictions() {
     let first = session_run(&env, &[], "first");
     let id = first["end"]["session_id"].as_str().unwrap().to_string();
     let second = session_run(&env, &["--resume", &id], "second");
+    let third = session_run(
+        &env,
+        &["--resume", &id, "--deny-read", sessions.to_str().unwrap()],
+        "third",
+    );
+    assert_eq!(third["end"]["session_id"], id.as_str());
+    assert_eq!(
+        third["deny_read"].as_array().unwrap().last().unwrap(),
+        sessions.to_str().unwrap()
+    );
     for run in [&first, &second] {
         let denied: Vec<PathBuf> = run["deny_read"]
             .as_array()
@@ -417,7 +427,7 @@ fn resume_reads_the_session_dir_with_the_default_read_restrictions() {
             .unwrap()
             .lines()
             .count(),
-        2
+        3
     );
 }
 
