@@ -93,6 +93,17 @@ impl Failure {
     }
 }
 
+pub fn reject_limits(args: &RunArgs) -> Result<(), String> {
+    let option = match (args.max_turns, args.max_tokens) {
+        (Some(_), _) => "--max-turns",
+        (None, Some(_)) => "--max-tokens",
+        (None, None) => return Ok(()),
+    };
+    Err(format!(
+        "{option} is not supported by codex: codex reports usage only when the run ends, so agentrun cannot stop it during the run"
+    ))
+}
+
 pub fn detail_head(text: &str) -> String {
     text.chars().take(DETAIL_MAX_CHARS).collect()
 }

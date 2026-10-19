@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, PrivateDir, detail_head};
+use super::{Adapter, Failure, Invocation, Launch, PrivateDir, detail_head, reject_limits};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
@@ -152,8 +152,8 @@ impl Adapter for Codex {
         Runtime::Codex
     }
 
-    fn check_args(&self, _args: &RunArgs) -> Result<(), String> {
-        Ok(())
+    fn check_args(&self, args: &RunArgs) -> Result<(), String> {
+        reject_limits(args)
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
@@ -867,12 +867,21 @@ mod tests {
     }
 
     #[test]
-    fn check_args_accepts_the_limits() {
+    fn check_args_rejects_the_limits() {
         let setup = Setup::new();
-        let invocation = setup.invocation(false, &["--max-turns", "3", "--max-tokens", "100"]);
-        assert_eq!(Codex::new().check_args(&invocation.args), Ok(()));
-        let launch = launch(&setup, false, &["--max-turns", "3", "--max-tokens", "100"]);
-        assert!(!launch.argv.iter().any(|arg| arg.starts_with("--max")));
+        let check = |extra: &[&str]| Codex::new().check_args(&setup.invocation(false, extra).args);
+        let rejected = |option: &str| {
+            Err(format!(
+                "{option} is not supported by codex: codex reports usage only when the run ends, so agentrun cannot stop it during the run"
+            ))
+        };
+        assert_eq!(check(&["--max-turns", "3"]), rejected("--max-turns"));
+        assert_eq!(check(&["--max-tokens", "100"]), rejected("--max-tokens"));
+        assert_eq!(
+            check(&["--max-tokens", "100", "--max-turns", "3"]),
+            rejected("--max-turns")
+        );
+        assert_eq!(check(&[]), Ok(()));
     }
 
     #[test]

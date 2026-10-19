@@ -140,15 +140,25 @@ fn missing_cwd_is_rejected() {
 }
 
 #[test]
-fn limits_are_accepted_by_every_runtime_and_must_be_positive() {
+fn limits_are_for_claude_code_and_pi_and_must_be_positive() {
     let env = Env::new();
-    for runtime in ["claude-code", "codex", "pi"] {
-        let limits = ["--max-turns", "3", "--max-tokens", "1000"];
+    let limits = ["--max-turns", "3", "--max-tokens", "1000"];
+    for runtime in ["claude-code", "pi"] {
         let detail = assert_rejected(&run(
             &env,
             &[&[runtime, "--prompt", "hi"][..], &limits].concat(),
         ));
         assert!(detail.ends_with("not found in PATH"), "{runtime}: {detail}");
+    }
+    let detail = assert_rejected(&run(
+        &env,
+        &[&["codex", "--prompt", "hi"][..], &limits[2..]].concat(),
+    ));
+    assert!(
+        detail.starts_with("--max-tokens is not supported by codex"),
+        "{detail}"
+    );
+    for runtime in ["claude-code", "codex", "pi"] {
         for option in ["--max-turns", "--max-tokens"] {
             let detail = assert_rejected(&run(&env, &[runtime, option, "0", "--prompt", "hi"]));
             assert!(detail.contains(option), "{runtime}: {detail}");

@@ -38,7 +38,7 @@
     <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
-<p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，运行框架每处理完一行原始输出，把 <code>Aggregator::open_tools</code> 的快照交给 rich，用来显示正在执行的工具；同时用 <code>main_calls</code> 与 <code>tokens</code> 检查<a href="run.html#limits">轮数与 token 上限</a>。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
+<p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件。其中 <code>Record::CallStart</code> 表示一次模型调用开始，带 <code>parent</code>，不输出事件，只用于计数轮数。<code>Aggregator</code> 的工作是：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，运行框架每处理完一行原始输出，把 <code>Aggregator::open_tools</code> 的快照交给 rich，用来显示正在执行的工具；同时用 <code>main_calls</code> 与 <code>tokens</code> 检查<a href="run.html#limits">轮数与 token 上限</a>。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
 
 <h2>统一事件流</h2>
 <p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
