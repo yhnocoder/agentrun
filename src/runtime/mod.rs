@@ -5,7 +5,7 @@ pub mod pi;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 
@@ -230,13 +230,24 @@ pub(crate) fn denied_reads(
 }
 
 pub(crate) fn contains(path: &Path, dir: &Path) -> bool {
-    if dir.starts_with(path) {
-        return true;
-    }
     match (std::fs::canonicalize(path), std::fs::canonicalize(dir)) {
         (Ok(path), Ok(dir)) => dir.starts_with(path),
-        _ => false,
+        _ => lexical(dir).starts_with(lexical(path)),
     }
+}
+
+fn lexical(path: &Path) -> PathBuf {
+    let mut normal = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normal.pop();
+            }
+            Component::CurDir => {}
+            other => normal.push(other),
+        }
+    }
+    normal
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -541,6 +552,25 @@ mod tests {
         );
         assert!(!paths.contains(&PathBuf::from("/nonexistent/home/.ssh")));
         assert!(paths.contains(&PathBuf::from("/nonexistent/home/.aws")));
+    }
+
+    #[test]
+    fn contains_compares_paths_after_resolving_parent_components() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        std::fs::create_dir_all(work.join("sub")).unwrap();
+        std::fs::create_dir(root.path().join("outside")).unwrap();
+        assert!(contains(&work, &work.join("sub")));
+        assert!(contains(&work, &work));
+        assert!(!contains(&work, &work.join("../outside")));
+        assert!(!contains(&work, &work.join("../outside/missing")));
+        assert!(contains(&work, &work.join("sub/../missing")));
+        assert!(!contains(&work.join("missing"), &work));
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&work, &link).unwrap();
+        assert!(contains(&work, &link.join("sub")));
+        assert!(contains(&link, &work.join("sub")));
+        assert!(!contains(&link, &link.join("../outside")));
     }
 
     #[test]

@@ -176,6 +176,7 @@ pub(super) fn execute(
 }
 
 fn session_dir_note(invocation: &Invocation) -> Option<String> {
+    // why(#117): 依赖 prepare 里的 create_store 已经创建了这个目录，contains 才能跟随符号链接比较；移到创建之前时只能按字面比较
     let dir = invocation.args.session_dir.as_deref()?;
     (invocation.sandbox.runs() && contains(&invocation.cwd, dir)).then(|| {
         format!(
