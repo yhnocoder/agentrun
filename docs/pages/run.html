@@ -400,7 +400,7 @@ agentrun variables: (none)</div>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
   <li><code>--max-turns</code> 是用法错误。</li>
-  <li>给了 <code>--image</code> 时，每个图片副本一组 <code>--image &lt;路径&gt;</code>，紧跟在 <code>-C &lt;cwd&gt;</code> 之后。codex 的 <code>--image</code> 接受一个或多个值，并把逗号当作值之间的分隔符（codex 源码 <code>codex-rs/utils/cli/src/shared_options.rs</code>），所以它后面必须紧跟另一个选项，否则最后的 <code>-</code> 会被当成图片；路径里有逗号时 codex 会把它拆成两个文件，这时启动前报错，<code>detail</code> 为 <code>cannot give images to codex: the path &lt;路径&gt; contains ',', which codex reads as a list separator</code>。副本路径在会话临时目录里，只有 <code>$TMPDIR</code> 含逗号时才会出现这个错误。</li>
+  <li>给了 <code>--image</code> 时，每个图片副本一组 <code>--image &lt;路径&gt;</code>，紧跟在 <code>-C &lt;cwd&gt;</code> 之后（codex 0.160.1 实测 PNG、JPEG、GIF、WebP 与多张图片）。codex 的 <code>--image</code> 接受一个或多个值，并把逗号当作值之间的分隔符（codex 源码 <code>codex-rs/utils/cli/src/shared_options.rs</code>），所以它后面必须紧跟另一个选项，否则最后的 <code>-</code> 会被当成图片；路径里有逗号时 codex 会把它拆成两个文件，这时启动前报错，<code>detail</code> 为 <code>cannot give images to codex: the path &lt;路径&gt; contains ',', which codex reads as a list separator</code>。副本路径在会话临时目录里，只有 <code>$TMPDIR</code> 含逗号时才会出现这个错误。</li>
 </ul>
 <h3>输出映射</h3>
 <table>
