@@ -135,14 +135,14 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --format text --prompt "在 notes.txt 里写一句问候语"
 <span class="dim">[main]</span> prompt 在 notes.txt 里写一句问候语
 <span class="dim">[main]</span> tool Write: notes.txt
-<span class="dim">[main]</span> text 我已经在 `/tmp/demo/notes.txt` 里写了一句问候语:"你好!祝你今天一切顺利,心情愉快!"
-<span class="dim">[end]</span> finished 6.2s  in 25.4k  out 0.2k  cached 79%  $0.0204  session e5e30275-bbaf-467c-a1d7-1c3f5e22468c</div>
+<span class="dim">[main]</span> text 我已经在 `/tmp/demo/notes.txt` 里写了一句问候语:“你好!祝你今天一切顺利!”
+<span class="dim">[end]</span> finished 7.1s  in 25.7k  out 0.2k  cached 79%  $0.0209  session 8b72e446-ee5f-4d7d-88d9-d057af9b458d</div>
 <p><code>[end]</code> 行最后的 <code>session</code> 是会话 id；jsonl 格式下它是 <code>end</code> 事件的 <code>session_id</code> 字段。下一次运行给出同一个 <code>--session-dir</code> 和 <code>--resume &lt;会话 id&gt;</code>，agent 记得上一次做过什么：</p>
-<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume e5e30275-bbaf-467c-a1d7-1c3f5e22468c --format text --prompt "把你刚才写的那句话翻译成英文，追加到同一个文件"
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 8b72e446-ee5f-4d7d-88d9-d057af9b458d --format text --prompt "把你刚才写的那句话翻译成英文，追加到同一个文件"
 <span class="dim">[main]</span> prompt 把你刚才写的那句话翻译成英文，追加到同一个文件
-<span class="dim">[main]</span> tool Bash: echo "Hello! Wishing you a smooth and happy day!" &gt;&gt; /tmp/demo/notes.txt &amp;&amp; cat /tmp/demo/notes.txt
-<span class="dim">[main]</span> text 已把英文翻译追加到 `/tmp/demo/notes.txt`。现在文件内容是:
-<span class="dim">[end]</span> finished 6.9s  in 54.2k  out 0.4k  cached 86%  $0.0347  session e5e30275-bbaf-467c-a1d7-1c3f5e22468c</div>
+<span class="dim">[main]</span> tool Edit: notes.txt
+<span class="dim">[main]</span> text 我已经把英文翻译追加到 `/tmp/demo/notes.txt` 的第二行:“Hello! Wishing you all the best today!”
+<span class="dim">[end]</span> finished 6.0s  in 54.9k  out 0.4k  cached 86%  $0.0352  session 8b72e446-ee5f-4d7d-88d9-d057af9b458d</div>
 <p>继续后会话 id 不变，可以一直用同一个 id 接着运行。会话记录按运行时分开保存在 <code>~/agent-sessions/claude-code/</code> 这样的子目录里，只能用同一个子命令继续。<code>--session-dir</code> 放在工作目录之外，否则 agent 能改写保存的会话。不要同时用同一个 id 运行两次。保存的方式见<a href="run.html#sessions">保存与继续会话</a>。</p>
 
 <h2 id="containers">在 docker 与 Cloud Managed 容器里运行</h2>

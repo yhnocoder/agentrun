@@ -461,10 +461,10 @@ fn text_format_shows_note_and_lines() {
     );
     assert!(lines[4].starts_with("[explore#1] agent finished "));
     assert!(lines[4].ends_with("s claude-haiku-4-5  in 30  out 4"));
-    assert_eq!(lines[5], "[main] text done");
-    assert!(lines[6].starts_with("[end] finished "));
-    assert!(lines[6].ends_with("s  in 30  out 4"));
-    assert_eq!(lines.len(), 7);
+    assert_eq!(lines[5..7], ["[main] text done", "    more"]);
+    assert!(lines[7].starts_with("[end] finished "));
+    assert!(lines[7].ends_with("s  in 30  out 4"));
+    assert_eq!(lines.len(), 8);
 }
 
 #[test]

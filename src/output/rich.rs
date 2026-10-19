@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,8 @@ use crate::json::first_line;
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MIN_COLUMN: usize = 10;
+const RECENT_TEXTS: usize = 3;
+const TAB: &str = "    ";
 const ECHO_ROOM: usize = 2;
 const HEIGHT_MARGIN: usize = 6;
 const FALLBACK_SIZE: (usize, usize) = (80, 24);
@@ -256,6 +259,20 @@ fn truncate(text: &str, max: usize) -> String {
     result
 }
 
+fn rows(line: &str, width: usize) -> usize {
+    let width = width.max(1);
+    let (mut rows, mut column) = (1, 0);
+    for char in line.replace(DIM, "").replace(RESET, "").chars() {
+        let cells = char.width().unwrap_or(0);
+        if column + cells > width {
+            rows += 1;
+            column = 0;
+        }
+        column += cells;
+    }
+    rows
+}
+
 fn clock(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     if seconds < 3600 {
@@ -296,6 +313,18 @@ pub struct Rich {
     cursor_hidden: bool,
     finished: bool,
     stderr_pending: Vec<u8>,
+    recent: VecDeque<Block>,
+}
+
+struct Block {
+    lines: Vec<String>,
+    text: bool,
+}
+
+impl Block {
+    fn rows(&self, width: usize) -> usize {
+        self.lines.iter().map(|line| rows(line, width)).sum()
+    }
 }
 
 impl Rich {
@@ -314,6 +343,7 @@ impl Rich {
             cursor_hidden: false,
             finished: false,
             stderr_pending: Vec::new(),
+            recent: VecDeque::new(),
         }
     }
 
@@ -323,14 +353,25 @@ impl Rich {
             .text
             .lines(event)
             .iter()
-            .map(|line| dim_label(line, self.color))
+            .map(|line| dim_label(&line.replace('\t', TAB), self.color))
             .collect();
         self.panel.observe(event, now);
         if !matches!(event.body, Body::End(_)) {
-            self.paint(out, &lines, now);
+            let text = matches!(event.body, Body::Text(_));
+            let mut committed = self.keep(lines, text);
+            while self.recent.iter().filter(|block| block.text).count() > RECENT_TEXTS {
+                committed.extend(self.collapse_oldest());
+            }
+            self.paint(out, committed, now);
             return;
         }
         let mut bytes = self.erase();
+        for block in self.recent.drain(..) {
+            for line in block.lines {
+                bytes.extend_from_slice(line.as_bytes());
+                bytes.push(b'\n');
+            }
+        }
         if !self.stderr_pending.is_empty() {
             bytes.append(&mut self.stderr_pending);
             bytes.push(b'\n');
@@ -348,7 +389,26 @@ impl Rich {
     }
 
     pub fn refresh(&mut self, out: &mut dyn Write) {
-        self.paint(out, &[], Instant::now());
+        self.paint(out, Vec::new(), Instant::now());
+    }
+
+    fn keep(&mut self, lines: Vec<String>, text: bool) -> Vec<String> {
+        if lines.is_empty() || !text && self.recent.is_empty() {
+            return lines;
+        }
+        self.recent.push_back(Block { lines, text });
+        Vec::new()
+    }
+
+    fn collapse_oldest(&mut self) -> Vec<String> {
+        let mut committed = Vec::new();
+        if let Some(block) = self.recent.pop_front() {
+            committed.extend(block.lines.into_iter().take(1));
+        }
+        while self.recent.front().is_some_and(|block| !block.text) {
+            committed.extend(self.recent.pop_front().unwrap().lines);
+        }
+        committed
     }
 
     pub fn stderr(&mut self, out: &mut dyn Write, bytes: &[u8]) {
@@ -359,29 +419,40 @@ impl Rich {
             lines.push(String::from_utf8_lossy(&line[..end]).into_owned());
         }
         if !lines.is_empty() {
-            self.paint(out, &lines, Instant::now());
+            let lines = lines.iter().map(|line| line.replace('\t', TAB)).collect();
+            let committed = self.keep(lines, false);
+            self.paint(out, committed, Instant::now());
         }
     }
 
-    fn paint(&mut self, out: &mut dyn Write, lines: &[String], now: Instant) {
+    fn paint(&mut self, out: &mut dyn Write, mut committed: Vec<String>, now: Instant) {
         if self.finished {
             return;
+        }
+        let (width, height) = (self.size)();
+        let panel = self.panel.lines(&self.text, width, height, now, self.color);
+        let room = height.saturating_sub(panel.len() + 1);
+        while self.recent_rows(width) > room {
+            committed.extend(self.collapse_oldest());
         }
         let mut bytes = self.erase();
         if !self.cursor_hidden {
             bytes.extend_from_slice(HIDE_CURSOR.as_bytes());
             self.cursor_hidden = true;
         }
-        for line in lines {
+        let recent = self.recent.iter().flat_map(|block| &block.lines);
+        for line in committed.iter().chain(recent) {
             bytes.extend_from_slice(line.as_bytes());
             bytes.push(b'\n');
         }
-        let (width, height) = (self.size)();
-        let panel = self.panel.lines(&self.text, width, height, now, self.color);
         bytes.extend_from_slice(panel.join("\n").as_bytes());
-        self.drawn = panel.len();
+        self.drawn = self.recent_rows(width) + panel.len();
         let _ = out.write_all(&bytes);
         let _ = out.flush();
+    }
+
+    fn recent_rows(&self, width: usize) -> usize {
+        self.recent.iter().map(|block| block.rows(width)).sum()
     }
 
     fn erase(&mut self) -> Vec<u8> {
@@ -403,8 +474,8 @@ mod tests {
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
     use crate::output::event::{
-        NetworkInfo, SandboxKind, Start, SubagentEnd, SubagentStart, SubagentStatus, Tool,
-        ToolStart, UsageReport,
+        End, EndStatus, NetworkInfo, SandboxKind, Start, SubagentEnd, SubagentStart,
+        SubagentStatus, Text, Tool, ToolStart, UsageReport,
     };
 
     fn event(body: Body) -> Event {
@@ -827,6 +898,220 @@ mod tests {
             dim_label("[explore#1] tool Grep: x", false),
             "[explore#1] tool Grep: x"
         );
+    }
+
+    struct Screen {
+        width: usize,
+        cells: Vec<Vec<char>>,
+        row: usize,
+        column: usize,
+    }
+
+    impl Screen {
+        fn new(width: usize) -> Screen {
+            Screen {
+                width,
+                cells: vec![Vec::new()],
+                row: 0,
+                column: 0,
+            }
+        }
+
+        fn feed(&mut self, bytes: &[u8]) {
+            let text = String::from_utf8_lossy(bytes).into_owned();
+            let mut chars = text.chars().peekable();
+            while let Some(char) = chars.next() {
+                match char {
+                    '\r' => self.column = 0,
+                    '\n' => self.move_to(self.row + 1, 0),
+                    '\x1b' => {
+                        chars.next();
+                        let mut code = String::new();
+                        while let Some(&next) = chars.peek() {
+                            chars.next();
+                            code.push(next);
+                            if next.is_ascii_alphabetic() {
+                                break;
+                            }
+                        }
+                        match code.as_str() {
+                            "J" => {
+                                self.cells.truncate(self.row + 1);
+                                self.cells[self.row].truncate(self.column);
+                            }
+                            up if up.ends_with('A') => {
+                                let count: usize = up.trim_end_matches('A').parse().unwrap();
+                                self.row -= count;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {
+                        let cells = char.width().unwrap_or(0);
+                        if self.column + cells > self.width {
+                            self.move_to(self.row + 1, 0);
+                        }
+                        let line = &mut self.cells[self.row];
+                        line.resize(line.len().max(self.column), ' ');
+                        line.truncate(self.column);
+                        line.push(char);
+                        line.extend(std::iter::repeat_n('\0', cells.saturating_sub(1)));
+                        self.column += cells;
+                    }
+                }
+            }
+        }
+
+        fn move_to(&mut self, row: usize, column: usize) {
+            self.row = row;
+            self.column = column;
+            if self.cells.len() <= row {
+                self.cells.resize(row + 1, Vec::new());
+            }
+        }
+
+        fn lines(&self) -> Vec<String> {
+            let mut lines: Vec<String> = self
+                .cells
+                .iter()
+                .map(|line| line.iter().filter(|&&char| char != '\0').collect())
+                .collect();
+            while lines.last().is_some_and(String::is_empty) {
+                lines.pop();
+            }
+            lines
+        }
+    }
+
+    fn text(body: &str) -> Event {
+        event(Body::Text(Text {
+            parent: None,
+            text: body.to_string(),
+        }))
+    }
+
+    fn tool(summary: &str) -> Event {
+        event(Body::Tool(Tool {
+            id: summary.to_string(),
+            parent: None,
+            name: "Bash".to_string(),
+            summary: summary.to_string(),
+            denied: false,
+            error: Some(false),
+        }))
+    }
+
+    fn finished() -> Event {
+        event(Body::End(End {
+            status: EndStatus::Finished,
+            exit_code: Some(0),
+            detail: String::new(),
+            duration_ms: 1_000,
+            usage: Default::default(),
+            result: None,
+            session_id: None,
+        }))
+    }
+
+    fn run(width: usize, height: usize, events: &[Event]) -> (Screen, Rich) {
+        let mut rich = Rich::new(
+            SandboxMode::On,
+            "",
+            false,
+            Box::new(move || (width, height)),
+        );
+        let mut screen = Screen::new(width);
+        for event in events {
+            let mut out = Vec::new();
+            rich.event(&mut out, event);
+            screen.feed(&out);
+            if !rich.finished {
+                assert!(rich.drawn < height, "{} rows drawn in {height}", rich.drawn);
+            }
+        }
+        (screen, rich)
+    }
+
+    #[test]
+    fn texts_before_the_last_three_collapse_to_their_first_line() {
+        let events = [
+            start(Some("sonnet")),
+            text("one\nx\ny"),
+            tool("Bash: ls"),
+            text("two\nx"),
+            text("three"),
+            text("four\nx"),
+        ];
+        let (mut screen, mut rich) = run(40, 30, &events);
+        let lines = screen.lines();
+        assert_eq!(
+            lines[..lines.len() - 2],
+            [
+                "[main] text one",
+                "[main] tool Bash: ls",
+                "[main] text two",
+                "    x",
+                "[main] text three",
+                "[main] text four",
+                "    x",
+            ]
+        );
+        let mut out = Vec::new();
+        rich.event(&mut out, &finished());
+        screen.feed(&out);
+        assert_eq!(
+            screen.lines(),
+            [
+                "[main] text one",
+                "[main] tool Bash: ls",
+                "[main] text two",
+                "    x",
+                "[main] text three",
+                "[main] text four",
+                "    x",
+                "[end] finished 1.0s",
+            ]
+        );
+    }
+
+    #[test]
+    fn recent_texts_collapse_to_fit_a_short_terminal() {
+        let events = [
+            start(Some("sonnet")),
+            text("一二三四五六七八九十一二三四五六七八九十\nb\nc"),
+            text("two\nx\ny"),
+            text("three\nx\ny\nz"),
+        ];
+        let (mut screen, mut rich) = run(21, 8, &events);
+        let lines = screen.lines();
+        assert_eq!(
+            lines[..lines.len() - 2],
+            [
+                "[main] text 一二三四",
+                "五六七八九十一二三四",
+                "五六七八九十",
+                "[main] text two",
+                "[main] text three",
+                "    x",
+                "    y",
+                "    … (+1 line)",
+            ]
+        );
+        let mut out = Vec::new();
+        rich.event(&mut out, &finished());
+        screen.feed(&out);
+        assert_eq!(screen.lines().last().unwrap(), "[end] finished 1.0s");
+        assert_eq!(screen.lines().len(), lines.len() - 1);
+    }
+
+    #[test]
+    fn wide_characters_wrap_before_the_last_column() {
+        assert_eq!(rows("", 5), 1);
+        assert_eq!(rows("abcde", 5), 1);
+        assert_eq!(rows("abcdef", 5), 2);
+        assert_eq!(rows("一二三", 5), 2);
+        assert_eq!(rows("一二三四五", 5), 3);
+        assert_eq!(rows(&format!("{DIM}[main]{RESET} ab"), 9), 1);
     }
 
     #[test]

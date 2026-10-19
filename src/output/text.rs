@@ -5,6 +5,10 @@ use super::usage::{TokenCounts, cost};
 use crate::cli::SandboxMode;
 use crate::json::first_line;
 
+const PREVIEW_LINES: usize = 3;
+const CONTINUATION: &str = "    ";
+const RESULT_HEADER: &str = "[result]";
+
 pub struct TextFormatter {
     sandbox: SandboxMode,
     sandbox_reason: String,
@@ -46,11 +50,11 @@ impl TextFormatter {
                     outcome
                 )]
             }
-            Body::Text(text) => vec![format!(
-                "[{}] text {}",
-                self.label(text.parent.as_deref()),
-                first_line(&text.text)
-            )],
+            Body::Text(text) => {
+                let mut lines = preview(&text.text);
+                lines[0] = format!("[{}] text {}", self.label(text.parent.as_deref()), lines[0]);
+                lines
+            }
             Body::Usage(usage) => {
                 if let (Some(parent), Some(model)) = (&usage.parent, &usage.model) {
                     self.subagent_models.insert(parent.clone(), model.clone());
@@ -104,6 +108,19 @@ impl TextFormatter {
                 if end.status == EndStatus::Rejected {
                     return vec![format!("[end] rejected {}", single_line(&end.detail))];
                 }
+                let mut lines = match &end.result {
+                    Some(result) if content_lines(result).count() > PREVIEW_LINES => {
+                        std::iter::once(RESULT_HEADER.to_string())
+                            .chain(
+                                result
+                                    .trim_matches(['\r', '\n'])
+                                    .lines()
+                                    .map(str::to_string),
+                            )
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
                 let mut line = format!("[end] {} {}", end.status.name(), seconds(end.duration_ms));
                 line.push_str(&usage_items(&end.usage.totals));
                 if let Some(usd) = end.usage.totals.cost_usd {
@@ -118,7 +135,8 @@ impl TextFormatter {
                     line.push_str("  ");
                     line.push_str(&single_line(&end.detail));
                 }
-                vec![line]
+                lines.push(line);
+                lines
             }
         }
     }
@@ -151,6 +169,28 @@ impl TextFormatter {
             .cloned()
             .unwrap_or_else(|| "main".to_string())
     }
+}
+
+fn content_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().filter(|line| !line.trim().is_empty())
+}
+
+fn preview(text: &str) -> Vec<String> {
+    let mut lines = content_lines(text);
+    let mut shown = vec![lines.next().unwrap_or_default().to_string()];
+    shown.extend(
+        lines
+            .by_ref()
+            .take(PREVIEW_LINES - 1)
+            .map(|line| format!("{CONTINUATION}{line}")),
+    );
+    let hidden = lines.count();
+    match hidden {
+        0 => {}
+        1 => shown.push(format!("{CONTINUATION}… (+1 line)")),
+        hidden => shown.push(format!("{CONTINUATION}… (+{hidden} lines)")),
+    }
+    shown
 }
 
 fn single_line(text: &str) -> String {
@@ -297,7 +337,7 @@ mod tests {
                 parent: None,
                 text: "done\nsecond".to_string()
             }))),
-            vec!["[main] text done"]
+            vec!["[main] text done", "    second"]
         );
         assert!(
             text.lines(&event(Body::ToolStart(ToolStart {
@@ -489,6 +529,65 @@ mod tests {
         assert_eq!(
             text.lines(&saved),
             vec!["[end] failed 31.3s  out 3  session 0199-a  boom"]
+        );
+    }
+
+    #[test]
+    fn text_shows_three_content_lines_and_counts_the_rest() {
+        let mut text = TextFormatter::new(SandboxMode::On, "");
+        let mut lines = |body: &str| {
+            text.lines(&event(Body::Text(Text {
+                parent: None,
+                text: body.to_string(),
+            })))
+        };
+        assert_eq!(
+            lines("\nOutput:\n\n  a\r\nb\n"),
+            vec!["[main] text Output:", "      a", "    b"]
+        );
+        assert_eq!(
+            lines("Output:\na\nb\nc"),
+            vec!["[main] text Output:", "    a", "    b", "    … (+1 line)"]
+        );
+        assert_eq!(
+            lines("Output:\na\n\nb\nc\nd"),
+            vec!["[main] text Output:", "    a", "    b", "    … (+2 lines)"]
+        );
+        assert_eq!(lines(""), vec!["[main] text "]);
+    }
+
+    #[test]
+    fn end_prints_a_result_longer_than_the_preview_in_full() {
+        let mut text = TextFormatter::new(SandboxMode::On, "");
+        let with_result = |result: &str, status: EndStatus| {
+            let mut event = end(status, "", TokenCounts::default());
+            if let Body::End(end) = &mut event.body {
+                end.result = Some(result.to_string());
+            }
+            event
+        };
+        assert_eq!(
+            text.lines(&with_result("a\nb\n\nc\n", EndStatus::Finished)),
+            vec!["[end] finished 31.3s"]
+        );
+        assert_eq!(
+            text.lines(&with_result(
+                "\nOutput:\n\n```\nx\n```\n",
+                EndStatus::Finished
+            )),
+            vec![
+                "[result]",
+                "Output:",
+                "",
+                "```",
+                "x",
+                "```",
+                "[end] finished 31.3s"
+            ]
+        );
+        assert_eq!(
+            text.lines(&with_result("a\nb\nc\nd", EndStatus::Timeout)),
+            vec!["[result]", "a", "b", "c", "d", "[end] timeout 31.3s"]
         );
     }
 
