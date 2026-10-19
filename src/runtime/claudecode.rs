@@ -555,7 +555,7 @@ impl Adapter for ClaudeCode {
                 let dir = file.with_file_name(&self.session_id);
                 let project = file.parent().map(Path::to_path_buf);
                 let mut entries = vec![file];
-                if dir.is_dir() {
+                if std::fs::symlink_metadata(&dir).is_ok_and(|metadata| metadata.is_dir()) {
                     entries.push(dir);
                 }
                 (entries, project)
@@ -1721,9 +1721,16 @@ mod tests {
             adapter.transcript(),
             Some(Transcript {
                 id: adapter.session_id.clone(),
-                entries: vec![file, project.join(&adapter.session_id)],
-                emptied_dir: Some(project),
+                entries: vec![file.clone(), project.join(&adapter.session_id)],
+                emptied_dir: Some(project.clone()),
             })
+        );
+        let subagents = project.join(&adapter.session_id);
+        std::fs::rename(&subagents, root.path().join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("elsewhere"), &subagents).unwrap();
+        assert_eq!(
+            adapter.transcript().map(|transcript| transcript.entries),
+            Some(vec![file])
         );
 
         let (unsaved, _) = with_config_dir(&config, &[]);

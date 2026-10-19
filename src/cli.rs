@@ -25,6 +25,8 @@ pub enum Command {
     Codex(RunArgs),
     #[command(about = "Run pi")]
     Pi(RunArgs),
+    #[command(about = "Run dsh (DeepSeek Harness)")]
+    Dsh(RunArgs),
     #[command(about = "Check whether the runtimes can be used in this environment")]
     Doctor(DoctorArgs),
     #[command(hide = true)]
@@ -43,6 +45,7 @@ impl Command {
             Command::ClaudeCode(args) => Parsed::Run(Runtime::ClaudeCode, Box::new(args)),
             Command::Codex(args) => Parsed::Run(Runtime::Codex, Box::new(args)),
             Command::Pi(args) => Parsed::Run(Runtime::Pi, Box::new(args)),
+            Command::Dsh(args) => Parsed::Run(Runtime::Dsh, Box::new(args)),
             Command::Doctor(args) => Parsed::Doctor(args),
             Command::DoctorConnect(args) => Parsed::Connect(args),
         }
@@ -57,6 +60,8 @@ pub enum Runtime {
     Codex,
     #[serde(rename = "pi")]
     Pi,
+    #[serde(rename = "dsh")]
+    Dsh,
 }
 
 impl Runtime {
@@ -65,6 +70,7 @@ impl Runtime {
             Runtime::ClaudeCode => "claude-code",
             Runtime::Codex => "codex",
             Runtime::Pi => "pi",
+            Runtime::Dsh => "dsh",
         }
     }
 
@@ -73,6 +79,7 @@ impl Runtime {
             Runtime::ClaudeCode => "claude",
             Runtime::Codex => "codex",
             Runtime::Pi => "pi",
+            Runtime::Dsh => "dsh",
         }
     }
 }
@@ -203,7 +210,7 @@ pub struct DoctorArgs {
     #[arg(
         value_enum,
         value_name = "RUNTIME",
-        help = "Runtimes to check, in the order claude-code, codex, pi (default: all)"
+        help = "Runtimes to check, in the order claude-code, codex, pi, dsh (default: all)"
     )]
     pub runtimes: Vec<Runtime>,
     #[arg(long, value_name = "ID", help = "Model, checked for every runtime")]

@@ -15,7 +15,7 @@
 
 - On macOS, nothing else. The sandbox uses Seatbelt, which is part of the system.
 
-The tests use fake runtimes and recorded output, so claude-code, codex and pi do not need to be installed to run them.
+The tests use fake runtimes and recorded output, so claude-code, codex, pi and dsh do not need to be installed to run them.
 
 ## Checks
 
