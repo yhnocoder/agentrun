@@ -366,7 +366,7 @@ fn resolve_cwd(cwd: Option<&Path>) -> Result<PathBuf, String> {
             cwd.display()
         ));
     }
-    std::path::absolute(&cwd).map_err(|error| format!("--cwd {}: {error}", cwd.display()))
+    std::fs::canonicalize(&cwd).map_err(|error| format!("--cwd {}: {error}", cwd.display()))
 }
 
 fn resolve_session_dir(

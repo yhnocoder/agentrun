@@ -85,6 +85,7 @@ pub struct RunArgs {
         long,
         value_name = "TEXT",
         conflicts_with = "prompt_file",
+        allow_hyphen_values = true,
         help = "Prompt text"
     )]
     pub prompt: Option<String>,

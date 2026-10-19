@@ -251,6 +251,67 @@ fn prompt_starting_with_at_reaches_pi_on_stdin_and_not_as_an_argument() {
 }
 
 #[test]
+fn prompt_starting_with_a_hyphen_is_the_prompt() {
+    let env = Env::with("pi", STDIN_PI);
+    for prompt in ["- fix the parser\n- add a test", "--help", "-v"] {
+        let output = run(
+            &env,
+            &[
+                "--sandbox",
+                "off",
+                "--model",
+                "deepseek/deepseek-flash",
+                "--prompt",
+                prompt,
+            ],
+        );
+        assert_eq!(output.status.code(), Some(0), "{prompt}: {output:?}");
+        let stdin = std::fs::read_to_string(env.work().join("stdin.txt")).unwrap();
+        assert_eq!(stdin, prompt);
+    }
+}
+
+#[test]
+fn symlinked_cwd_runs_in_the_real_directory() {
+    let env = Env::with("pi", STDIN_PI);
+    let link = env.root().join("link");
+    std::os::unix::fs::symlink(env.work(), &link).unwrap();
+    let mut sandboxes = vec!["off"];
+    if support::sandbox_available() {
+        sandboxes.push("on");
+    }
+    for sandbox in sandboxes {
+        let output = env
+            .command(&[
+                "pi",
+                "--cwd",
+                link.to_str().unwrap(),
+                "--sandbox",
+                sandbox,
+                "--model",
+                "deepseek/deepseek-flash",
+                "--prompt",
+                "hi",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "--sandbox {sandbox}: {output:?}"
+        );
+        assert_eq!(
+            support::events(&output)[0]["cwd"],
+            json!(env.work().to_str().unwrap())
+        );
+        assert_eq!(
+            std::fs::read_to_string(env.work().join("stdin.txt")).unwrap(),
+            "hi"
+        );
+    }
+}
+
+#[test]
 fn arguments_equal_to_the_prompt_stay_in_the_command() {
     let env = Env::with("pi", STDIN_PI);
     let args = ["--sandbox", "off", "--effort", "low", "--prompt", "low"];

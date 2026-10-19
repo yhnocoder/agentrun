@@ -64,7 +64,7 @@ interface StartEvent extends EventBase {
   }
   deny_read: string[]        // agent 不能读的路径：默认列表在前，--deny-read 在后
   model: string | null       // --model 的值，未给时为 null
-  cwd: string                // 绝对路径
+  cwd: string                // 真实的绝对路径，符号链接已展开
   argv: string[]             // 实际执行的完整命令，不含提示词
   env: string[]              // --env 与 --env-file 设置的变量名，不含值
 }
@@ -456,7 +456,7 @@ subagent  2 running <span class="ref">2</span>
 <ol class="callouts">
   <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
   <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。标签与模型取自 <code>TextFormatter</code> 记下的值，与 text 格式显示的相同。</li>
-  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
+  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。状态栏比终端宽度少用 3 列，宽度不够时先截断工具、再截断整行，理由：按 Ctrl-C 时终端在光标处回显 <code>^C</code>，光标在状态栏末尾，状态栏占满一行时回显会折到下一行，结束时擦除少擦一行，面板的分隔线留在滚动区里。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
 <p>「正在执行的工具」从事件流取：rich 记下已经收到 <code>tool_start</code>、还没收到同 <code>id</code> 的 <code>tool</code> 的调用，按 <code>parent</code> 分到各个 agent，每个 agent 显示其中最近开始的一个。</p>
 <p>面板每 100 毫秒重画一次，滚动区每输出一行也立即重画；动画每 100 毫秒换一帧。面板第一次出现时隐藏光标，结束时恢复。</p>

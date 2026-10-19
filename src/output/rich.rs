@@ -12,6 +12,7 @@ use crate::json::first_line;
 pub const REFRESH_PERIOD: Duration = Duration::from_millis(100);
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MIN_COLUMN: usize = 10;
+const ECHO_ROOM: usize = 2;
 const HEIGHT_MARGIN: usize = 6;
 const FALLBACK_SIZE: (usize, usize) = (80, 24);
 const DIM: &str = "\x1b[2m";
@@ -171,7 +172,12 @@ impl Panel {
             self.usage(),
             context(self.main_context),
         ];
-        lines.extend(table(vec![status], &[2], &format!("{frame} "), max));
+        lines.extend(table(
+            vec![status],
+            &[2],
+            &format!("{frame} "),
+            max.saturating_sub(ECHO_ROOM),
+        ));
         lines
     }
 
@@ -686,12 +692,34 @@ mod tests {
         panel.observe(&start(Some("claude-sonnet-5-5")), started);
         panel.start_tool("t1", None, "Bash: cargo test --workspace --all-features");
         let lines = panel.lines(50, 24, started, false);
-        assert_eq!(
-            lines[1],
-            "⠋ main  claude-sonnet-5-5  Bash: cargo tes…  0:00"
-        );
-        let lines = panel.lines(30, 24, started, false);
+        assert_eq!(lines[1], "⠋ main  claude-sonnet-5-5  Bash: cargo t…  0:00");
+        let lines = panel.lines(32, 24, started, false);
         assert_eq!(lines[1], "⠋ main  claude-sonnet-5-5  B…");
+    }
+
+    #[test]
+    fn status_bar_leaves_room_for_the_interrupt_echo() {
+        let started = Instant::now();
+        let mut panel = Board::new(started);
+        panel.observe(&start(Some("deepseek/deepseek-flash")), started);
+        panel.start_tool(
+            "t1",
+            None,
+            "bash: node -e 'setTimeout(function () {}, 120000)'",
+        );
+        panel.observe(
+            &usage(
+                None,
+                Some("deepseek/deepseek-flash"),
+                counts(2300, 5, 2100, 0),
+            ),
+            started,
+        );
+        for width in [20, 40, 80, 120] {
+            let lines = panel.lines(width, 24, started, false);
+            let status = lines.last().unwrap();
+            assert!(status.width() + "^C".width() < width, "{width}: {status}");
+        }
     }
 
     #[test]
