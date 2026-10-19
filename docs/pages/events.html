@@ -33,9 +33,9 @@
     <tr><td><code>src/output/event.rs</code></td><td><code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>ToolStart</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code>）、<code>EndStatus</code>、<code>Signal</code></td><td>统一事件流、end.status</td></tr>
     <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>total</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code>、<code>cost</code></td><td>用量与费用、text 格式里的用量与费用写法</td></tr>
     <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>main_calls</code>、<code>tokens</code>）、<code>Record</code>、<code>Translated</code></td><td>tool_start 与 tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
-    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
-    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
-    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
+    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>、<code>add_note</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
+    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>add_note</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
+    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>（<code>add_note</code>）、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
 <p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。其中 <code>Record::CallStart</code>（一次模型调用开始）与 <code>Record::CallUsage</code>（还没输出 <code>usage</code> 的调用到当时为止的用量）带 <code>parent</code>，不输出事件，运行框架每处理完一行原始输出，用 <code>main_calls</code> 与 <code>tokens</code> 检查<a href="run.html#limits">轮数与 token 上限</a>。三种输出格式都从同一个事件序列生成。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
@@ -396,7 +396,7 @@ interface Usage extends TokenCounts {
   </tbody>
 </table>
 <ul>
-  <li><code>detail</code>：<code>failed</code> 时是运行时给出的错误信息，没有时是标准错误的最后 500 个字符，再没有时是一句固定说明；<code>rejected</code> 时是原因与修正方法；<code>limit</code> 时是哪个上限、上限值与实际值；其余为空字符串。</li>
+  <li><code>detail</code>：<code>failed</code> 时是运行时给出的错误信息，没有时是标准错误的最后 500 个字符，再没有时是一句固定说明；<code>rejected</code> 时是原因与修正方法；<code>limit</code> 时是哪个上限、上限值与实际值；<code>timeout</code> 时是 <code>--timeout N reached</code>，N 是给出的秒数；其余为空字符串。</li>
   <li><code>result</code>：主 agent 最后一段文字，没有时为 null。调用方只需要答案时读这一项。</li>
   <li><code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 时，<code>result</code> 与 <code>usage</code> 照常取已经收到的内容。</li>
   <li><code>session_id</code>：给出 <code>--session-dir</code> 且运行时留下了会话记录时，是保存进去的会话 id，可以传给下一次运行的 <code>--resume</code>；其余为 null。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行只要留下了记录也照样保存，见<a href="run.html#sessions">保存与继续会话</a>。</li>
@@ -416,7 +416,7 @@ interface Usage extends TokenCounts {
   <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、费用、<code>session 会话id</code>（<code>session_id</code> 不为 null 时）与 <code>detail</code>；费用写成 <code>$</code> 加四位小数，例如 <code>$0.0437</code>，<code>end.usage.cost_usd</code> 为 null 时省去；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
   <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
   <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
-  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
+  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。沙箱运行、<code>--session-dir</code> 在工作目录之内时，第一行是 <code>[note] --session-dir DIR is inside the working directory. The agent can change the saved sessions</code>，见<a href="run.html#sessions">保存与继续会话</a>。<code>[note]</code> 行在 <code>start</code> 事件的位置输出，jsonl 格式没有对应的事件。</li>
 </ul>
 <p>一个 agent 显示的模型取它最近一次 <code>usage</code> 的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"

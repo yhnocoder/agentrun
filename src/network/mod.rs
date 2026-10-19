@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 pub use rule::HostRule;
 
-pub(crate) use address::in_cidr;
+pub(crate) use address::{in_cidr, url_host};
 pub(crate) use proxy::FilterProxy;
 pub(crate) use rule::{Policy, check_usage};
 pub(crate) use upstream::ProxyAddress;

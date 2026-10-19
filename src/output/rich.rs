@@ -311,6 +311,10 @@ impl Rich {
         }
     }
 
+    pub fn add_note(&mut self, note: String) {
+        self.text.add_note(note);
+    }
+
     pub fn event(&mut self, out: &mut dyn Write, event: &Event) {
         let now = Instant::now();
         let lines: Vec<String> = self
