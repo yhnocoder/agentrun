@@ -80,13 +80,19 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
             if runtime == Runtime::Codex {
                 invocation.session.codex_auth = Some("{}".into());
             }
+            if runtime == Runtime::Dsh {
+                invocation
+                    .session
+                    .env
+                    .insert("DEEPSEEK_API_KEY".into(), "replay".into());
+            }
             let launch = adapter
                 .launch(Path::new(runtime.executable()), &invocation)
                 .unwrap();
             let exit = Exit {
                 code: meta.exit_code,
                 signal: None,
-                timed_out: false,
+                timeout: None,
                 limit: None,
             };
             (exit, stderr_tail(&meta.stderr), launch.wrapped)
@@ -95,7 +101,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
             let exit = Exit {
                 code: Some(0),
                 signal: None,
-                timed_out: false,
+                timeout: None,
                 limit: None,
             };
             (exit, String::new(), SandboxKind::None)

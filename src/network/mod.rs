@@ -13,7 +13,7 @@ use crate::cli::{NetworkMode, Runtime};
 
 pub use rule::HostRule;
 
-pub(crate) use address::in_cidr;
+pub(crate) use address::{in_cidr, url_host};
 pub(crate) use proxy::FilterProxy;
 pub(crate) use rule::{Policy, check_usage};
 pub(crate) use upstream::ProxyAddress;
@@ -34,7 +34,7 @@ const LISTEN_ADDRESS: Ipv4Addr = Ipv4Addr::LOCALHOST;
 pub(crate) fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> bool {
     sandboxed
         && match runtime {
-            Runtime::Pi => true,
+            Runtime::Pi | Runtime::Dsh => true,
             Runtime::ClaudeCode => mode != NetworkMode::None,
             Runtime::Codex => mode == NetworkMode::Custom,
         }

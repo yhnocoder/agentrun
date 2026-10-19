@@ -184,7 +184,7 @@ impl Session {
         let exit = Exit {
             code: Some(0),
             signal: None,
-            timed_out: false,
+            timeout: None,
             limit: None,
         };
         let aggregator = std::mem::replace(&mut self.aggregator, Aggregator::new(false));

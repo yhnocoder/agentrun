@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, Version};
+use super::{Adapter, Failure, Invocation, Launch, Version, display_path};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
@@ -554,7 +554,7 @@ impl Adapter for ClaudeCode {
                 let dir = file.with_file_name(&self.session_id);
                 let project = file.parent().map(Path::to_path_buf);
                 let mut entries = vec![file];
-                if dir.is_dir() {
+                if std::fs::symlink_metadata(&dir).is_ok_and(|metadata| metadata.is_dir()) {
                     entries.push(dir);
                 }
                 (entries, project)
@@ -733,14 +733,6 @@ fn tool_summary(name: &str, input: &Value, cwd: &Path) -> String {
     match value {
         Some(value) => format!("{name}: {value}"),
         None => name.to_string(),
-    }
-}
-
-fn display_path(path: &Path, cwd: &Path) -> String {
-    match path.strip_prefix(cwd) {
-        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
-        Ok(relative) => relative.to_string_lossy().into_owned(),
-        Err(_) => path.to_string_lossy().into_owned(),
     }
 }
 
@@ -1720,9 +1712,16 @@ mod tests {
             adapter.transcript(),
             Some(Transcript {
                 id: adapter.session_id.clone(),
-                entries: vec![file, project.join(&adapter.session_id)],
-                emptied_dir: Some(project),
+                entries: vec![file.clone(), project.join(&adapter.session_id)],
+                emptied_dir: Some(project.clone()),
             })
+        );
+        let subagents = project.join(&adapter.session_id);
+        std::fs::rename(&subagents, root.path().join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("elsewhere"), &subagents).unwrap();
+        assert_eq!(
+            adapter.transcript().map(|transcript| transcript.entries),
+            Some(vec![file])
         );
 
         let (unsaved, _) = with_config_dir(&config, &[]);

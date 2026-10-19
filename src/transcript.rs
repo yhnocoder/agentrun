@@ -3,7 +3,10 @@ use std::io::ErrorKind;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
+
 use crate::cli::Runtime;
+use crate::runtime::dsh;
 
 const FILE_SUFFIX: &str = ".jsonl";
 const UUID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
@@ -38,22 +41,41 @@ pub fn create_store(store: &Path) -> Result<(), String> {
         })
 }
 
-pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
+pub fn locate(session_dir: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
     if !is_session_id(id) {
         return Err(format!("--resume {id:?} is not a session id"));
     }
-    find_file(store, id)
-        .map(|file| Saved {
+    let own = store(session_dir, runtime);
+    if let Some(file) = saved(&own, runtime, id) {
+        return Ok(Saved {
             id: id.to_string(),
             file,
-        })
-        .ok_or_else(|| {
-            format!(
-                "no saved {} session {id} in {}",
-                runtime.name(),
-                store.display()
-            )
-        })
+        });
+    }
+    let missing = format!(
+        "no saved {} session {id} in {}",
+        runtime.name(),
+        own.display()
+    );
+    let saved_by = Runtime::value_variants()
+        .iter()
+        .copied()
+        .filter(|other| *other != runtime)
+        .find(|other| saved(&store(session_dir, *other), *other, id).is_some());
+    Err(match saved_by {
+        Some(other) => format!(
+            "{missing}; it was saved by {0}, continue it with agentrun {0}",
+            other.name()
+        ),
+        None => missing,
+    })
+}
+
+fn saved(store: &Path, runtime: Runtime, id: &str) -> Option<PathBuf> {
+    match runtime {
+        Runtime::Dsh => dsh::saved_session(store, id),
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Pi => find_file(store, id),
+    }
 }
 
 fn is_session_id(id: &str) -> bool {
@@ -132,6 +154,19 @@ pub fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
         .map(|()| target)
 }
 
+pub fn copy_dir_into(source: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| format!("{} has no file name", source.display()))?;
+    let target = dir.join(name);
+    create_store(dir)
+        .and_then(|()| {
+            copy_tree(source, &target)
+                .map_err(|error| format!("cannot copy {}: {error}", source.display()))
+        })
+        .map(|()| target)
+}
+
 pub fn save(transcript: &Transcript, store: &Path) -> Result<(), String> {
     for entry in &transcript.entries {
         let Some(name) = entry.file_name() else {
@@ -169,8 +204,12 @@ fn move_entry(source: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
-    if !std::fs::symlink_metadata(source)?.is_dir() {
+    let kind = std::fs::symlink_metadata(source)?.file_type();
+    if kind.is_file() {
         return std::fs::copy(source, target).map(|_| ());
+    }
+    if !kind.is_dir() {
+        return Ok(());
     }
     DirBuilder::new().mode(0o700).create(target)?;
     for entry in std::fs::read_dir(source)? {
@@ -215,9 +254,11 @@ mod tests {
     #[test]
     fn locate_finds_a_direct_file_and_rejects_others() {
         let root = tempfile::tempdir().unwrap();
-        let file = root.path().join(format!("rollout-1-{ID}.jsonl"));
+        let codex = store(root.path(), Runtime::Codex);
+        std::fs::create_dir(&codex).unwrap();
+        let file = codex.join(format!("rollout-1-{ID}.jsonl"));
         touch(&file);
-        std::fs::create_dir(root.path().join(format!("{ID}.jsonl.d"))).unwrap();
+        std::fs::create_dir(codex.join(format!("{ID}.jsonl.d"))).unwrap();
         assert_eq!(
             locate(root.path(), Runtime::Codex, ID),
             Ok(Saved {
@@ -230,7 +271,7 @@ mod tests {
             locate(root.path(), Runtime::Pi, other),
             Err(format!(
                 "no saved pi session {other} in {}",
-                root.path().display()
+                root.path().join("pi").display()
             ))
         );
         for partial in [
@@ -253,6 +294,39 @@ mod tests {
             Err("--resume \"\" is not a session id".to_string())
         );
         assert!(locate(&root.path().join("missing"), Runtime::Pi, ID).is_err());
+    }
+
+    #[test]
+    fn locate_names_the_runtime_that_saved_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        let codex = store(root.path(), Runtime::Codex);
+        std::fs::create_dir(&codex).unwrap();
+        touch(&codex.join(format!("rollout-1-{ID}.jsonl")));
+        assert_eq!(
+            locate(root.path(), Runtime::Pi, ID),
+            Err(format!(
+                "no saved pi session {ID} in {}; it was saved by codex, continue it with agentrun codex",
+                root.path().join("pi").display()
+            ))
+        );
+    }
+
+    #[test]
+    fn locate_names_dsh_when_its_session_directory_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let dsh = store(root.path(), Runtime::Dsh);
+        std::fs::create_dir_all(dsh.join(format!("session-{ID}"))).unwrap();
+        assert_eq!(
+            locate(root.path(), Runtime::Dsh, ID).map(|saved| saved.file),
+            Ok(dsh.join(format!("session-{ID}")))
+        );
+        assert_eq!(
+            locate(root.path(), Runtime::ClaudeCode, ID),
+            Err(format!(
+                "no saved claude-code session {ID} in {}; it was saved by dsh, continue it with agentrun dsh",
+                root.path().join("claude-code").display()
+            ))
+        );
     }
 
     #[test]
@@ -329,6 +403,31 @@ mod tests {
         copy_tree(&file, &root.path().join("g.jsonl")).unwrap();
         remove_tree(&file).unwrap();
         assert!(!file.exists() && root.path().join("g.jsonl").is_file());
+    }
+
+    #[test]
+    fn copy_tree_skips_symbolic_links() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = root.path().join("secret");
+        touch(&secret.join("key"));
+        let source = root.path().join("session");
+        touch(&source.join("log.jsonl"));
+        std::os::unix::fs::symlink(secret.join("key"), source.join("file-link")).unwrap();
+        std::os::unix::fs::symlink(&secret, source.join("dir-link")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("missing"), source.join("dangling")).unwrap();
+        let copy = root.path().join("copy");
+        copy_tree(&source, &copy).unwrap();
+        assert!(copy.join("log.jsonl").is_file());
+        for name in ["file-link", "dir-link", "dangling"] {
+            assert!(
+                std::fs::symlink_metadata(copy.join(name)).is_err(),
+                "{name}"
+            );
+        }
+        let linked = root.path().join("linked");
+        std::os::unix::fs::symlink(&source, &linked).unwrap();
+        copy_tree(&linked, &root.path().join("copy2")).unwrap();
+        assert!(!root.path().join("copy2").exists());
     }
 
     #[test]

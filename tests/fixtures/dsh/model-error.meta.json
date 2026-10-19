@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-c85f75d4/model-error-dsh", "exit_code": 1, "stderr": "dsh: INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed no-such-model-probe. (request_id: 05e23924-6b2d-4238-865e-55818dff450a)\n"}

@@ -57,7 +57,7 @@ pub fn write_session_credential(
             pi::STATE_HOME_SUBDIR,
             pi::LOGIN_FILE,
         ),
-        Runtime::ClaudeCode => return Ok(None),
+        Runtime::ClaudeCode | Runtime::Dsh => return Ok(None),
     };
     let Some(value) = value.as_ref().filter(|value| !value.is_empty()) else {
         return Ok(None);

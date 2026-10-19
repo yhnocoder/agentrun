@@ -22,7 +22,7 @@
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
 <h1>沙箱与网络</h1>
-<p class="lead">agentrun 用沙箱限制 agent 能写的文件、能读的敏感文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code>、<code>--network</code> 与 <code>--deny-read</code> 三组选项、三个运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
+<p class="lead">agentrun 用沙箱限制 agent 能写的文件、能读的敏感文件和命令能访问的主机，用运行时参数限制它能读到的配置与账号。本页写 <code>--sandbox</code>、<code>--network</code> 与 <code>--deny-read</code> 三组选项、各运行时分别怎么关进沙箱，以及<mark>每种组合剩下的风险</mark>。</p>
 
 <h2 id="code">代码位置</h2>
 <table>
@@ -33,13 +33,13 @@
     <tr><td><code>src/sandbox/mod.rs</code></td><td><code>Sandbox</code>（<code>new</code>）、<code>Wrapper</code>、<code>resolve_mode</code>、<code>check</code>、<code>PiState</code>、<code>Hidden</code>、<code>hidden</code>、<code>Wrapped</code>、<code>wrap</code>、<code>wrapper_failure</code>、<code>start_failure</code>、<code>exit_text</code></td><td>沙箱模式、判断沙箱能不能用、读取限制</td></tr>
     <tr><td><code>src/sandbox/bubblewrap.rs</code></td><td><code>probe</code>、<code>wrap_bwrap</code>、<code>ProxyForward</code></td><td>判断沙箱能不能用、用 bubblewrap 包裹命令（由 <code>wrap</code> 调用）、读取限制</td></tr>
     <tr><td><code>src/sandbox/seatbelt.rs</code></td><td><code>probe</code>、<code>write_seatbelt_profile</code>、<code>wrap_seatbelt</code></td><td>判断沙箱能不能用、用 Seatbelt 包裹命令（由 <code>wrap</code> 调用）、读取限制</td></tr>
-    <tr><td><code>src/network/</code></td><td><code>mod.rs</code> 的 <code>ProxyEndpoint</code>、<code>proxy_needed</code>、<code>proxy_environment</code>；<code>rule.rs</code> 的 <code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>；<code>address.rs</code> 的 <code>is_private</code>；<code>upstream.rs</code> 的 <code>Upstream</code>、<code>ProxyAddress</code>；<code>proxy.rs</code> 的 <code>FilterProxy</code>（<code>bind</code>、<code>endpoint</code>、<code>serve_session</code>）；<code>http.rs</code> 的 <code>handle_http</code>；<code>socks.rs</code> 的 <code>handle_socks</code></td><td>网络、过滤代理、不支持 IPv6</td></tr>
+    <tr><td><code>src/network/</code></td><td><code>mod.rs</code> 的 <code>ProxyEndpoint</code>、<code>proxy_needed</code>、<code>proxy_environment</code>；<code>rule.rs</code> 的 <code>HostRule</code>、<code>check_usage</code>、<code>Policy</code>；<code>address.rs</code> 的 <code>is_private</code>、<code>url_host</code>；<code>upstream.rs</code> 的 <code>Upstream</code>、<code>ProxyAddress</code>；<code>proxy.rs</code> 的 <code>FilterProxy</code>（<code>bind</code>、<code>endpoint</code>、<code>serve_session</code>）；<code>http.rs</code> 的 <code>handle_http</code>；<code>socks.rs</code> 的 <code>handle_socks</code></td><td>网络、过滤代理、不支持 IPv6</td></tr>
     <tr><td><code>src/runtime/mod.rs</code></td><td><code>DENIED_HOME_ENTRIES</code>、<code>default_denied_reads</code>、<code>denied_reads</code></td><td>读取限制</td></tr>
-    <tr><td><code>src/runtime/claudecode.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/runtime/pi.rs</code></td><td><code>claudecode.rs</code> 的 <code>ClaudeCode</code>（<code>launch</code>）、<code>SERVICE_HOST</code>、<code>login_file</code>、<code>history_paths</code>；<code>codex.rs</code> 的 <code>Codex</code>（<code>launch</code>）、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code>、<code>history_paths</code>；<code>pi.rs</code> 的 <code>Pi</code>（<code>launch</code>）、<code>model_service</code></td><td>三个运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
+    <tr><td><code>src/runtime/claudecode.rs</code>、<code>src/runtime/codex.rs</code>、<code>src/runtime/pi.rs</code>、<code>src/runtime/dsh.rs</code></td><td><code>claudecode.rs</code> 的 <code>ClaudeCode</code>（<code>launch</code>）、<code>SERVICE_HOST</code>、<code>login_file</code>、<code>history_paths</code>；<code>codex.rs</code> 的 <code>Codex</code>（<code>launch</code>）、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code>、<code>history_paths</code>；<code>pi.rs</code> 的 <code>Pi</code>（<code>launch</code>）、<code>model_service</code>；<code>dsh.rs</code> 的 <code>Dsh</code>（<code>launch</code>）、<code>service_host</code>、<code>user_home</code>、<code>history_paths</code>、<code>ENV_FILE</code></td><td>各运行时怎么关进沙箱、各运行时的做法、模型服务的主机</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code></td><td>doctor 对沙箱与网络的检查，见<a href="run.html#doctor_check">运行</a></td></tr>
   </tbody>
 </table>
-<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个处理线程，建立转发后再加一个复制下行数据的线程，线程数没有上限；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：三个运行时共用同一份判定规则与同一种 <code>network</code> 事件。普通 HTTP 请求的转发、<code>CONNECT</code> 与 SOCKS5 的隧道都设了空闲时限：客户端关闭发送方向以后，上游从最后一次发来数据起 30 秒（<code>proxy.rs</code> 的 <code>UPSTREAM_IDLE_TIMEOUT</code>）内没有再发来数据，复制下行数据的线程就结束，所以上游一直不回复也不关闭时，处理线程与复制线程不会留到 agentrun 退出。客户端没有关闭时，上游停顿多久都不中断转发。</p>
+<p>过滤代理在 agentrun 进程里的独立线程上运行，每个连接一个处理线程，建立转发后再加一个复制下行数据的线程，线程数没有上限；<code>Policy</code> 只做放行判断，不知道连接来自哪个运行时。理由：所有运行时共用同一份判定规则与同一种 <code>network</code> 事件。普通 HTTP 请求的转发、<code>CONNECT</code> 与 SOCKS5 的隧道都设了空闲时限：客户端关闭发送方向以后，上游从最后一次发来数据起 30 秒（<code>proxy.rs</code> 的 <code>UPSTREAM_IDLE_TIMEOUT</code>）内没有再发来数据，复制下行数据的线程就结束，所以上游一直不回复也不关闭时，处理线程与复制线程不会留到 agentrun 退出。客户端没有关闭时，上游停顿多久都不中断转发。</p>
 
 <h2 id="sandbox">沙箱模式</h2>
 <p>沙箱由操作系统决定：macOS 用 Seatbelt，Linux 用 bubblewrap（<code>bwrap</code>）；codex 在两个系统上都用它自己的沙箱，它在 Linux 上也是用 <code>bwrap</code> 实现的。<code>--sandbox</code>（环境变量 <code>AGENTRUN_SANDBOX</code>，选项优先）决定沙箱做不到时怎么办。</p>
@@ -60,11 +60,11 @@
 <h3>判断沙箱能不能用</h3>
 <p>只看 <code>bwrap</code> 是否存在不够：docker 容器、关闭了非特权用户命名空间的系统、被 AppArmor 限制的系统里，<code>bwrap</code> 装了也启动不了。所以 <code>on</code> 与 <code>relax</code> 在每次运行前都实际检查一次：</p>
 <ul>
-  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。<code>sandbox-exec</code> 只用 <code>/usr/bin/sandbox-exec</code> 这个绝对路径，不在会话 PATH 里查找，因为 Seatbelt 是系统组件，PATH 里同名的程序不是它。macOS 上不查找 <code>socat</code>：claude-code 在 macOS 上不用它，pi 直接连接过滤代理的端口。</li>
-  <li>Linux：会话 PATH 里有 <code>bwrap</code>；claude-code 与 pi 还要有 <code>socat</code>。然后执行一次 <code>bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent --unshare-net -- /bin/true</code>，最多等 5 秒。耗时通常是毫秒级。检查创建的命名空间与 pi 的包裹相同，网络命名空间也在检查之内。</li>
+  <li>macOS：执行一次 <code>/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true</code>，最多等 5 秒。与 Linux 一样按能否实际启动判断，本机耗时约 25 毫秒。<code>sandbox-exec</code> 只用 <code>/usr/bin/sandbox-exec</code> 这个绝对路径，不在会话 PATH 里查找，因为 Seatbelt 是系统组件，PATH 里同名的程序不是它。macOS 上不查找 <code>socat</code>：claude-code 在 macOS 上不用它，pi 与 dsh 直接连接过滤代理的端口。</li>
+  <li>Linux：会话 PATH 里有 <code>bwrap</code>；claude-code、pi 与 dsh 还要有 <code>socat</code>。然后执行一次 <code>bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent --unshare-net -- /bin/true</code>，最多等 5 秒。耗时通常是毫秒级。检查创建的命名空间与 pi 和 dsh 的包裹相同，网络命名空间也在检查之内。</li>
   <li>Linux 上的 codex 同样执行这条检查，不要求 <code>socat</code>。查找 <code>bwrap</code> 时跳过工作目录之内的 PATH 项，找不到时报缺少 <code>bwrap</code>。理由：codex 的沙箱启动失败时，<code>codex exec</code> 仍以退出码 0 结束并输出 <code>turn.completed</code>，没有失败事件，运行中发现不了（codex 0.160.0 在本机 Linux 与 docker 实测）。codex 用 PATH 上第一个不在工作目录之内的 <code>bwrap</code>，找不到时才用 npm 包里自带的 <code>bwrap</code>；agentrun 按同样的规则查找，检查的就是 codex 会用的那一个，并且不让 codex 退回到没有检查过的自带 <code>bwrap</code>。运行中的附加信号见<a href="run.html#codex">codex 的失败判定</a>。</li>
 </ul>
-<p>启动前发现的沙箱问题按 <code>rejected</code> 处理（退出码 2）；运行中才发现的，例如 pi 的包裹命令启动失败，按 <code>failed</code> 处理（退出码 1）。<code>--dry-run</code> 也做这些检查，<code>--debug</code> 写出每项检查的结果。</p>
+<p>启动前发现的沙箱问题按 <code>rejected</code> 处理（退出码 2）；运行中才发现的，例如 pi 或 dsh 的包裹命令启动失败，按 <code>failed</code> 处理（退出码 1）。<code>--dry-run</code> 也做这些检查，<code>--debug</code> 写出每项检查的结果。</p>
 <p>这些检查由 <code>sandbox::check</code> 执行。检查期间它通过 <code>checking</code> 回调把检查进程交给信号处理，收到信号时检查进程按<a href="session.html#signals">进程、信号与超时</a>清理。沙箱可用时，检查的结果是 <code>Sandbox</code>，它的 <code>wrapper</code> 字段是 <code>Wrapper</code>，记录用哪种方式包裹命令，用 bubblewrap 时还记录找到的 <code>bwrap</code> 与 <code>socat</code> 的路径。沙箱不可用时，<code>--sandbox on</code> 下 <code>check</code> 返回错误，这次运行按 <code>rejected</code> 拒绝；<code>--sandbox relax</code> 下结果仍是 <code>Sandbox</code>，<code>wrapper</code> 为 <code>Wrapper::None</code>，不可用的原因记在 <code>reason</code> 字段。</p>
 <h3 id="apparmor">bwrap 启动失败的常见原因</h3>
 <p>检查失败时，报错写出 <code>bwrap</code> 的第一行报错，并提示 <code>In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile</code>，后面附本节的链接。<code>bwrap</code> 的报错文字随调用者身份变化，所以提示同时写出两种情况，不按报错文字区分。</p>
@@ -93,8 +93,8 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <div class="term" style="white-space: pre-wrap"><span class="warn">[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent reads or writes or which hosts it reaches</span></div>
 <p>jsonl 格式不加额外的行，由 <code>start</code> 事件的 <code>sandbox</code> 与 <code>network.enforced</code> 字段记录。理由：<code>relax</code> 不打断运行，但事后能查出这次运行没有隔离。沙箱没有运行时，读取限制只剩 claude-code 的权限规则，见<a href="#read">读取限制</a>。</p>
 
-<h2>三个运行时怎么关进沙箱</h2>
-<p>三者在沙箱里都只能写工作目录（<code>--cwd</code>）与会话临时目录（见<a href="session.html#tmpdir">会话临时目录</a>），pi 另外能写用户 pi 状态目录里的五个条目。能读的范围见<a href="#read">读取限制</a>。</p>
+<h2>各运行时怎么关进沙箱</h2>
+<p>四个运行时在沙箱里都只能写工作目录（<code>--cwd</code>）与会话临时目录（见<a href="session.html#tmpdir">会话临时目录</a>），pi 另外能写用户 pi 状态目录里的五个条目。能读的范围见<a href="#read">读取限制</a>。</p>
 <table>
   <thead>
     <tr><th>运行时</th><th>沙箱打开时</th><th>沙箱没有运行时</th></tr>
@@ -103,6 +103,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>claude-code</td><td>用 claude-code 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加 <code>socat</code>），由 <code>--settings</code> 打开。只作用于 Bash 命令：命令只能写两个目录、不能联网，沙箱里的命令自动放行，不允许沙箱外执行命令。Edit 与 Write 不经过沙箱，改用权限模式 <code>dontAsk</code> 加按路径放行的规则，只放行写两个目录</td><td>权限模式 <code>auto</code>，每条 Bash 命令由 claude-code 的分类器判断</td></tr>
     <tr><td>codex</td><td>codex 自己的沙箱（macOS 是 Seatbelt，Linux 是 <code>bwrap</code> 加一个 seccomp 网络过滤），用一个自定义权限配置：整个文件系统可读，工作目录与会话临时目录可写，<code>/tmp</code> 与 <code>$TMPDIR</code> 不可写，网络关闭</td><td>内置权限配置 <code>:danger-full-access</code></td></tr>
     <tr><td>pi</td><td>pi 没有沙箱，由 agentrun 把整个 pi 进程包裹起来：macOS 用 <code>sandbox-exec</code> 加一份编译进 agentrun 的 Seatbelt 配置，Linux 用 <code>bwrap</code>。另外放行用户 pi 状态目录里的五个条目：<code>auth.json</code>、<code>auth.json.lock</code>、<code>models-store.json</code>、<code>models-store.json.lock</code>、<code>settings.json.lock</code>，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。网络见下一节</td><td>不包裹</td></tr>
+    <tr><td>dsh</td><td>dsh 自带的沙箱只限制写文件，agentrun 用 <code>DSH_PERMISSION_MODE=danger-full-access</code> 关掉它，与 pi 一样把整个 dsh 进程包裹起来：macOS 用同一份 Seatbelt 配置，Linux 用 <code>bwrap</code>，没有另外放行的条目。dsh 的私有目录在会话临时目录里，见<a href="session.html#dsh-home">dsh 的私有配置目录</a></td><td>不包裹，仍为 <code>danger-full-access</code>，dsh 不限制写入</td></tr>
   </tbody>
 </table>
 <p>pi 状态目录的放行按平台实现，输入都是 <code>src/sandbox/mod.rs</code> 的 <code>PiState</code>：</p>
@@ -110,13 +111,14 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>Linux：<code>bwrap</code> 把整个状态目录 <code>--bind</code> 为可写，再把目录里已有的其他条目（跟随符号链接后是目录或普通文件的）逐个 <code>--ro-bind</code> 只读覆盖；<code>auth.json</code> 是指向别处的符号链接时，最后再 <code>--bind</code> 链接目标。bwrap 不能只绑定一个还不存在的文件，而 pi 要在目录里新建锁目录，所以整目录可写。剩余风险：沙箱里的 agent 能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载它；已有的条目不能改写。</li>
   <li>macOS：Seatbelt 配置在默认放行的基础上禁止所有写入，再只放行工作目录、会话临时目录、状态目录里这五个条目的字面路径（<code>literal</code>，来自 <code>PiState</code> 的 <code>writable</code>，不存在的也写，pi 自己创建）、<code>auth.json</code> 是符号链接时的链接目标，以及 <code>/dev/null</code>、终端等几个设备文件；禁止所有网络，只允许连接过滤代理在本机监听的端口。pi 直接连接这个端口，不经过 <code>socat</code>。配置写在会话临时目录的 <code>seatbelt.sb</code>，权限 0600。状态目录里的其他条目不能新建也不能改写。</li>
 </ul>
-<p>pi、doctor 的沙箱与网络检查、测试里的 FakeAdapter 都通过 <code>sandbox::wrap</code> 包裹，<code>--dry-run</code> 时不写 Seatbelt 配置。理由：包裹逻辑分开写时，改了 bwrap 参数、socat 转发或 Seatbelt 配置的一处，另外几处不会跟着变，doctor 与测试检查的就不再是运行时实际使用的包裹。</p>
+<p>pi、dsh、doctor 的沙箱与网络检查、测试里的 FakeAdapter 都通过 <code>sandbox::wrap</code> 包裹，<code>--dry-run</code> 时不写 Seatbelt 配置。理由：包裹逻辑分开写时，改了 bwrap 参数、socat 转发或 Seatbelt 配置的一处，另外几处不会跟着变，doctor 与测试检查的就不再是运行时实际使用的包裹。</p>
 <p>doctor 的沙箱与网络检查通过 <code>runtime::model_service_host</code>、<code>runtime::service_hosts</code>、<code>runtime::sandbox_state</code>、<code>runtime::default_denied_reads</code> 与 <code>codex::sandbox_command</code> 取运行时的参数，不自己按运行时分支。理由：分开写时改了一个运行时的启动参数，doctor 检查的就不再是运行时实际使用的参数。</p>
 <p>各运行时的完整参数见<a href="run.html">运行</a>。几个容易被改坏的决定：</p>
 <ul>
   <li>pi 只放行五个条目，不放行整个状态目录：状态目录里有 pi 的启动脚本、<code>bin/</code> 与扩展，沙箱里的 agent 能改写它们时，用户下次在沙箱外运行 pi 就会执行 agent 写进去的代码。放行的五个条目是 pi 刷新令牌、读写模型缓存与读设置文件时必须写的文件与锁目录，锁必须建在用户目录里才能与用户自己的 pi 互斥，理由见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
   <li>codex 用 <code>default_permissions</code> 选择自定义权限配置，不传 <code>--sandbox</code>。理由：传了 <code>--sandbox</code> 时权限配置不生效；显式选择内置的 <code>:workspace</code> 时 codex 忽略 <code>sandbox_workspace_write</code> 的各项，<code>/tmp</code> 与 <code>$TMPDIR</code> 仍可写（codex 0.159.2 实测与源码）。</li>
-  <li>pi 的包裹不加 <code>--unshare-pid</code>，让 agentrun 能在宿主的 <code>/proc</code> 里找到 bwrap 的子进程 pi 并直接给它发信号；不加 <code>--new-session</code>，让进程组的 SIGKILL 能清理沙箱里的全部进程，见<a href="session.html#signals">进程组与信号</a>。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
+  <li>dsh 关掉自己的沙箱，只用 agentrun 的包裹，理由见<a href="run.html#dsh">运行</a>页的 dsh 一节：两层沙箱叠加时 bash 的 <code>/tmp</code> 在命令结束后消失，macOS 上每条 bash 命令都被拒绝。</li>
+  <li>pi 与 dsh 的包裹不加 <code>--unshare-pid</code>，让 agentrun 能在宿主的 <code>/proc</code> 里找到 bwrap 的子进程并直接给它发信号；不加 <code>--new-session</code>，让进程组的 SIGKILL 能清理沙箱里的全部进程，见<a href="session.html#signals">进程组与信号</a>。代价是沙箱里的进程能看到宿主上的其他进程，写限制不受影响。</li>
   <li>macOS 上 Seatbelt 按真实路径匹配，<code>/tmp</code> 与 <code>/var</code> 指向 <code>/private</code>，所以可写路径先解析符号链接再写进配置。</li>
   <li>沙箱打开时 claude-code 用 <code>dontAsk</code>，不用 <code>auto</code>。理由：Edit 与 Write 在 claude 进程里执行，不经过沙箱；auto 模式会放行写到工作目录以外的请求，即使放行规则只列了工作目录（claude 2.1.289 云端实测，Write 写成了 <code>$HOME</code> 与 <code>/tmp</code> 下的文件）。<code>dontAsk</code> 拒绝放行规则以外的所有调用，被拒绝的调用交还模型，Bash 仍由沙箱自动放行。被拒绝的调用记为 <code>tool</code> 事件的 <code>denied</code>。</li>
   <li>被沙箱拦下的写入或联网不算 <code>failed</code>，也不设 <code>tool</code> 事件的 <code>denied</code>。<code>denied</code> 只表示运行时权限机制的拒绝。理由：命令失败的结果会交还模型，由模型决定下一步，和其他命令出错一样。</li>
@@ -130,14 +132,14 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   </thead>
   <tbody>
     <tr><td>主目录里的密钥与账号（<code>DENIED_HOME_ENTRIES</code>）</td><td><code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code></td></tr>
-    <tr><td>三个运行时的登录文件</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/.credentials.json</code>（未设时 <code>~/.claude/.credentials.json</code>）、codex 的 <code>$CODEX_HOME/auth.json</code>（未设时 <code>~/.codex/auth.json</code>）、pi 的 <code>$PI_CODING_AGENT_DIR/auth.json</code>（未设时 <code>~/.pi/agent/auth.json</code>）。运行 pi 时不含 pi 自己的登录文件</td></tr>
-    <tr><td>会话记录</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/projects</code>（未设时 <code>~/.claude/projects</code>，含每个项目的会话记录与 memory 目录）、codex 的 <code>$CODEX_HOME/sessions</code> 与 <code>$CODEX_HOME/history.jsonl</code>（未设时在 <code>~/.codex</code> 下）</td></tr>
+    <tr><td>各运行时的登录文件</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/.credentials.json</code>（未设时 <code>~/.claude/.credentials.json</code>）、codex 的 <code>$CODEX_HOME/auth.json</code>（未设时 <code>~/.codex/auth.json</code>）、pi 的 <code>$PI_CODING_AGENT_DIR/auth.json</code>（未设时 <code>~/.pi/agent/auth.json</code>）、dsh 的 <code>$DSH_HOME/.env</code>（未设时 <code>~/.dsh/.env</code>，dsh 自己从这里读 <code>DEEPSEEK_API_KEY</code>）。运行 pi 时不含 pi 自己的登录文件</td></tr>
+    <tr><td>会话记录</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/projects</code>（未设时 <code>~/.claude/projects</code>，含每个项目的会话记录与 memory 目录）、codex 的 <code>$CODEX_HOME/sessions</code> 与 <code>$CODEX_HOME/history.jsonl</code>（未设时在 <code>~/.codex</code> 下）、dsh 的 <code>$DSH_HOME/sessions</code>（未设时 <code>~/.dsh/sessions</code>）</td></tr>
   </tbody>
 </table>
 <ul>
-  <li><code>~</code> 与这三个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。用 <code>--env HOME=...</code> 或 <code>--env-file</code> 给 agent 另一个主目录时，默认列表只挡新主目录下的条目，调用方自己主目录里的 <code>~/.ssh</code>、<code>~/.aws</code> 等不在列表里，agent 能读到；需要时用 <code>--deny-read</code> 加上这些路径。</li>
-  <li>agent 的工具与命令不需要读这几个会话记录路径：codex 用私有 <code>CODEX_HOME</code>；claude-code 沙箱里的 memory 目录在会话临时目录，没有 <code>--session-dir</code> 时用 <code>--no-session-persistence</code> 不写记录，给出时由 claude 进程在运行期间把记录写进 <code>projects/</code>、继续会话时从 <code>--session-dir</code> 读取，都在沙箱外，不受读取限制，见<a href="run.html#sessions">保存与继续会话</a>。所以三个运行时都挡住它们。</li>
-  <li>pi 的整个进程在沙箱里，要读写自己的登录文件来登录和刷新令牌，所以运行 pi 时不挡它。claude-code 与 codex 的进程在沙箱外读写自己的登录文件，只有它们的工具与命令受读取限制，所以运行它们时自己的登录文件也挡住。</li>
+  <li><code>~</code> 与这四个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。运行 dsh 时会话环境里已经删除了 <code>DSH_HOME</code>（见<a href="session.html">会话环境</a>），这时取调用方环境里原来的 <code>DSH_HOME</code>（<code>Session</code> 的 <code>removed_values</code>），没有时取 <code>~/.dsh</code>。理由：用户自己运行 dsh 时，key 与会话记录在这个目录里。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。用 <code>--env HOME=...</code> 或 <code>--env-file</code> 给 agent 另一个主目录时，默认列表只挡新主目录下的条目，调用方自己主目录里的 <code>~/.ssh</code>、<code>~/.aws</code> 等不在列表里，agent 能读到；需要时用 <code>--deny-read</code> 加上这些路径。</li>
+  <li>agent 的工具与命令不需要读这几个会话记录路径：codex 与 dsh 用私有目录（<code>CODEX_HOME</code>、<code>DSH_HOME</code>）；claude-code 沙箱里的 memory 目录在会话临时目录，没有 <code>--session-dir</code> 时用 <code>--no-session-persistence</code> 不写记录，给出时由 claude 进程在运行期间把记录写进 <code>projects/</code>、继续会话时从 <code>--session-dir</code> 读取，都在沙箱外，不受读取限制，见<a href="run.html#sessions">保存与继续会话</a>。所以四个运行时都挡住它们。</li>
+  <li>pi 的整个进程在沙箱里，要读写自己的登录文件来登录和刷新令牌，所以运行 pi 时不挡它。claude-code 与 codex 的进程在沙箱外读写自己的登录文件，只有它们的工具与命令受读取限制，所以运行它们时自己的登录文件也挡住。dsh 的整个进程在沙箱里，但用会话环境里的 <code>DEEPSEEK_API_KEY</code> 与私有 <code>DSH_HOME</code>，不读用户的 <code>~/.dsh</code>，所以运行 dsh 时它自己的 <code>.env</code> 也挡住。</li>
   <li><code>--deny-read</code> 的相对路径按 agentrun 的当前目录展开成绝对路径。以 <code>~</code> 开头的路径是用法错误（退出码 2），<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: ~ is not expanded, give the full path</code>，因为 <code>~/.env</code> 会被当成当前目录下名为 <code>~</code> 的目录，什么也挡不住。</li>
   <li>路径等于或包含运行需要的目录时是用法错误，<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: contains the &lt;名称&gt; &lt;目录&gt;</code>；默认列表里包含这些目录的项直接去掉。这些目录是工作目录（<code>working directory</code>）、会话临时目录所在的目录（<code>temporary directory</code>，调用方的 <code>TMPDIR</code>，未设时 <code>/tmp</code>），运行 pi 时还有 pi 的状态目录（<code>pi state directory</code>）。理由：工作目录读不到时 agent 无法工作；会话临时目录里有图片的副本、codex 的私有 <code>CODEX_HOME</code> 与 claude-code 的 memory 目录；pi 在沙箱里读自己的状态目录来登录。</li>
   <li>最终的列表按默认列表在前、<code>--deny-read</code> 在后的顺序去重，写进 <code>start</code> 事件的 <code>deny_read</code> 与 <code>--dry-run</code>、<code>--debug</code> 的 <code>deny read:</code> 一行。</li>
@@ -150,9 +152,10 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>claude-code</td><td><code>--settings</code> 的 <code>permissions.deny</code> 给每个路径写两条规则 <code>Read(//&lt;路径&gt;)</code> 与 <code>Read(//&lt;路径&gt;/**)</code>，路径里的 <code>\ * ? [ ] { }</code> 前面加反斜杠，按字面匹配。Read、Grep、Glob 读这些路径时被拒绝，Grep 搜索上层目录时跳过它们；<code>sandbox.filesystem.denyRead</code> 列出同样的路径，Bash 命令读不到（Linux 上目录显示为空，文件读取报 Permission denied）。路径是符号链接时，链接与目标都写（claude 2.1.303 云端实测）</td><td><code>--settings</code> 只有 <code>permissions.deny</code>。Read、Grep、Glob 照样被拒绝；Bash 命令不在沙箱里，命令里直接写出这些路径时被 claude-code 拒绝，间接的写法由分类器判断，没有保证（claude 2.1.303 云端实测）</td></tr>
     <tr><td>codex</td><td>自定义权限配置的 <code>filesystem</code> 表给每个存在的路径加一项 <code>"&lt;真实路径&gt;"="deny"</code>。用户登录文件或它所在的目录在列表里时（按真实路径比较），私有 <code>CODEX_HOME</code> 里指向它的符号链接 <code>auth.json</code> 按链接本身的路径再加一项，不依赖 codex 是否解析符号链接。codex 能看到这些拒绝项，读写被拒路径的命令它不执行，所以这些命令没有 <code>tool</code> 事件（codex 0.160.1 macOS 实测）。<code>--deny-read</code> 的真实路径含 <code>* ? [ ] { }</code> 时是用法错误，<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: codex cannot deny a path that contains * ? [ ] { }</code>，解析后的路径与给出的不同时，在给出的路径后加 <code>(resolves to &lt;真实路径&gt;)</code>：codex 把这类表项当作模式，文档没有转义写法，<code>"a*b"="deny"</code> 既挡不住字面路径 <code>a*b</code> 也挡不住 <code>aXb</code>（codex 0.160.1 macOS 实测）。默认列表不检查</td><td>不限制</td></tr>
     <tr><td>pi</td><td>存在的路径先解析符号链接。Linux：目录用 <code>--tmpfs</code> 加 <code>--remount-ro</code> 换成只读的空目录，其他文件用 <code>--ro-bind /dev/null</code> 覆盖（读取报 Permission denied），写在所有 <code>--bind</code> 之后，所以工作目录与状态目录里的路径也能挡住。macOS：Seatbelt 配置末尾加 <code>(deny file-read* (subpath "&lt;真实路径&gt;") ...)</code></td><td>不限制</td></tr>
+    <tr><td>dsh</td><td>与 pi 相同。dsh 的整个进程在沙箱里，命令与 dsh 自己的 read、glob、grep 工具都读不到这些路径：read 读被覆盖的文件报 <code>not a regular file</code>，读被换成空目录里的文件报 <code>not found</code>，glob 在这样的目录里找不到文件，grep 搜索上层目录时报 Permission denied（0.2.1-rc.2 云端实测）</td><td>不限制</td></tr>
   </tbody>
 </table>
-<p>路径在 <code>sandbox::hidden</code> 里解析成 <code>Hidden</code>（真实路径与是否目录），pi、doctor 与 codex 都用它。几个容易被改坏的决定：</p>
+<p>路径在 <code>sandbox::hidden</code> 里解析成 <code>Hidden</code>（真实路径与是否目录），pi、dsh、doctor 与 codex 都用它。几个容易被改坏的决定：</p>
 <ul>
   <li>不存在的路径在 bwrap、Seatbelt 与 codex 里跳过：bwrap 不能在只读的根目录上新建挂载点，而沙箱里的 agent 只能在可写目录里新建文件。claude-code 的规则按路径匹配，不存在的路径也写。</li>
   <li>claude-code 同时写权限规则与 <code>denyRead</code>。只写权限规则时，claude-code 会把 Read 的拒绝规则并入沙箱（claude 2.1.303 云端实测），显式写 <code>denyRead</code> 不依赖这项内部行为；Read、Grep、Glob 在 claude 进程里执行，只能靠权限规则。</li>
@@ -167,9 +170,9 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><th>取值</th><th>命令能访问</th><th>网页工具</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>none</code>（默认）</td><td>不能联网。pi 只能访问模型服务的主机</td><td>关闭</td></tr>
+    <tr><td><code>none</code>（默认）</td><td>不能联网。pi 与 dsh 只能访问模型服务的主机</td><td>关闭</td></tr>
     <tr><td><code>full</code></td><td>任何公网主机</td><td>打开网页搜索与网页读取</td></tr>
-    <tr><td><code>custom</code></td><td><code>--allow-host</code> 列出的主机，pi 另加模型服务的主机</td><td>只打开网页读取，限制在列出的主机</td></tr>
+    <tr><td><code>custom</code></td><td><code>--allow-host</code> 列出的主机，pi 与 dsh 另加模型服务的主机</td><td>只打开网页读取，限制在列出的主机</td></tr>
   </tbody>
 </table>
 <p><code>--allow-host HOST[:PORT]</code> 可重复。<code>HOST</code> 是完整主机名，或 <code>*.example.com</code>（匹配所有子域名，不匹配 <code>example.com</code> 本身）。不写端口时允许 443 与 80。以下情形是用法错误：<code>custom</code> 但没有 <code>--allow-host</code>；给了 <code>--allow-host</code> 但不是 <code>custom</code>；主机名里有 <code>*</code> 但不是以 <code>*.</code> 开头；单独一个 <code>*</code>；主机为空或端口不是 1 到 65535 的整数；主机是 IPv6 字面量（见<a href="#no-ipv6">不支持 IPv6</a>）。理由：单独的 <code>*</code> 与 <code>full</code> 同义，只保留一种写法，<code>start</code> 事件里一眼能看出是否全开。</p>
@@ -182,7 +185,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>协议：HTTP 代理（<code>CONNECT</code> 隧道与普通 HTTP 转发）和 SOCKS5 <code>CONNECT</code>。不解密 HTTPS，只按目标主机名与端口判断。</li>
   <li>目标主机名只接受字母、数字、<code>-</code>、<code>_</code>、<code>.</code> 组成、最长 253 个字节的名字与 IPv4 字面量，其他字节或更长的目标按请求格式错误处理（HTTP 400，SOCKS5 拒绝），不输出 <code>network</code> 事件，所以事件与发给上游的请求行里不会出现别的字符。</li>
   <li>普通 HTTP 每个连接只转发一个请求：请求体按 <code>Content-Length</code> 转发，带 <code>Transfer-Encoding</code> 的请求回复 411，之后客户端再写入的字节丢弃。请求行与 <code>Host</code> 头按判定过的主机与端口重写，客户端自己写的 <code>Host</code> 不转发，所以不能借一个放行的主机访问同一个 IP 上按 <code>Host</code> 区分的其他站点。</li>
-  <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
+  <li>同时监听 <code>127.0.0.1</code> 上的随机端口与会话临时目录里的 Unix socket <code>proxy.sock</code>。Linux 的 <code>bwrap</code> 用 <code>--unshare-net</code> 断开网络，被包裹的 pi 与 dsh 由沙箱里的 <code>socat</code> 把同一个端口号接到这个 socket，做法与 claude-code 自己的沙箱相同；沙箱外不需要 <code>socat</code>。macOS 的 Seatbelt 配置只允许连接这个端口。</li>
   <li>代理自己解析域名，判断私有地址，直接连接时只连解析出的地址。读请求头最多等 30 秒、最多 64 KB；连接目标时依次尝试解析出的每个地址，每个地址最多等 10 秒。</li>
   <li>会话环境的 <code>HTTPS_PROXY</code>、<code>HTTP_PROXY</code>、<code>ALL_PROXY</code> 与它们的小写形式指向代理，<code>NO_PROXY</code> 与 <code>no_proxy</code> 清空。小写也要设，因为 pi 先读小写的 <code>https_proxy</code>，调用方环境里原有的小写变量会让 pi 绕过过滤代理（pi 1.0.1 实测）。</li>
   <li>调用方环境里原有的代理变量改由过滤代理作为上游使用，所以 Cloud Managed 容器自带的出口代理仍然生效：<code>CONNECT</code> 与 SOCKS5 依次取 <code>https_proxy</code>、<code>HTTPS_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，普通 HTTP 依次取 <code>http_proxy</code>、<code>HTTP_PROXY</code>、<code>all_proxy</code>、<code>ALL_PROXY</code>，第一个非空的值生效。只支持 <code>http://</code> 上游，地址里的用户名与密码转为 <code>Proxy-Authorization: Basic</code>；其他协议的值当作没有上游。调用方原有的 <code>no_proxy</code> 或 <code>NO_PROXY</code> 匹配的主机直接连接。目标主机解析失败时，有上游则交给上游连接，没有上游则按连接失败处理。代理变量的值可能带凭据，不出现在任何输出里。</li>
@@ -205,7 +208,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </figure>
 <h4 id="no-ipv6">不支持 IPv6</h4>
 <p>过滤代理与网络限制只支持 IPv4：只在 <code>127.0.0.1</code> 监听；解析目标主机只取 IPv4 地址，没有 IPv4 地址时按连接失败处理；目标是 IPv6 字面量时拒绝，<code>reason</code> 为 <code>not_allowed</code>；<code>--allow-host</code> 的主机是 IPv6 字面量时是用法错误；SOCKS5 的 IPv6 地址类型回复「不支持的地址类型」。理由：Cloud Managed 容器的内核没有 IPv6，IPv6 的路径无法在云端验收。已知后果：在 <code>localhost</code> 先解析为 <code>::1</code> 的主机上，claude-code 在沙箱外用 <code>TCP:localhost:&lt;端口&gt;</code> 连接过滤代理可能失败，由本机 Linux 实测确认。</p>
-<p>没有直接用各运行时自带的网络设置，因为三者能力不一致：claude-code 沙箱的 <code>allowedDomains</code> 不接受单独的 <code>*</code>，表达不了 full（claude 2.1.289）；codex 按主机放行要开启它自带的实验性代理，而且这个代理拒绝解析到私有网段的主机；pi 没有任何网络控制。三套做法含义不同，也没有统一的连接记录可供排查。</p>
+<p>没有直接用各运行时自带的网络设置，因为它们能力不一致：claude-code 沙箱的 <code>allowedDomains</code> 不接受单独的 <code>*</code>，表达不了 full（claude 2.1.289）；codex 按主机放行要开启它自带的实验性代理，而且这个代理拒绝解析到私有网段的主机；pi 没有任何网络控制，dsh 自带的沙箱不限制网络。各自的做法含义不同，也没有统一的连接记录可供排查。</p>
 
 <h3>各运行时的做法</h3>
 <table>
@@ -216,6 +219,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>claude-code</td><td>沙箱全禁，不启动代理</td><td>沙箱设置 <code>sandbox.network.httpProxyPort</code> 与 <code>socksProxyPort</code> 指向过滤代理。设了这两个端口后 claude-code 不再按 <code>allowedDomains</code> 过滤，沙箱里命令的流量交给过滤代理，主机由过滤代理判定（claude 2.1.289 云端实测），所以 <code>allowedDomains</code> 保持为空。例外：claude-code 给沙箱里的命令设置的 <code>NO_PROXY</code> 列出了 <code>localhost</code>、<code>127.0.0.1</code>、<code>169.254.0.0/16</code>、<code>10.0.0.0/8</code>、<code>172.16.0.0/12</code>、<code>192.168.0.0/16</code>，目标是这些网段里的 IP 字面量时命令不经代理，在没有网络的命名空间里直接连接失败，过滤代理看不到这次请求，没有 <code>network</code> 事件（claude 2.1.289 云端实测）；解析到私有地址的主机名仍由过滤代理拒绝</td><td>full：放行 WebFetch 与 WebSearch。custom：每个主机放行一条 <code>WebFetch(domain:HOST)</code>，不放行 WebSearch</td></tr>
     <tr><td>codex</td><td>沙箱全禁，不启动代理</td><td>full：权限配置的网络打开，直接联网，不经过代理，没有 <code>network</code> 事件。custom：开启 codex 自带的代理，放行 <code>--allow-host</code> 列出的主机；codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，codex 的代理把放行的请求转给它，过滤代理按同一份列表再判断一次并输出 <code>network</code> 事件。codex 的代理关闭 SOCKS5，因为 SOCKS5 的连接不经过上游。codex 访问模型与刷新令牌的请求也经过过滤代理，过滤代理另外放行 codex 的服务主机，见模型服务的主机。codex 的代理配置不写 <code>allow_local_binding</code>：本机 DNS 由代理工具做 fake-ip 时，公网域名解析到 198.18.0.0/15，codex 的代理把这个网段当作私有地址，放行列表里的主机也被拒绝。加 <code>allow_local_binding=true</code> 能通过，但加上后沙箱里的命令能绕过代理直接连接本机回环地址上的端口，所以这个选项由调用方在 <code>--</code> 之后用 <code>-c permissions.agentrun.network.allow_local_binding=true</code> 自己打开。agentrun 的过滤代理不把这个网段当作私有地址</td><td>full：<code>web_search="live"</code>。none 与 custom：<code>web_search="disabled"</code></td></tr>
     <tr><td>pi</td><td>包裹断开网络，只能连代理，代理只放行模型服务</td><td>同 none，代理按取值放行</td><td>pi 没有网页工具，靠 bash 里的 <code>curl</code></td></tr>
+    <tr><td>dsh</td><td>同 pi</td><td>同 pi。dsh 的 node 进程与它执行的命令都按代理变量经过过滤代理（实测）</td><td>补丁关闭 <code>web_search</code> 与 <code>web_fetch</code>，靠 bash 里的 <code>curl</code>，理由见<a href="run.html#dsh">运行</a>页的 dsh 一节</td></tr>
   </tbody>
 </table>
 <p>claude-code 的 WebFetch 在 claude 进程里运行，不经过沙箱也不经过代理，只能靠权限规则限制主机。沙箱打开时权限模式是 dontAsk，放行规则以外的主机被拒绝；沙箱没有运行时权限模式是 auto，放行规则以外的主机由分类器判断，云端实测分类器放行了不在列表里的主机，所以这时 custom 下的 WebFetch 不受主机限制，见剩余风险。claude-code 进程本身不设置代理变量，它访问 Anthropic 的流量不经过过滤代理。</p>
@@ -236,6 +240,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   </tbody>
 </table>
 <p>服务商不在表里时，agentrun 不知道该放行哪个主机。<code>none</code> 下启动前报错（退出码 2），<code>detail</code> 为 <code>cannot tell which host pi's model service uses (provider: &lt;服务商或 unknown&gt;). Use --network custom --allow-host &lt;host of the model service&gt;</code>；没给 <code>--model</code> 且 pi 设置文件不存在、不是 JSON 或没有 <code>defaultProvider</code> 时服务商按 unknown 处理；<code>custom</code> 下只放行 <code>--allow-host</code> 列出的主机；<code>full</code> 不受影响。</p>
+<p>dsh 的进程也整个在沙箱里，它的模型服务主机由 <code>dsh::service_host</code> 给出，<code>launch</code> 与 doctor 的网络检查都用它：会话环境里 <code>DEEPSEEK_BASE_URL</code> 不为空时取这个地址的主机（<code>network::url_host</code>：<code>://</code> 之后、第一个 <code>/</code>、<code>?</code> 或 <code>#</code> 之前的部分，去掉用户信息后按过滤代理解析请求目标的同一规则取主机，即去掉端口、转成小写、去掉末尾的点），否则为 <code>api.deepseek.com</code>。与 pi 相同，这个主机只在 443 端口放行并跳过私有地址检查；模型服务用其他端口时，用 <code>--network custom --allow-host HOST:PORT</code> 放行。<code>DEEPSEEK_BASE_URL</code> 读不出主机时（没有 <code>://</code>、主机为空、不是合法的主机名、端口为空、不是数字或大于 65535，或者主机是 IPv6 字面量，见<a href="#no-ipv6">不支持 IPv6</a>），<code>none</code> 下启动前报错（退出码 2），<code>detail</code> 为 <code>cannot tell which host dsh's model service uses from DEEPSEEK_BASE_URL. Use --network custom --allow-host &lt;host of the model service&gt;</code>；<code>custom</code> 下只放行 <code>--allow-host</code> 列出的主机；<code>full</code> 不受影响。dsh 的网页搜索也只连 <code>api.deepseek.com</code>，这是关闭它的理由之一。</p>
 <p>codex 的进程不在沙箱里，<code>none</code> 与 <code>full</code> 下它直接访问模型服务。<code>custom</code> 下 codex 进程的 <code>HTTPS_PROXY</code> 指向过滤代理，它自己的请求也经过过滤代理，所以过滤代理另外放行下面四个主机，不看用户用哪种方式登录：</p>
 <table>
   <thead>
@@ -250,13 +255,14 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>后两个主机取自 codex 0.159.2 内置的地址，没有实测。只放行前两个时，令牌过期的那次运行刷新失败，API key 登录完全不能用。</p>
 
 <h2 id="config">配置与账号</h2>
-<p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
+<p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。各运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
   <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，关闭 auto-memory，新会话每次传一个新生成的会话 id。沙箱打开时 auto-memory 目录改到会话临时目录，agent 不能写用户的 memory 目录。</li>
   <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#codex-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
   <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
+  <li>dsh：使用会话临时目录里的私有 <code>DSH_HOME</code> 与空的 <code>DSH_AGENTS_HOME</code>，见<a href="session.html#dsh-home">dsh 的私有配置目录</a>；补丁关闭指令文件、技能、会话记录随请求上传、插件清单上报、遥测与会话标题请求。工作目录的 <code>.env</code> 无法关闭，见<a href="#residual">剩余风险</a>。</li>
 </ul>
-<p>三个运行时默认都不保存会话。调用方给出 <code>--session-dir</code> 时，运行结束后会话记录移到那个目录，<code>--resume</code> 只从那里读，不读用户自己的会话记录。运行期间 codex 的记录在私有目录里，pi 的记录在会话临时目录里；claude-code 的新会话写在用户配置目录的 <code>projects/</code> 里，结束后才移走，带来的风险见<a href="#residual">剩余风险</a>，做法见<a href="run.html#sessions">保存与继续会话</a>。</p>
+<p>四个运行时默认都不保存会话。调用方给出 <code>--session-dir</code> 时，运行结束后会话记录移到那个目录，<code>--resume</code> 只从那里读，不读用户自己的会话记录。运行期间 codex 的记录在私有目录里，pi 与 dsh 的记录在会话临时目录里；claude-code 的新会话写在用户配置目录的 <code>projects/</code> 里，结束后才移走，带来的风险见<a href="#residual">剩余风险</a>，做法见<a href="run.html#sessions">保存与继续会话</a>。</p>
 <p>账号由登录方式决定。会话环境按运行时删除会改变登录方式的变量，容器里的凭据由环境变量写入登录文件，见<a href="session.html">会话环境</a>。</p>
 
 <h2 id="residual">剩余风险</h2>
@@ -268,6 +274,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>claude-code</td><td>内置的 Read 能读读取限制以外的文件，内容会进入模型上下文。Edit 与 Write 只能写工作目录与会话临时目录，由权限规则限制，不由沙箱限制（云端实测）。macOS 上沙箱里的命令能写 <code>/tmp/claude-&lt;uid&gt;</code>，这个目录由同一用户的所有 claude 会话共用，写在里面的文件运行结束后不删除（macOS 实测）；Linux 上这个目录在会话临时目录之内，没有这项风险（本机 Linux 与云端实测）</td><td>Bash 命令只经分类器判断，能写容器内任何位置、能联网，能用间接的写法读取读取限制里的路径；Write 能写任何位置；<code>--network custom</code> 下 WebFetch 能读放行列表以外的主机（均为云端实测）。边界是容器</td></tr>
     <tr><td>codex</td><td>能读读取限制以外、用户可读的任何文件，内容会进入模型上下文。系统级配置（<code>/etc/codex</code> 与 macOS 的托管配置）无法关闭，照常生效（codex 0.159.2 源码）。<code>--network full</code> 下命令直接联网，不经过滤代理，没有私有地址检查，<code>169.254.169.254</code> 这类地址可以访问（用户定）</td><td>能读、写容器内任何位置，能联网，边界是容器</td></tr>
     <tr><td>pi</td><td>能读读取限制以外、用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。agent 可以把状态目录里的 <code>auth.json</code> 换成指向其他文件的符号链接，之后带 <code>AGENTRUN_PI_AUTH</code> 运行时，agentrun 把凭据写到那个文件，这个文件可以在沙箱之外，见<a href="session.html#credentials">凭据</a>。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能读、写容器内任何位置，能联网，边界是容器</td></tr>
+    <tr><td>dsh</td><td>能读读取限制以外、用户可读的任何文件。dsh 启动时把工作目录里 <code>.env</code> 的变量合并进它自己与命令的环境，会话环境里已有的变量优先，没有参数能关闭；agent 能写工作目录，写进 <code>.env</code> 的变量会进入之后每次运行的命令环境。账号不受影响，因为会话环境里总有 <code>DEEPSEEK_API_KEY</code>；<code>.env</code> 里有 dsh 拒绝读取的变量名（<code>DSH_</code> 开头、<code>DEEPSEEK_BASE_URL</code>、代理变量、<code>PATH</code> 等）时 dsh 启动失败（0.2.1-rc.2 实测）。网络只通向模型服务，读到的文件只能经模型服务带出；每个模型请求带 <code>x-deepseek-harness-user-id</code> 与 <code>x-deepseek-harness-session-id</code> 两个请求头，私有 <code>DSH_HOME</code> 下用户 id 每次运行随机生成</td><td>能读、写容器内任何位置，能联网，边界是容器</td></tr>
   </tbody>
 </table>
 <p>读取限制按路径匹配。限制范围以外已有的硬链接指向同一个文件时，通过硬链接能读到内容。工作目录里被拒绝读取的目录，沙箱运行时 claude-code 的命令写进去报告成功，但写入的文件在运行结束后不存在（Linux 上这个目录在沙箱里换成了空目录，云端实测）；pi 写进去时报只读错误；codex 的拒绝项优先于工作目录的写权限，文件不会写出（codex 0.160.1 macOS 实测）。</p>
@@ -275,7 +282,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <p>保存会话（<code>--session-dir</code>）的剩余风险：</p>
 <ul>
   <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。只有给出 <code>--session-dir</code> 时这样做，不给时仍加 <code>--no-session-persistence</code>，不写记录。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行同样在结束时移走（云端实测 <code>interrupted</code>、<code>timeout</code> 与 <code>limit</code>）。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在用户的配置目录里。运行期间用户在同一个工作目录里运行 <code>claude --continue</code> 可能接上这次运行的会话，用户写进去的内容在运行结束时随记录一起被移到 <code>--session-dir</code>。</li>
-  <li>pi 的记录在运行期间放在会话临时目录里，沙箱里的 agent 能改写这次会话的记录，改写后的内容随记录一起保存，下次继续时进入模型上下文。其他会话的记录 agent 写不到。</li>
+  <li>pi 与 dsh 的记录在运行期间放在会话临时目录里，沙箱里的 agent 能改写这次会话的记录，改写后的内容随记录一起保存，下次继续时进入模型上下文。其他会话的记录 agent 写不到。</li>
   <li><code>--session-dir</code> 放在工作目录或会话临时目录之内时，沙箱里的 agent 能改写已保存的全部会话，改写的内容在下次继续时进入模型上下文。agentrun 不检查这一点，由调用方把目录放在两者之外。</li>
 </ul>
 <p>过滤代理本身的剩余风险：</p>

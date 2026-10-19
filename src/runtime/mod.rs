@@ -1,5 +1,6 @@
 pub mod claudecode;
 pub mod codex;
+pub mod dsh;
 pub mod pi;
 
 use std::ffi::{OsStr, OsString};
@@ -17,6 +18,7 @@ use crate::session::Session;
 use crate::transcript::{Saved, Transcript};
 use claudecode::ClaudeCode;
 use codex::Codex;
+use dsh::Dsh;
 use pi::Pi;
 
 pub const DETAIL_MAX_CHARS: usize = 500;
@@ -31,7 +33,12 @@ pub const DENIED_HOME_ENTRIES: [&str; 9] = [
     ".config/gcloud",
     ".azure",
 ];
-const RUNTIMES: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
+const RUNTIMES: [Runtime; 4] = [
+    Runtime::ClaudeCode,
+    Runtime::Codex,
+    Runtime::Pi,
+    Runtime::Dsh,
+];
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
@@ -49,6 +56,7 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+        Runtime::Dsh => Box::new(Dsh::new()),
     }
 }
 
@@ -92,6 +100,7 @@ pub(crate) fn min_version(runtime: Runtime) -> Version {
         Runtime::ClaudeCode => claudecode::MIN_VERSION,
         Runtime::Codex => codex::MIN_VERSION,
         Runtime::Pi => pi::MIN_VERSION,
+        Runtime::Dsh => dsh::MIN_VERSION,
     }
 }
 
@@ -107,6 +116,7 @@ pub(crate) fn model_service_host(
         Runtime::Pi => pi::model_service(model, pi::user_state_dir(session, cwd).as_deref())
             .host
             .map(str::to_string),
+        Runtime::Dsh => dsh::service_host(session),
     }
 }
 
@@ -119,7 +129,7 @@ pub(crate) fn service_hosts(
     match runtime {
         Runtime::ClaudeCode => Vec::new(),
         Runtime::Codex => codex::SERVICE_HOSTS.map(str::to_string).to_vec(),
-        Runtime::Pi => model_service_host(runtime, model, session, cwd)
+        Runtime::Pi | Runtime::Dsh => model_service_host(runtime, model, session, cwd)
             .into_iter()
             .collect(),
     }
@@ -132,7 +142,7 @@ pub(crate) fn sandbox_state(
 ) -> Result<Option<PiState>, String> {
     match runtime {
         Runtime::Pi => pi::session_state(pi::user_state_dir(session, cwd).as_deref(), false),
-        Runtime::ClaudeCode | Runtime::Codex => Ok(None),
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Dsh => Ok(None),
     }
 }
 
@@ -141,6 +151,7 @@ pub(crate) fn login_file(runtime: Runtime, session: &Session, cwd: &Path) -> Opt
         Runtime::ClaudeCode => claudecode::login_file(session, cwd),
         Runtime::Codex => codex::user_home(session, cwd).map(|home| home.join(codex::LOGIN_FILE)),
         Runtime::Pi => pi::user_state_dir(session, cwd).map(|dir| dir.join(pi::LOGIN_FILE)),
+        Runtime::Dsh => dsh::user_home(session, cwd).map(|home| home.join(dsh::ENV_FILE)),
     }
 }
 
@@ -166,6 +177,7 @@ pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> 
     );
     paths.extend(claudecode::history_paths(session, cwd));
     paths.extend(codex::history_paths(session, cwd));
+    paths.extend(dsh::history_paths(session, cwd));
     paths.retain(|path| !contains(path, cwd));
     paths
 }
@@ -217,7 +229,7 @@ pub(crate) fn denied_reads(
     Ok(unique)
 }
 
-fn contains(path: &Path, dir: &Path) -> bool {
+pub(crate) fn contains(path: &Path, dir: &Path) -> bool {
     if dir.starts_with(path) {
         return true;
     }
@@ -253,6 +265,14 @@ pub fn reject_limits(runtime: Runtime, args: &RunArgs) -> Result<(), String> {
         "{option} is not supported by {name}: {name} reports usage only when the run ends, so agentrun cannot stop it during the run",
         name = runtime.name()
     ))
+}
+
+pub(crate) fn display_path(path: &Path, cwd: &Path) -> String {
+    match path.strip_prefix(cwd) {
+        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+        Ok(relative) => relative.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 pub fn detail_head(text: &str) -> String {
@@ -445,6 +465,7 @@ mod tests {
             ),
             (Runtime::Codex, "/nonexistent/home/.codex/auth.json"),
             (Runtime::Pi, "/nonexistent/home/.pi/agent/auth.json"),
+            (Runtime::Dsh, "/nonexistent/home/.dsh/.env"),
         ];
         for (runtime, _) in logins {
             let mut expected = home_entries("/nonexistent/home");
@@ -459,6 +480,7 @@ mod tests {
                     "/nonexistent/home/.claude/projects",
                     "/nonexistent/home/.codex/sessions",
                     "/nonexistent/home/.codex/history.jsonl",
+                    "/nonexistent/home/.dsh/sessions",
                 ]
                 .map(PathBuf::from),
             );
@@ -474,6 +496,7 @@ mod tests {
                 ("HOME", "/nonexistent/home"),
                 ("CLAUDE_CONFIG_DIR", "/nonexistent/claude"),
                 ("CODEX_HOME", "relative/codex"),
+                ("DSH_HOME", "/nonexistent/dsh"),
             ],
         );
         let paths = default_denied_reads(Runtime::Pi, &moved, cwd);
@@ -482,15 +505,30 @@ mod tests {
             [
                 PathBuf::from("/nonexistent/claude/.credentials.json"),
                 PathBuf::from("/nonexistent/work/relative/codex/auth.json"),
+                PathBuf::from("/nonexistent/dsh/.env"),
                 PathBuf::from("/nonexistent/claude/projects"),
                 PathBuf::from("/nonexistent/work/relative/codex/sessions"),
                 PathBuf::from("/nonexistent/work/relative/codex/history.jsonl"),
+                PathBuf::from("/nonexistent/dsh/sessions"),
             ]
         );
         assert_eq!(
             default_denied_reads(Runtime::Codex, &env_session(Runtime::Codex, &[]), cwd),
             Vec::<PathBuf>::new()
         );
+        let dsh = env_session(
+            Runtime::Dsh,
+            &[
+                ("HOME", "/nonexistent/home"),
+                ("DSH_HOME", "/nonexistent/dsh"),
+            ],
+        );
+        assert!(!dsh.env.contains_key(OsStr::new("DSH_HOME")));
+        let paths = default_denied_reads(Runtime::Dsh, &dsh, cwd);
+        for path in ["/nonexistent/dsh/.env", "/nonexistent/dsh/sessions"] {
+            assert!(paths.contains(&PathBuf::from(path)), "{path}");
+        }
+        assert!(!paths.contains(&PathBuf::from("/nonexistent/home/.dsh/.env")));
     }
 
     #[test]
@@ -603,7 +641,12 @@ mod tests {
     fn min_versions_match_the_documented_tables() {
         let run_page = include_str!("../../docs/pages/run.html");
         let quickstart = include_str!("../../docs/pages/quickstart.html");
-        for runtime in [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi] {
+        for runtime in [
+            Runtime::ClaudeCode,
+            Runtime::Codex,
+            Runtime::Pi,
+            Runtime::Dsh,
+        ] {
             let run_item = format!("<li>{}: >= ", runtime.name());
             let documented = run_page
                 .lines()

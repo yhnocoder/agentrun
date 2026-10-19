@@ -20,7 +20,8 @@ use crate::network::{
 };
 use crate::output::{Network, NetworkReason, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
-use crate::run::{Caller, create_tempdir, shell_quote};
+use crate::run::{Caller, create_tempdir, shell_quote, temp_environment};
+use crate::runtime::dsh::{self, Dsh};
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{self, Adapter, Invocation, Version, codex};
 use crate::sandbox::{
@@ -41,13 +42,20 @@ const TEMPDIR_PREFIX: &str = "agentrun-doctor-";
 const PROMPT: &str = "agentrun doctor";
 const VERSION_FLAG: &str = "--version";
 const ERROR_MARKER: &str = "Error:";
-const ORDER: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
+const ORDER: [Runtime; 4] = [
+    Runtime::ClaudeCode,
+    Runtime::Codex,
+    Runtime::Pi,
+    Runtime::Dsh,
+];
 const SANDBOX_SCRIPT: &str = r#"echo ok > "$1/inside.txt"; echo ok > "$2/outside.txt" 2>/dev/null; cat "$2/unreadable.txt" 2>/dev/null; echo done"#;
 const INSIDE_FILE: &str = "inside.txt";
 const OUTSIDE_FILE: &str = "outside.txt";
 const UNREADABLE_FILE: &str = "unreadable.txt";
 const UNREADABLE_TEXT: &str = "unreadable";
 const CODEX_HOME_DIR: &str = "codex-home";
+const DSH_LOGIN_DIR: &str = "dsh-login";
+const DSH_LOGIN_EFFORT: &str = "off";
 const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
 const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
 const SERVICE_PORT: u16 = 443;
@@ -533,6 +541,7 @@ impl Doctor {
                     Runtime::ClaudeCode => self.claude_code_login(target, executable),
                     Runtime::Codex => self.codex_login(target, executable),
                     Runtime::Pi => self.pi_login(target, executable),
+                    Runtime::Dsh => self.dsh_login(target, executable),
                 };
                 self.record_result(runtime, Check::Login, result);
             }
@@ -555,7 +564,7 @@ impl Doctor {
         ];
         let env = match target.runtime {
             Runtime::Codex => self.codex_env(),
-            Runtime::ClaudeCode | Runtime::Pi => Vec::new(),
+            Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => Vec::new(),
         };
         let finished = self
             .execute(
@@ -719,6 +728,57 @@ impl Doctor {
                 .stderr_line()
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("pi {} before choosing a model", finished.exit_text))),
+        }
+    }
+
+    fn dsh_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
+        let tempdir = self.tempdir.join(DSH_LOGIN_DIR);
+        std::fs::create_dir_all(&tempdir)
+            .map_err(|error| format!("cannot create {}: {error}", tempdir.display()))?;
+        let args = RunArgs {
+            effort: Some(DSH_LOGIN_EFFORT.to_string()),
+            ..self.run_args()
+        };
+        let invocation = Invocation {
+            tempdir,
+            ..Invocation::new(
+                Runtime::Dsh,
+                args,
+                self.cwd.clone(),
+                PROMPT.to_string(),
+                target.session.clone(),
+            )
+        };
+        let mut launch = Dsh::new().launch(executable, &invocation)?;
+        launch.env.extend(temp_environment(&invocation.tempdir));
+        let outcome = |line: &str| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| dsh::login_outcome(&value))
+        };
+        let finished = self.execute(
+            target.runtime,
+            Check::Login,
+            Run {
+                argv: &launch.argv,
+                env: &launch.env,
+                stdin: &launch.stdin,
+                session: &target.session,
+            },
+            |line| outcome(line).is_some(),
+        )?;
+        match finished.stdout.iter().find_map(|line| outcome(line)) {
+            Some(Ok(())) => Ok(match &self.args.model {
+                Some(model) => format!("{} ({model})", dsh::KEY_VARIABLE),
+                None => dsh::KEY_VARIABLE.to_string(),
+            }),
+            Some(Err(detail)) => Err(detail),
+            None => Err(finished
+                .stderr_line()
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    format!("dsh {} before the first model reply", finished.exit_text)
+                })),
         }
     }
 
@@ -900,10 +960,14 @@ impl Doctor {
             return Err("a read of a denied path succeeded".to_string());
         }
         let mut detail = format!("{}: wrote inside, blocked outside", wrap.name());
-        if runtime == Runtime::Pi {
+        if matches!(runtime, Runtime::Pi | Runtime::Dsh) {
+            let name = runtime.name();
             match executable {
-                Some(pi) => {
-                    let version = vec![pi.to_string_lossy().into_owned(), "--version".to_string()];
+                Some(path) => {
+                    let version = vec![
+                        path.to_string_lossy().into_owned(),
+                        VERSION_FLAG.to_string(),
+                    ];
                     let finished = self.execute(
                         runtime,
                         Check::Sandbox,
@@ -917,13 +981,16 @@ impl Doctor {
                     )?;
                     if finished.exit_code != Some(0) {
                         return Err(bwrap_hint(
-                            format!("pi did not start in the sandbox: {}", finished.message()),
+                            format!(
+                                "{name} did not start in the sandbox: {}",
+                                finished.message()
+                            ),
                             &finished,
                         ));
                     }
-                    detail.push_str(", pi started");
+                    detail.push_str(&format!(", {name} started"));
                 }
-                None => detail.push_str(", pi not started (executable not found)"),
+                None => detail.push_str(&format!(", {name} not started (executable not found)")),
             }
         }
         Ok(detail)
