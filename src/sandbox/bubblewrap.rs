@@ -6,9 +6,9 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::time::Instant;
 
-use super::PiState;
 #[cfg(target_os = "linux")]
 use super::{Available, Unavailable, Wrapper, start_check};
+use super::{Hidden, PiState};
 #[cfg(target_os = "linux")]
 use crate::cli::Runtime;
 #[cfg(target_os = "linux")]
@@ -16,6 +16,7 @@ use crate::session::{Session, find_executable, is_executable};
 
 pub const BWRAP_PREFIX: &str = "bwrap: ";
 pub const CANNOT_START_HINT: &str = "In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor";
+const EMPTY_FILE: &str = "/dev/null";
 const FORWARD_SCRIPT: &str = r#""$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2>/dev/null & shift 2; exec "$@""#;
 #[cfg(target_os = "linux")]
 const INSTALL_HINT: &str = "Install bubblewrap and socat (for example: apt-get install bubblewrap socat, or dnf install bubblewrap socat), or use --sandbox relax or --sandbox off";
@@ -33,6 +34,7 @@ pub fn wrap_bwrap(
     cwd: &Path,
     tempdir: &Path,
     state: Option<&PiState>,
+    hidden: &[Hidden],
     forward: Option<&ProxyForward>,
     argv: &[String],
 ) -> Vec<String> {
@@ -57,6 +59,19 @@ pub fn wrap_bwrap(
         }
         if let Some(login_target) = &state.login_target {
             mount("--bind", login_target);
+        }
+    }
+    for entry in hidden {
+        let path = text(&entry.path);
+        if entry.dir {
+            wrapped.extend([
+                "--tmpfs".to_string(),
+                path.clone(),
+                "--remount-ro".to_string(),
+                path,
+            ]);
+        } else {
+            wrapped.extend(["--ro-bind".to_string(), EMPTY_FILE.to_string(), path]);
         }
     }
     wrapped.extend(
@@ -240,6 +255,7 @@ mod tests {
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
             Some(&state),
+            &[],
             None,
             &argv,
         );
@@ -285,6 +301,7 @@ mod tests {
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
             None,
+            &[],
             None,
             &argv,
         );
@@ -293,6 +310,49 @@ mod tests {
             2
         );
         assert_eq!(without_state.len(), with_state.len() - 12);
+    }
+
+    #[test]
+    fn hidden_paths_are_mounted_after_the_writable_binds() {
+        let hidden = [
+            Hidden {
+                path: PathBuf::from("/nonexistent/home/.ssh"),
+                dir: true,
+            },
+            Hidden {
+                path: PathBuf::from("/nonexistent/work/.env"),
+                dir: false,
+            },
+        ];
+        let wrapped = wrap_bwrap(
+            Path::new("/usr/bin/bwrap"),
+            Path::new("/nonexistent/work"),
+            Path::new("/nonexistent/tmp/agentrun-x"),
+            None,
+            &hidden,
+            None,
+            &strings(&["/usr/bin/pi"]),
+        );
+        assert_eq!(
+            wrapped[10..],
+            strings(&[
+                "--tmpfs",
+                "/nonexistent/home/.ssh",
+                "--remount-ro",
+                "/nonexistent/home/.ssh",
+                "--ro-bind",
+                "/dev/null",
+                "/nonexistent/work/.env",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--die-with-parent",
+                "--unshare-net",
+                "--",
+                "/usr/bin/pi",
+            ])
+        );
     }
 
     #[test]
@@ -308,6 +368,7 @@ mod tests {
             Path::new("/nonexistent/work"),
             Path::new("/nonexistent/tmp/agentrun-x"),
             None,
+            &[],
             Some(&forward),
             &argv,
         );

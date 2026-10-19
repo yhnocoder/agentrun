@@ -22,7 +22,7 @@ use crate::doctor;
 use crate::image::read_images;
 use crate::network::{self, FilterProxy, ProxyEndpoint};
 use crate::output::{End, EndStatus, Event, Output, write_end};
-use crate::runtime::{Adapter, Invocation, Launch};
+use crate::runtime::{self, Adapter, Invocation, Launch};
 use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
 use crate::transcript::{self, Saved};
@@ -257,7 +257,7 @@ fn set_up(
         });
     }
     drop(hold);
-    let mut plan = plan_lines(&launch, &ready.invocation.session);
+    let mut plan = plan_lines(&launch, &ready.invocation);
     plan.push(credential_line);
     let Ready {
         invocation,
@@ -281,7 +281,7 @@ fn dry_run(ready: &mut Ready, proxy_needed: bool) -> Result<Vec<String>, String>
         socket: ready.invocation.tempdir.join(network::SOCKET_FILE),
     });
     let launch = ready.adapter.launch(&ready.executable, &ready.invocation)?;
-    Ok(plan_lines(&launch, &ready.invocation.session))
+    Ok(plan_lines(&launch, &ready.invocation))
 }
 
 fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -> u8 {
@@ -323,6 +323,8 @@ fn prepare(
         .map(|path| read_env_file(path))
         .collect::<Result<Vec<_>, _>>()?;
     let session = Session::assemble(runtime, &caller.env, &path_dirs, &env_files, &env_args);
+    let denied_reads =
+        runtime::denied_reads(runtime, &args, &session, &cwd, &tempdir_base(caller))?;
     let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;
     let executable = find_executable(runtime.executable(), &session.path, &cwd)
         .ok_or_else(|| format!("{} not found in PATH", runtime.executable()))?;
@@ -340,6 +342,7 @@ fn prepare(
         format,
         sandbox,
         allow_hosts,
+        denied_reads,
         resume,
         ..Invocation::new(runtime, args, cwd, prompt, session)
     };
@@ -418,11 +421,15 @@ fn create_raw(path: &Path) -> Result<File, String> {
         .map_err(|error| format!("cannot create raw file {}: {error}", path.display()))
 }
 
-pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
-    let base = match caller.var("TMPDIR") {
+fn tempdir_base(caller: &Caller) -> PathBuf {
+    match caller.var("TMPDIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from("/tmp"),
-    };
+    }
+}
+
+pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
+    let base = tempdir_base(caller);
     tempfile::Builder::new()
         .prefix(prefix)
         .permissions(std::fs::Permissions::from_mode(0o700))
@@ -435,7 +442,8 @@ pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, S
         })
 }
 
-fn plan_lines(launch: &Launch, session: &Session) -> Vec<String> {
+fn plan_lines(launch: &Launch, invocation: &Invocation) -> Vec<String> {
+    let session = &invocation.session;
     let command = launch
         .argv
         .iter()
@@ -451,7 +459,18 @@ fn plan_lines(launch: &Launch, session: &Session) -> Vec<String> {
             "agentrun variables: {}",
             name_list(&session.agentrun_variables)
         ),
+        format!(
+            "deny read: {}",
+            name_list(&path_texts(&invocation.denied_reads))
+        ),
     ]
+}
+
+pub(crate) fn path_texts(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 fn name_list(names: &[String]) -> String {

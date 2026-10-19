@@ -62,6 +62,7 @@ interface StartEvent extends EventBase {
     allow: string[]          // --allow-host 的值
     enforced: boolean        // 网络限制是否由沙箱执行
   }
+  deny_read: string[]        // agent 不能读的路径：默认列表在前，--deny-read 在后
   model: string | null       // --model 的值，未给时为 null
   cwd: string                // 绝对路径
   argv: string[]             // 实际执行的完整命令，不含提示词
@@ -179,6 +180,11 @@ interface Usage extends TokenCounts {
     "allow": [],
     "enforced": true
   },
+  "deny_read": [
+    "/home/me/.ssh",
+    "/home/me/.aws",
+    "..."
+  ],
   "model": null,
   "cwd": "/work/repo",
   "argv": [

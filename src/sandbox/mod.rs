@@ -216,6 +216,27 @@ pub struct PiState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hidden {
+    pub path: PathBuf,
+    pub dir: bool,
+}
+
+pub fn hidden(denied_reads: &[PathBuf]) -> Vec<Hidden> {
+    let mut hidden: Vec<Hidden> = Vec::new();
+    for path in denied_reads {
+        let Ok(path) = std::fs::canonicalize(path) else {
+            continue;
+        };
+        if hidden.iter().any(|entry| entry.path == path) {
+            continue;
+        }
+        let dir = path.is_dir();
+        hidden.push(Hidden { path, dir });
+    }
+    hidden
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wrapped {
     pub kind: SandboxKind,
     pub prefix: Vec<String>,
@@ -234,10 +255,12 @@ pub fn wrap(
     cwd: &Path,
     tempdir: &Path,
     state: Option<&PiState>,
+    denied_reads: &[PathBuf],
     proxy: Option<&ProxyEndpoint>,
     dry_run: bool,
 ) -> Result<Wrapped, String> {
     let port = proxy.map(ProxyEndpoint::port_text);
+    let hidden = hidden(denied_reads);
     match &sandbox.wrapper {
         Wrapper::Bubblewrap { bwrap, socat } => {
             let forward = proxy
@@ -249,17 +272,19 @@ pub fn wrap(
                 });
             Ok(Wrapped {
                 kind: SandboxKind::Bubblewrap,
-                prefix: wrap_bwrap(bwrap, cwd, tempdir, state, forward.as_ref(), &[]),
+                prefix: wrap_bwrap(bwrap, cwd, tempdir, state, &hidden, forward.as_ref(), &[]),
             })
         }
         Wrapper::Seatbelt => {
             if !dry_run {
-                write_seatbelt_profile(cwd, tempdir, state, port.as_deref()).map_err(|error| {
-                    format!(
-                        "cannot write the sandbox profile {}: {error}",
-                        tempdir.join(SEATBELT_FILE).display()
-                    )
-                })?;
+                write_seatbelt_profile(cwd, tempdir, state, &hidden, port.as_deref()).map_err(
+                    |error| {
+                        format!(
+                            "cannot write the sandbox profile {}: {error}",
+                            tempdir.join(SEATBELT_FILE).display()
+                        )
+                    },
+                )?;
             }
             Ok(Wrapped {
                 kind: SandboxKind::Seatbelt,
@@ -479,7 +504,7 @@ mod tests {
             port: Some(41234),
             socket: socket.clone(),
         };
-        let wrapped = wrap(&sandbox, cwd, tempdir, None, Some(&endpoint), false).unwrap();
+        let wrapped = wrap(&sandbox, cwd, tempdir, None, &[], Some(&endpoint), false).unwrap();
         assert_eq!(wrapped.kind, SandboxKind::Bubblewrap);
         let forward = ProxyForward {
             socat: Path::new("/usr/bin/socat"),
@@ -493,11 +518,12 @@ mod tests {
                 cwd,
                 tempdir,
                 None,
+                &[],
                 Some(&forward),
                 &command
             )
         );
-        let direct = wrap(&sandbox, cwd, tempdir, None, None, false).unwrap();
+        let direct = wrap(&sandbox, cwd, tempdir, None, &[], None, false).unwrap();
         assert_eq!(
             direct.argv(&command),
             wrap_bwrap(
@@ -505,6 +531,7 @@ mod tests {
                 cwd,
                 tempdir,
                 None,
+                &[],
                 None,
                 &command
             )
@@ -512,7 +539,7 @@ mod tests {
         assert!(!direct.prefix.contains(&"/bin/sh".to_string()));
         assert!(!direct.prefix.contains(&"-c".to_string()));
         let placeholder = ProxyEndpoint { port: None, socket };
-        let dry = wrap(&sandbox, cwd, tempdir, None, Some(&placeholder), true).unwrap();
+        let dry = wrap(&sandbox, cwd, tempdir, None, &[], Some(&placeholder), true).unwrap();
         assert!(dry.prefix.contains(&"<proxy port>".to_string()));
     }
 
@@ -527,7 +554,7 @@ mod tests {
         let sandbox = sandbox_with(Wrapper::Seatbelt);
         let profile = tempdir.join("seatbelt.sb");
         let prefix = strings(&["/usr/bin/sandbox-exec", "-f", profile.to_str().unwrap()]);
-        let dry = wrap(&sandbox, &work, &tempdir, None, None, true).unwrap();
+        let dry = wrap(&sandbox, &work, &tempdir, None, &[], None, true).unwrap();
         assert_eq!(dry.kind, SandboxKind::Seatbelt);
         assert_eq!(dry.prefix, prefix);
         assert!(!profile.exists());
@@ -535,21 +562,48 @@ mod tests {
             port: Some(7),
             socket: tempdir.join("proxy.sock"),
         };
-        let written = wrap(&sandbox, &work, &tempdir, None, Some(&endpoint), false).unwrap();
+        let written = wrap(&sandbox, &work, &tempdir, None, &[], Some(&endpoint), false).unwrap();
         assert_eq!(written.kind, SandboxKind::Seatbelt);
         assert_eq!(written.prefix, prefix);
         assert_eq!(
             std::fs::read_to_string(&profile).unwrap(),
-            seatbelt_profile(&work, &tempdir, None, Some("7"))
+            seatbelt_profile(&work, &tempdir, None, &[], Some("7"))
         );
         let missing = real.join("missing");
-        let detail = wrap(&sandbox, &work, &missing, None, None, false).unwrap_err();
+        let detail = wrap(&sandbox, &work, &missing, None, &[], None, false).unwrap_err();
         assert!(
             detail.starts_with(&format!(
                 "cannot write the sandbox profile {}: ",
                 missing.join("seatbelt.sb").display()
             )),
             "{detail}"
+        );
+    }
+
+    #[test]
+    fn hidden_resolves_existing_paths_once_and_skips_missing_ones() {
+        let root = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(real.join("dir")).unwrap();
+        std::fs::write(real.join("file"), "x").unwrap();
+        std::os::unix::fs::symlink(real.join("dir"), real.join("link")).unwrap();
+        assert_eq!(
+            hidden(&[
+                real.join("missing"),
+                real.join("link"),
+                real.join("file"),
+                real.join("dir"),
+            ]),
+            [
+                Hidden {
+                    path: real.join("dir"),
+                    dir: true,
+                },
+                Hidden {
+                    path: real.join("file"),
+                    dir: false,
+                },
+            ]
         );
     }
 
@@ -562,6 +616,7 @@ mod tests {
                 Path::new("/nonexistent/work"),
                 Path::new("/nonexistent/tmp"),
                 None,
+                &[],
                 None,
                 false,
             )

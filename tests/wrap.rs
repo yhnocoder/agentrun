@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use agentrun::output::SandboxKind;
 use agentrun::runtime::pi::state;
-use agentrun::sandbox::{PiState, ProxyForward, wrap_bwrap, wrapper_failure};
+use agentrun::sandbox::{Hidden, PiState, ProxyForward, hidden, wrap_bwrap, wrapper_failure};
 use support::env::write_script;
 use support::process::wait_until_gone;
 use tempfile::TempDir;
@@ -100,6 +100,16 @@ impl Wrapped {
         args: &[&str],
         forward: Option<&ProxyForward>,
     ) -> Command {
+        self.command_hiding(body, args, &[], forward)
+    }
+
+    fn command_hiding(
+        &self,
+        body: &str,
+        args: &[&str],
+        hidden: &[Hidden],
+        forward: Option<&ProxyForward>,
+    ) -> Command {
         let state = state(&self.state_dir()).unwrap();
         let script = self.script(body);
         let mut argv = vec![script.to_string_lossy().into_owned()];
@@ -109,6 +119,7 @@ impl Wrapped {
             &self.cwd(),
             &self.tempdir(),
             Some(&state),
+            hidden,
             forward,
             &argv,
         );
@@ -185,6 +196,52 @@ fn writes_only_cwd_tempdir_and_the_writable_state_entries() {
     );
     assert!(!wrapped.home().join("outside.txt").exists());
     assert!(!other_tmp.exists());
+}
+
+#[test]
+fn hidden_paths_read_as_empty_or_denied_even_inside_the_working_directory() {
+    let Some(wrapped) = Wrapped::new() else {
+        return;
+    };
+    let home = wrapped.home();
+    std::fs::create_dir_all(home.join(".ssh/keys")).unwrap();
+    std::fs::write(home.join(".ssh/keys/id"), "secret in a directory").unwrap();
+    std::fs::write(home.join(".netrc"), "secret file").unwrap();
+    std::os::unix::fs::symlink(home.join(".ssh"), home.join("ssh-link")).unwrap();
+    std::fs::write(wrapped.cwd().join("local.env"), "secret in cwd").unwrap();
+    std::fs::write(home.join("open.txt"), "visible").unwrap();
+    let hidden = hidden(&[
+        home.join("ssh-link"),
+        home.join(".netrc"),
+        wrapped.cwd().join("local.env"),
+        home.join(".missing"),
+    ]);
+    let ssh = std::fs::canonicalize(home.join(".ssh")).unwrap();
+    let output = wrapped
+        .command_hiding(
+            "for f in \"$@\"; do if content=$(cat \"$f\" 2>/dev/null); then echo \"read: $content\"; else echo blocked; fi; done\nls -A \"$HOME/.ssh\"\nif echo x > \"$HOME/.ssh/new\" 2>/dev/null; then echo written; else echo not written; fi\n",
+            &[
+                ssh.join("keys/id").to_str().unwrap(),
+                home.join("ssh-link/keys/id").to_str().unwrap(),
+                home.join(".netrc").to_str().unwrap(),
+                wrapped.cwd().join("local.env").to_str().unwrap(),
+                home.join("open.txt").to_str().unwrap(),
+            ],
+            &hidden,
+            None,
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        stdout(&output),
+        "blocked\nblocked\nblocked\nblocked\nread: visible\nnot written\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join(".ssh/keys/id")).unwrap(),
+        "secret in a directory"
+    );
+    assert!(!home.join(".ssh/new").exists());
 }
 
 #[test]
@@ -326,6 +383,7 @@ fn wrapper_failure_is_recognised_from_a_real_bwrap_error() {
         &wrapped.cwd(),
         &wrapped.tempdir(),
         Some(&missing),
+        &[],
         None,
         &argv,
     );

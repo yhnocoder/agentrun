@@ -14,7 +14,7 @@ use crate::image::write_copies;
 use crate::json::{first_line, optional_string, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::{Record, SandboxKind, TokenCounts};
-use crate::sandbox::{BWRAP_PREFIX, start_failure};
+use crate::sandbox::{BWRAP_PREFIX, Hidden, hidden, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 use crate::transcript::{Transcript, copy_into, find_file_within};
 
@@ -26,6 +26,8 @@ const HOME_LABEL: &str = "codex home";
 const SESSIONS_SUBDIR: &str = "sessions";
 const RESUME_COMMAND: &str = "resume";
 pub(crate) const LOGIN_FILE: &str = "auth.json";
+const GLOB_CHARACTERS: [char; 6] = ['*', '?', '[', ']', '{', '}'];
+const HISTORY_ENTRIES: [&str; 2] = ["sessions", "history.jsonl"];
 pub(crate) const SERVICE_HOSTS: [&str; 4] = [
     "chatgpt.com",
     "ab.chatgpt.com",
@@ -42,6 +44,7 @@ const FIXED_ARGS: [&str; 6] = [
     "-C",
 ];
 const PROFILE: &str = "agentrun";
+const DENIED_ACCESS: &str = "\"deny\"";
 const FULL_ACCESS_PROFILE: &str = "\":danger-full-access\"";
 const SETTINGS: [&str; 5] = [
     "approval_policy=\"never\"",
@@ -192,7 +195,23 @@ impl Adapter for Codex {
     }
 
     fn check_args(&self, args: &RunArgs) -> Result<(), String> {
-        reject_limits(Runtime::Codex, args)
+        reject_limits(Runtime::Codex, args)?;
+        for given in &args.deny_read {
+            let absolute = std::path::absolute(given).unwrap_or_else(|_| given.clone());
+            let real = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+            if real.to_string_lossy().contains(GLOB_CHARACTERS) {
+                let resolved = if &real == given {
+                    String::new()
+                } else {
+                    format!(" (resolves to {})", real.display())
+                };
+                return Err(format!(
+                    "--deny-read {}{resolved}: codex cannot deny a path that contains * ? [ ] {{ }}",
+                    given.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
@@ -235,8 +254,20 @@ impl Adapter for Codex {
                 })?
             };
             argv.extend(config(format!("default_permissions={PROFILE}")));
+            let mut hidden_reads = hidden(&invocation.denied_reads);
+            let real_login = std::fs::canonicalize(&login).unwrap_or_else(|_| login.clone());
+            if hidden_reads
+                .iter()
+                .any(|entry| real_login.starts_with(&entry.path))
+            {
+                hidden_reads.push(Hidden {
+                    path: home_path(&tempdir).join(LOGIN_FILE),
+                    dir: false,
+                });
+            }
             argv.extend(sandbox_permissions(
                 &tempdir,
+                &hidden_reads,
                 network,
                 &invocation.allow_hosts,
             ));
@@ -379,6 +410,13 @@ pub(crate) fn user_home(session: &Session, cwd: &Path) -> Option<PathBuf> {
     session.runtime_dir(cwd, HOME_VARIABLE, HOME_SUBDIR)
 }
 
+pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    user_home(session, cwd)
+        .into_iter()
+        .flat_map(|home| HISTORY_ENTRIES.map(|entry| home.join(entry)))
+        .collect()
+}
+
 pub(crate) fn login_file(session: &Session, cwd: &Path) -> PathBuf {
     user_home(session, cwd)
         .unwrap_or_else(|| home_placeholder(HOME_SUBDIR))
@@ -425,22 +463,29 @@ pub(crate) fn create_home(home: &Path, login: &Path) -> Result<(), String> {
 
 pub(crate) fn sandbox_permissions(
     tempdir: &Path,
+    hidden_reads: &[Hidden],
     network: NetworkMode,
     allow_hosts: &[HostRule],
 ) -> Vec<String> {
-    let mut permissions = config(filesystem_setting(tempdir)).to_vec();
+    let mut permissions = config(filesystem_setting(tempdir, hidden_reads)).to_vec();
     permissions.extend(network_settings(network, allow_hosts));
     permissions
 }
 
 pub(crate) fn sandbox_command(
     tempdir: &Path,
+    hidden_reads: &[Hidden],
     cwd: &Path,
     network: NetworkMode,
     allow_hosts: &[HostRule],
 ) -> Vec<String> {
     let mut command = ["sandbox", "-P", PROFILE].map(str::to_string).to_vec();
-    command.extend(sandbox_permissions(tempdir, network, allow_hosts));
+    command.extend(sandbox_permissions(
+        tempdir,
+        hidden_reads,
+        network,
+        allow_hosts,
+    ));
     command.push("-C".to_string());
     command.push(cwd.to_string_lossy().into_owned());
     command.push("--".to_string());
@@ -451,9 +496,18 @@ fn config(value: String) -> [String; 2] {
     ["-c".to_string(), value]
 }
 
-fn filesystem_setting(tempdir: &Path) -> String {
+fn filesystem_setting(tempdir: &Path, hidden: &[Hidden]) -> String {
+    let denied: String = hidden
+        .iter()
+        .map(|entry| {
+            format!(
+                ", {}={DENIED_ACCESS}",
+                toml_string(&entry.path.to_string_lossy())
+            )
+        })
+        .collect();
     format!(
-        "permissions.{PROFILE}.filesystem={{\":root\"=\"read\", \":workspace_roots\"={{\".\"=\"write\"}}, {}=\"write\"}}",
+        "permissions.{PROFILE}.filesystem={{\":root\"=\"read\", \":workspace_roots\"={{\".\"=\"write\"}}, {}=\"write\"{denied}}}",
         toml_string(&tempdir.to_string_lossy())
     )
 }
@@ -1015,8 +1069,8 @@ mod tests {
             (NetworkMode::Full, &[][..]),
             (NetworkMode::Custom, &allow_hosts[..]),
         ] {
-            let command = sandbox_command(tempdir, cwd, mode, rules);
-            let permissions = super::sandbox_permissions(tempdir, mode, rules);
+            let command = sandbox_command(tempdir, &[], cwd, mode, rules);
+            let permissions = super::sandbox_permissions(tempdir, &[], mode, rules);
             assert_eq!(command[..3], strings(&["sandbox", "-P", "agentrun"]));
             assert_eq!(command[3..command.len() - 3], permissions);
             assert_eq!(
@@ -1030,6 +1084,114 @@ mod tests {
                 mode == NetworkMode::Custom
             );
         }
+    }
+
+    #[test]
+    fn sandboxed_launch_denies_reading_the_existing_denied_paths() {
+        let setup = Setup::new();
+        let secrets = setup.root.path().join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        std::fs::write(setup.root.path().join("netrc"), "x").unwrap();
+        std::os::unix::fs::symlink(
+            setup.root.path().join("netrc"),
+            setup.root.path().join("netrc-link"),
+        )
+        .unwrap();
+        let invocation = Invocation {
+            denied_reads: vec![
+                secrets.clone(),
+                setup.root.path().join("netrc-link"),
+                setup.root.path().join("missing"),
+            ],
+            ..setup.invocation(true, &[])
+        };
+        let launch = Codex::new()
+            .launch(Path::new("/opt/bin/codex"), &invocation)
+            .unwrap();
+        let real = std::fs::canonicalize(setup.root.path()).unwrap();
+        let filesystem = launch
+            .argv
+            .iter()
+            .find(|arg| arg.starts_with("permissions.agentrun.filesystem="))
+            .unwrap();
+        assert!(
+            filesystem.ends_with(&format!(
+                "=\"write\", \"{0}/secrets\"=\"deny\", \"{0}/netrc\"=\"deny\"}}",
+                real.display()
+            )),
+            "{filesystem}"
+        );
+        let unsandboxed = Invocation {
+            denied_reads: vec![secrets],
+            ..setup.invocation(false, &[])
+        };
+        let _ = std::fs::remove_dir_all(home_path(&setup.tempdir()));
+        let launch = Codex::new()
+            .launch(Path::new("/opt/bin/codex"), &unsandboxed)
+            .unwrap();
+        assert!(!launch.argv.iter().any(|arg| arg.contains("deny")));
+    }
+
+    #[test]
+    fn denying_the_login_file_or_its_directory_also_denies_the_private_home_link() {
+        let setup = Setup::new();
+        let login = setup.login();
+        for denied in [login.clone(), login.parent().unwrap().to_path_buf()] {
+            let invocation = Invocation {
+                denied_reads: vec![denied.clone()],
+                ..setup.invocation(true, &[])
+            };
+            let launch = Codex::new()
+                .launch(Path::new("/opt/bin/codex"), &invocation)
+                .unwrap();
+            let denied = std::fs::canonicalize(&denied).unwrap();
+            let link = home_path(&std::fs::canonicalize(setup.tempdir()).unwrap()).join(LOGIN_FILE);
+            let filesystem = launch
+                .argv
+                .iter()
+                .find(|arg| arg.starts_with("permissions.agentrun.filesystem="))
+                .unwrap();
+            assert!(
+                filesystem.ends_with(&format!(
+                    "=\"write\", \"{}\"=\"deny\", \"{}\"=\"deny\"}}",
+                    denied.display(),
+                    link.display()
+                )),
+                "{filesystem}"
+            );
+            assert_eq!(std::fs::read_link(&link).unwrap(), login);
+            std::fs::remove_dir_all(link.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn check_args_rejects_denied_paths_with_glob_characters() {
+        let setup = Setup::new();
+        let root = tempfile::tempdir().unwrap();
+        let bracketed = root.path().join("w[1]");
+        std::fs::create_dir(&bracketed).unwrap();
+        std::os::unix::fs::symlink(&bracketed, root.path().join("plain")).unwrap();
+        let plain_link = root.path().join("plain").to_string_lossy().into_owned();
+        let resolved = format!(
+            " (resolves to {})",
+            std::fs::canonicalize(&bracketed).unwrap().display()
+        );
+        for (path, suffix) in [
+            ("/data/a*b", ""),
+            ("/data/a?b", ""),
+            ("/data/{a}", ""),
+            (plain_link.as_str(), resolved.as_str()),
+        ] {
+            let invocation = setup.invocation(false, &["--deny-read", path]);
+            assert_eq!(
+                Codex::new().check_args(&invocation.args),
+                Err(format!(
+                    "--deny-read {path}{suffix}: codex cannot deny a path that contains * ? [ ] {{ }}"
+                ))
+            );
+        }
+        let invocation = setup.invocation(false, &["--deny-read", "/data/a-b"]);
+        assert_eq!(Codex::new().check_args(&invocation.args), Ok(()));
     }
 
     #[test]
