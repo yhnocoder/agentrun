@@ -54,6 +54,17 @@ pub(super) fn parse_host_port(authority: &str, default_port: Option<u16>) -> Opt
     })
 }
 
+pub(crate) fn url_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    parse_host_port(host_port, Some(0))
+        .map(|target| target.host)
+        .filter(|host| !host.contains(':'))
+}
+
 pub(super) fn normalize_host(host: &str) -> Option<String> {
     let host = host.trim_end_matches('.').to_lowercase();
     if host.is_empty() || host.len() > HOST_NAME_LIMIT {
@@ -89,6 +100,24 @@ pub(super) fn authority_text(target: &Target) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_host_cases() {
+        let cases = [
+            ("https://api.deepseek.com", Some("api.deepseek.com")),
+            ("https://API.DeepSeek.com/v1?x=1", Some("api.deepseek.com")),
+            ("http://127.0.0.1:8080/", Some("127.0.0.1")),
+            ("https://a:b@host.example#f", Some("host.example")),
+            ("https://[::1]:443/", None),
+            ("http://host.example:abc/", None),
+            ("https://host.example.:8443", Some("host.example")),
+            ("https:///path", None),
+            ("api.deepseek.com", None),
+        ];
+        for (url, host) in cases {
+            assert_eq!(url_host(url).as_deref(), host, "{url}");
+        }
+    }
 
     #[test]
     fn private_ranges_each_segment() {

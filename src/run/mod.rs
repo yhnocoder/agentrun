@@ -29,7 +29,7 @@ use crate::transcript::{self, Saved};
 use execute::execute;
 use signal::SharedWriter;
 
-pub(crate) use execute::TEMP_ENV_VARS;
+pub(crate) use execute::temp_environment;
 pub use execute::{Exit, conclude, stderr_tail, translate_line};
 pub use signal::Signals;
 
