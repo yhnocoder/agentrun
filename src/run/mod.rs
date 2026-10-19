@@ -334,6 +334,9 @@ fn prepare(
     if args.debug {
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
+    if let Some(dir) = args.session_dir.as_deref().filter(|_| !args.dry_run) {
+        transcript::create_store(&transcript::store(dir, runtime))?;
+    }
     let invocation = Invocation {
         format,
         sandbox,
@@ -379,9 +382,6 @@ fn resolve_session_dir(
         .as_deref()
         .map(|id| transcript::locate(&store, runtime, id))
         .transpose()?;
-    if !args.dry_run {
-        transcript::create_store(&store)?;
-    }
     args.session_dir = Some(dir);
     Ok((args, resume))
 }

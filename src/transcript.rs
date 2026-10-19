@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::Runtime;
 
 const FILE_SUFFIX: &str = ".jsonl";
+const UUID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Saved {
@@ -38,11 +39,7 @@ pub fn create_store(store: &Path) -> Result<(), String> {
 }
 
 pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
-    let valid = !id.is_empty()
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !valid {
+    if !is_session_id(id) {
         return Err(format!("--resume {id:?} is not a session id"));
     }
     find_file(store, id)
@@ -56,6 +53,14 @@ pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String>
                 runtime.name(),
                 store.display()
             )
+        })
+}
+
+fn is_session_id(id: &str) -> bool {
+    let groups: Vec<&str> = id.split('-').collect();
+    groups.len() == UUID_GROUPS.len()
+        && groups.iter().zip(UUID_GROUPS).all(|(group, length)| {
+            group.len() == length && group.chars().all(|c| c.is_ascii_hexdigit())
         })
 }
 
@@ -77,19 +82,34 @@ pub fn find_file(dir: &Path, id: &str) -> Option<PathBuf> {
 }
 
 pub fn find_file_within(dir: &Path, id: &str) -> Option<PathBuf> {
-    if let Some(file) = find_file(dir, id) {
-        return Some(file);
+    let mut found = Vec::new();
+    collect_files(dir, id, &mut found);
+    found.into_iter().max_by_key(|file| {
+        std::fs::metadata(file)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    })
+}
+
+fn collect_files(dir: &Path, id: &str, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => collect_files(&entry.path(), id, found),
+            Ok(kind)
+                if kind.is_file()
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| names(name, id)) =>
+            {
+                found.push(entry.path())
+            }
+            _ => {}
+        }
     }
-    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| entry.path())
-        .collect();
-    subdirs.sort();
-    subdirs
-        .iter()
-        .find_map(|subdir| find_file_within(subdir, id))
 }
 
 fn names(name: &str, id: &str) -> bool {
@@ -205,13 +225,25 @@ mod tests {
                 file
             })
         );
+        let other = "0199a1b2-c3d4-7e5f-8a9b-000000000000";
         assert_eq!(
-            locate(root.path(), Runtime::Pi, "0199"),
+            locate(root.path(), Runtime::Pi, other),
             Err(format!(
-                "no saved pi session 0199 in {}",
+                "no saved pi session {other} in {}",
                 root.path().display()
             ))
         );
+        for partial in [
+            "0c1d2e3f4a5b",
+            "8a9b-0c1d2e3f4a5b",
+            "0199a1b2",
+            "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5g",
+        ] {
+            assert_eq!(
+                locate(root.path(), Runtime::Codex, partial),
+                Err(format!("--resume {partial:?} is not a session id"))
+            );
+        }
         assert_eq!(
             locate(root.path(), Runtime::Pi, "../x"),
             Err("--resume \"../x\" is not a session id".to_string())
@@ -230,8 +262,18 @@ mod tests {
             .path()
             .join(format!("sessions/2026/10/19/rollout-1-{ID}.jsonl"));
         touch(&file);
-        assert_eq!(find_file_within(root.path(), ID), Some(file));
+        assert_eq!(find_file_within(root.path(), ID), Some(file.clone()));
         assert_eq!(find_file(root.path(), ID), None);
+        let older = root.path().join(format!("rollout-0-{ID}.jsonl"));
+        touch(&older);
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&older)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        assert_eq!(find_file_within(root.path(), ID), Some(file));
     }
 
     #[test]

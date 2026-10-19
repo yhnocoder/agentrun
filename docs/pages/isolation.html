@@ -217,10 +217,10 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#codex-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
   <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>
-<p>三个运行时默认都不保存会话。调用方给出 <code>--session-dir</code> 时，会话记录只保存在那个目录里，<code>--resume</code> 也只从那里读，不读用户自己的会话记录，见<a href="run.html#sessions">保存与继续会话</a>。</p>
+<p>三个运行时默认都不保存会话。调用方给出 <code>--session-dir</code> 时，运行结束后会话记录移到那个目录，<code>--resume</code> 只从那里读，不读用户自己的会话记录。运行期间 codex 的记录在私有目录里，pi 的记录在会话临时目录里；claude-code 的新会话写在用户配置目录的 <code>projects/</code> 里，结束后才移走，带来的风险见<a href="#residual">剩余风险</a>，做法见<a href="run.html#sessions">保存与继续会话</a>。</p>
 <p>账号由登录方式决定。会话环境按运行时删除会改变登录方式的变量，容器里的凭据由环境变量写入登录文件，见<a href="session.html">会话环境</a>。</p>
 
-<h2>剩余风险</h2>
+<h2 id="residual">剩余风险</h2>
 <table>
   <thead>
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
@@ -233,8 +233,9 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </table>
 <p>保存会话（<code>--session-dir</code>）的剩余风险：</p>
 <ul>
-  <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。只有给出 <code>--session-dir</code> 时这样做，不给时仍加 <code>--no-session-persistence</code>，不写记录。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行同样在结束时移走（云端实测 <code>interrupted</code> 与 <code>timeout</code>）。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在用户的配置目录里。</li>
+  <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。只有给出 <code>--session-dir</code> 时这样做，不给时仍加 <code>--no-session-persistence</code>，不写记录。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行同样在结束时移走（云端实测 <code>interrupted</code> 与 <code>timeout</code>）。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在用户的配置目录里。运行期间用户在同一个工作目录里运行 <code>claude --continue</code> 可能接上这次运行的会话，用户写进去的内容在运行结束时随记录一起被移到 <code>--session-dir</code>。</li>
   <li>pi 的记录在运行期间放在会话临时目录里，沙箱里的 agent 能改写这次会话的记录，改写后的内容随记录一起保存，下次继续时进入模型上下文。其他会话的记录 agent 写不到。</li>
+  <li><code>--session-dir</code> 放在工作目录或会话临时目录之内时，沙箱里的 agent 能改写已保存的全部会话，改写的内容在下次继续时进入模型上下文。agentrun 不检查这一点，由调用方把目录放在两者之外。</li>
 </ul>
 <p>过滤代理本身的剩余风险：</p>
 <ul>

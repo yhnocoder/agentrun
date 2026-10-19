@@ -119,18 +119,18 @@ agentrun variables: (none)</div>
 <p><code>run::run</code> 解析命令行后，把运行时子命令交给运行框架，把 <code>doctor</code> 与 <code>doctor-connect</code> 分别交给 <code>doctor::run</code> 与 <code>doctor::connect</code>。运行时子命令被拒绝时的 <code>end</code> 只由 <code>run::run</code> 输出。</p>
 
 <h2 id="sessions">保存与继续会话</h2>
-<p>给出 <code>--session-dir DIR</code> 时，agentrun 在运行时退出后把这次运行的会话记录移到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end.session_id</code> 是会话 id。下一次运行给出同一个 <code>--session-dir</code> 与 <code>--resume &lt;会话 id&gt;</code>，运行时接着这段会话继续：会话 id 不变，新内容追加到同一份记录。不给 <code>--session-dir</code> 时三个运行时都不保存会话。agentrun 不读也不写用户自己的会话记录，见<a href="isolation.html#config">配置与账号</a>。</p>
-<div class="term"><span class="prompt">$</span> agentrun pi --session-dir sessions --format text --prompt "Remember the word PELICAN. Reply only OK."
+<p>给出 <code>--session-dir DIR</code> 时，agentrun 在运行时退出后把这次运行的会话记录移到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end.session_id</code> 是会话 id。下一次运行给出同一个 <code>--session-dir</code> 与 <code>--resume &lt;会话 id&gt;</code>，运行时接着这段会话继续：会话 id 不变，新内容追加到同一份记录。不给 <code>--session-dir</code> 时三个运行时都不保存会话。<code>--resume</code> 只从 <code>DIR</code> 读，不读用户自己的会话记录；codex 与 pi 运行期间把记录写在私有目录或会话临时目录里，claude-code 的新会话运行期间写在用户的配置目录里，见下表与<a href="isolation.html#config">配置与账号</a>。</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --session-dir ~/agent-sessions --format text --prompt "Remember the word PELICAN. Reply only OK."
 [main] prompt Remember the word PELICAN. Reply only OK.
 [main] text OK
-[end] finished 1.9s  in 2.2k  out 2  cached 23%  session 01a1522e-e793-7208-9d60-1a64ea5ed414
-<span class="prompt">$</span> agentrun pi --session-dir sessions --resume 01a1522e-e793-7208-9d60-1a64ea5ed414 --format text --prompt "What word did I ask you to remember? One word."
+[end] finished 1.7s  in 2.2k  out 2  cached 93%  session 01a1523d-3fc3-71a7-a226-51f61e18573f
+<span class="prompt">$</span> agentrun pi --session-dir ~/agent-sessions --resume 01a1523d-3fc3-71a7-a226-51f61e18573f --format text --prompt "What word did I ask you to remember? One word."
 [main] prompt What word did I ask you to remember? One word.
 [main] text PELICAN
-[end] finished 1.9s  in 2.2k  out 5  cached 92%  session 01a1522e-e793-7208-9d60-1a64ea5ed414</div>
+[end] finished 2.0s  in 2.2k  out 5  cached 92%  session 01a1523d-3fc3-71a7-a226-51f61e18573f</div>
 <ul>
-  <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。<code>--dry-run</code> 不创建目录。</li>
-  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 只能由字母、数字、<code>-</code> 与 <code>_</code> 组成。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
+  <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。目录在所有启动前检查通过之后才创建，<code>--dry-run</code> 与被拒绝的运行不创建目录。<code>DIR</code> 要放在工作目录与会话临时目录之外：沙箱里的 agent 能写这两处，<code>DIR</code> 在里面时 agent 能改写已保存的会话。</li>
+  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 必须是完整的会话 id，三个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
   <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。源与目标不在同一个文件系统时先复制再删除源。</li>
   <li>继续时 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）。<code>--model</code> 等选项每次照常传给运行时。</li>
   <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex 与 pi 后结束的那次覆盖先结束的那次。</li>
@@ -140,14 +140,14 @@ agentrun variables: (none)</div>
     <tr><th>运行时</th><th>新会话</th><th>继续会话</th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>不加 <code>--no-session-persistence</code>，仍传新生成的 <code>--session-id</code>。claude-code 把记录写在 <code>&lt;配置目录&gt;/projects/&lt;由 cwd 转换的目录名&gt;/&lt;id&gt;.jsonl</code>，subagent 的记录在同级的 <code>&lt;id&gt;/</code>；配置目录是会话环境里的 <code>CLAUDE_CONFIG_DIR</code>，未设时为 <code>~/.claude</code>。运行结束后两者移到 <code>DIR/claude-code/</code>，<code>&lt;由 cwd 转换的目录名&gt;</code> 变空时删除</td><td>用 <code>--resume &lt;DIR/claude-code/&lt;id&gt;.jsonl&gt;</code> 代替 <code>--session-id</code>。claude-code 直接在这个文件末尾追加，subagent 的记录写在它旁边的 <code>&lt;id&gt;/</code>，不写配置目录（2.1.288 与 2.1.303 实测）</td></tr>
-    <tr><td>codex</td><td>记录在私有目录里的 <code>sessions/YYYY/MM/DD/rollout-&lt;时间&gt;-&lt;id&gt;.jsonl</code>，id 取 <code>thread.started</code> 的 <code>thread_id</code>。运行结束后移到 <code>DIR/codex/</code>。subagent 的记录不保存</td><td>启动前把保存的文件复制进私有目录的 <code>sessions/</code>，argv 在最后的 <code>-</code> 之前加 <code>resume &lt;id&gt;</code>。codex 在 <code>sessions/</code> 下按 id 找到文件并在末尾追加，运行结束后移回 <code>DIR/codex/</code> 覆盖原文件（0.159.2 与 0.163.0 用模拟的模型服务实测）</td></tr>
+    <tr><td>claude-code</td><td>不加 <code>--no-session-persistence</code>，仍传新生成的 <code>--session-id</code>。claude-code 把记录写在 <code>&lt;配置目录&gt;/projects/&lt;由 cwd 转换的目录名&gt;/&lt;id&gt;.jsonl</code>，subagent 的记录在同级的 <code>&lt;id&gt;/</code>；配置目录是会话环境里的 <code>CLAUDE_CONFIG_DIR</code>，未设时为 <code>~/.claude</code>。运行结束后 agentrun 在 <code>projects/</code> 的各个子目录里按文件名找 <code>&lt;id&gt;.jsonl</code>（只读目录列表，不读文件内容），把它与 <code>&lt;id&gt;/</code> 移到 <code>DIR/claude-code/</code>，<code>&lt;由 cwd 转换的目录名&gt;</code> 变空时删除。claude-code 在这个目录里还写了别的内容时（例如自动记忆的 <code>memory/</code>）目录保留。会话环境里既没有 <code>CLAUDE_CONFIG_DIR</code> 也没有 <code>HOME</code> 时仍加 <code>--no-session-persistence</code>，不保存，<code>session_id</code> 为 null</td><td>用 <code>--resume &lt;DIR/claude-code/&lt;id&gt;.jsonl&gt;</code> 代替 <code>--session-id</code>。claude-code 直接在这个文件末尾追加，subagent 的记录写在它旁边的 <code>&lt;id&gt;/</code>，不写配置目录（2.1.288 与 2.1.303 实测）</td></tr>
+    <tr><td>codex</td><td>记录在私有目录里的 <code>sessions/YYYY/MM/DD/rollout-&lt;时间&gt;-&lt;id&gt;.jsonl</code>，id 取 <code>thread.started</code> 的 <code>thread_id</code>。运行结束后移到 <code>DIR/codex/</code>。subagent 的记录不保存</td><td>启动前把保存的文件复制进私有目录的 <code>sessions/</code>，argv 在最后的 <code>-</code> 之前加 <code>resume &lt;id&gt;</code>。codex 在 <code>sessions/</code> 下按 id 找到文件并在末尾追加。运行结束后 agentrun 在 <code>sessions/</code> 下取文件名含这个 id、修改时间最新的文件，移回 <code>DIR/codex/</code> 覆盖原文件（0.159.2 与 0.163.0 用模拟的模型服务实测）</td></tr>
     <tr><td>pi</td><td><code>--no-session</code> 换成 <code>--session-dir &lt;会话临时目录&gt;/pi-session</code>，id 取输出里 <code>session</code> 行的 <code>id</code>。运行结束后把记录移到 <code>DIR/pi/</code></td><td>启动前把保存的文件复制进 <code>&lt;会话临时目录&gt;/pi-session/</code>，传 <code>--session &lt;复制后的路径&gt;</code>，运行结束后移回 <code>DIR/pi/</code> 覆盖原文件。不用 pi 的 <code>--session-id</code>：它只在与第一次相同的 cwd 下找得到会话，换一个 cwd 会新建一个 id 相同的会话（1.2.0 实测）</td></tr>
   </tbody>
 </table>
 <ul>
   <li>claude-code 的新会话写在用户的配置目录里，运行结束后才移走。理由：claude-code 不能把新会话直接写到别的位置（<code>--resume</code> 指向空文件、不存在的文件或只有元数据行没有对话的文件时都报 <code>No conversation found</code>，2.1.303 实测）；改 <code>CLAUDE_CONFIG_DIR</code> 会改变 claude-code 读登录信息的位置：Linux 上登录文件在配置目录里，macOS 上钥匙串里的登录条目名随配置目录改变（未实测）。代价是运行期间这份记录出现在用户自己的 <code>claude --resume</code> 列表里，agentrun 被 SIGKILL 时它留在那里。</li>
-  <li>pi 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。理由：pi 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
+  <li>pi 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。前提是 <code>DIR</code> 在工作目录与会话临时目录之外。理由：pi 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
 </ul>
 
 <h2 id="doctor_check">doctor 检查</h2>

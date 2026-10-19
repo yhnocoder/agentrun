@@ -46,7 +46,7 @@ pub struct ClaudeCode {
     saving: Saving,
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 enum Saving {
     #[default]
     Off,
@@ -358,7 +358,7 @@ impl Adapter for ClaudeCode {
             String::new(),
             "--strict-mcp-config".to_string(),
         ];
-        if invocation.args.session_dir.is_none() {
+        if self.saving == Saving::Off {
             argv.push("--no-session-persistence".to_string());
         }
         match &invocation.resume {
@@ -1222,10 +1222,22 @@ mod tests {
 
     #[test]
     fn session_dir_keeps_the_session_and_resume_passes_the_saved_file() {
-        let new = launch(false, &["--session-dir", "/saved"]);
+        let root = tempfile::tempdir().unwrap();
+        let (adapter, configured) = with_config_dir(root.path(), &["--session-dir", "/saved"]);
+        let new = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &configured)
+            .unwrap();
+        assert!(adapter.saving != Saving::Off);
         assert!(!new.argv.contains(&"--no-session-persistence".to_string()));
         assert!(new.argv.contains(&"--session-id".to_string()));
         assert!(!new.argv.contains(&"--resume".to_string()));
+
+        let without_config = launch(false, &["--session-dir", "/saved"]);
+        assert!(
+            without_config
+                .argv
+                .contains(&"--no-session-persistence".to_string())
+        );
 
         let file = PathBuf::from(format!("/saved/claude-code/{SAVED_ID}.jsonl"));
         let mut invocation = invocation(false, &["--session-dir", "/saved", "--resume", SAVED_ID]);

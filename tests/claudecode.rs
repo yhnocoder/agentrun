@@ -319,7 +319,7 @@ fn session_dir_saves_the_session_and_resume_continues_it() {
             "--session-dir",
             env.root().join("sessions").to_str().unwrap(),
             "--resume",
-            "0199-missing",
+            "0199a1b2-c3d4-4e5f-8a9b-000000000000",
             "--prompt",
             "third",
         ],
@@ -331,7 +331,7 @@ fn session_dir_saves_the_session_and_resume_continues_it() {
     assert_eq!(
         end["detail"],
         format!(
-            "no saved claude-code session 0199-missing in {}",
+            "no saved claude-code session 0199a1b2-c3d4-4e5f-8a9b-000000000000 in {}",
             saved.display()
         )
     );
