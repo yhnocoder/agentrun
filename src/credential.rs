@@ -1,19 +1,15 @@
-use std::fs::{DirBuilder, File, OpenOptions};
+use std::fs::{DirBuilder, File};
 use std::io::{ErrorKind, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
 use crate::cli::Runtime;
 use crate::runtime::{codex, pi};
 use crate::session::{CODEX_AUTH_VARIABLE, PI_AUTH_VARIABLE, Session, home_placeholder};
-
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialStatus {
@@ -132,37 +128,14 @@ fn lock_exclusively(dir: &Path) -> std::io::Result<File> {
 fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let (temp, mut file) = loop {
-        let temp = dir.join(format!(".{name}.agentrun-{}", temp_suffix()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)
-        {
-            Ok(file) => break (temp, file),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    };
-    let written = file
-        .set_permissions(std::fs::Permissions::from_mode(0o600))
-        .and_then(|()| file.write_all(contents))
-        .and_then(|()| file.sync_all())
-        .and_then(|()| std::fs::rename(&temp, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    written
-}
-
-fn temp_suffix() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    let count = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{nanos:x}-{count}", std::process::id())
+    let mut temp = tempfile::Builder::new()
+        .prefix(&format!(".{name}.agentrun-"))
+        .tempfile_in(dir)?;
+    temp.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    temp.write_all(contents)?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map(drop).map_err(|error| error.error)
 }
 
 #[cfg(test)]
@@ -199,6 +172,19 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn failed_atomic_write_leaves_no_temporary_file() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("auth.json");
+        std::fs::create_dir(&target).unwrap();
+        assert!(write_atomically(&target, b"value").is_err());
+        let names: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [OsString::from("auth.json")]);
     }
 
     #[test]

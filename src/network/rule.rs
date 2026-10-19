@@ -2,7 +2,7 @@ use super::address::valid_host_name;
 use crate::cli::NetworkMode;
 
 const DEFAULT_PORTS: [u16; 2] = [443, 80];
-const SERVICE_PORT: u16 = 443;
+pub(crate) const SERVICE_PORT: u16 = 443;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostRule {
