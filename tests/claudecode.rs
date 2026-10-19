@@ -2,6 +2,7 @@
 mod support;
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
 use agentrun::runtime::claudecode::ClaudeCode;
@@ -320,7 +321,7 @@ fn session_run(env: &Env, extra: &[&str], prompt: &str) -> Value {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let events = support::events(&output);
     assert_eq!(events.last().unwrap()["status"], "finished");
-    json!({"argv": events[0]["argv"], "end": events.last().unwrap()})
+    json!({"argv": events[0]["argv"], "deny_read": events[0]["deny_read"], "end": events.last().unwrap()})
 }
 
 #[test]
@@ -375,6 +376,48 @@ fn session_dir_saves_the_session_and_resume_continues_it() {
             "no saved claude-code session 0199a1b2-c3d4-4e5f-8a9b-000000000000 in {}",
             saved.display()
         )
+    );
+}
+
+#[test]
+fn resume_reads_the_session_dir_with_the_default_read_restrictions() {
+    let env = Env::with("claude", SESSION_CLAUDE);
+    let projects = env.home().join(".claude/projects");
+    let sessions = env.root().join("sessions");
+    let first = session_run(&env, &[], "first");
+    let id = first["end"]["session_id"].as_str().unwrap().to_string();
+    let second = session_run(&env, &["--resume", &id], "second");
+    for run in [&first, &second] {
+        let denied: Vec<PathBuf> = run["deny_read"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|path| PathBuf::from(path.as_str().unwrap()))
+            .collect();
+        assert!(denied.contains(&projects), "{denied:?}");
+        assert!(
+            denied
+                .iter()
+                .all(|path| !sessions.starts_with(path) && !path.starts_with(&sessions)),
+            "{denied:?}"
+        );
+        let settings: Value =
+            serde_json::from_str(&option_value(&run["argv"], "--settings")).unwrap();
+        assert!(
+            settings["permissions"]["deny"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(format!("Read(/{}/**)", projects.display()))),
+            "{settings}"
+        );
+    }
+    assert!(option_value(&second["argv"], "--resume").starts_with(sessions.to_str().unwrap()));
+    assert_eq!(
+        std::fs::read_to_string(sessions.join(format!("claude-code/{id}.jsonl")))
+            .unwrap()
+            .lines()
+            .count(),
+        2
     );
 }
 
