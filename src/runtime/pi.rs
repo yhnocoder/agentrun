@@ -9,7 +9,7 @@ use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::image::write_copies;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
-use crate::output::{Record, SandboxKind, TokenCounts};
+use crate::output::{Record, TokenCounts};
 use crate::sandbox::{self, PiState};
 use crate::session::Session;
 use crate::transcript::{Transcript, copy_into, create_store, find_file};
@@ -236,18 +236,13 @@ impl Adapter for Pi {
             self.prompt_with_images = Some(invocation.prompt.trim().to_string());
         }
         let mut env = Vec::new();
-        let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
             let service = model_service(invocation.args.model.as_deref(), user_dir.as_deref());
-            match service.host {
-                Some(host) => service_hosts.push(host.to_string()),
-                None if invocation.args.network == NetworkMode::None => {
-                    return Err(format!(
-                        "cannot tell which host pi's model service uses (provider: {}). Use --network custom --allow-host <host of the model service>",
-                        service.provider.as_deref().unwrap_or("unknown")
-                    ));
-                }
-                None => {}
+            if service.host.is_none() && invocation.args.network == NetworkMode::None {
+                return Err(format!(
+                    "cannot tell which host pi's model service uses (provider: {}). Use --network custom --allow-host <host of the model service>",
+                    service.provider.as_deref().unwrap_or("unknown")
+                ));
             }
             env.extend(proxy_environment(&proxy.port_text()));
         }
@@ -265,8 +260,6 @@ impl Adapter for Pi {
             argv,
             stdin: invocation.prompt.clone().into_bytes(),
             env,
-            signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
-            service_hosts,
             wrapped: wrapped.kind,
             private_dirs: Vec::new(),
         })
@@ -522,6 +515,8 @@ mod tests {
     use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
 
+    use crate::output::SandboxKind;
+
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -644,7 +639,6 @@ mod tests {
         let launch = launch(&setup, &[], false, &[]);
         assert_eq!(launch.argv, fixed("/opt/bin/pi"));
         assert_eq!(launch.stdin, b"hi");
-        assert!(!launch.signal_wrapped_child);
         assert_eq!(launch.env, vec![]);
     }
 
@@ -798,7 +792,6 @@ mod tests {
         setup.write_user_file("settings.json", "{}");
         let home = setup.with_home();
         let launch = launch(&setup, &pairs(&home), true, &[]);
-        assert!(launch.signal_wrapped_child);
         let state = setup.real_user_state();
         let text = |path: &Path| path.to_string_lossy().into_owned();
         assert_eq!(
@@ -1066,7 +1059,6 @@ mod tests {
     fn proxied_launch_forwards_through_socat_and_sets_proxy_variables() {
         let setup = Setup::new();
         let launch = proxied(&setup, Some(41234), &["--model", "deepseek/deepseek-flash"]).unwrap();
-        assert_eq!(launch.service_hosts, ["api.deepseek.com"]);
         let separator = launch.argv.iter().position(|arg| arg == "--").unwrap();
         assert_eq!(
             launch.argv[separator + 1..separator + 7],
@@ -1100,22 +1092,6 @@ mod tests {
     }
 
     #[test]
-    fn proxied_launch_takes_the_provider_from_user_settings() {
-        let setup = Setup::new();
-        setup.write_user_file("settings.json", "{\"defaultProvider\":\"openai\"}");
-        let launch = proxied(&setup, Some(1), &[]).unwrap();
-        assert_eq!(launch.service_hosts, ["api.openai.com"]);
-        for (provider, host) in [
-            ("anthropic", "api.anthropic.com"),
-            ("google", "generativelanguage.googleapis.com"),
-            ("openrouter", "openrouter.ai"),
-        ] {
-            let launch = proxied(&setup, Some(1), &["--model", &format!("{provider}/m")]).unwrap();
-            assert_eq!(launch.service_hosts, [host]);
-        }
-    }
-
-    #[test]
     fn proxied_launch_without_a_known_provider_depends_on_the_network_mode() {
         let setup = Setup::new();
         let unknown = "cannot tell which host pi's model service uses (provider: unknown). Use --network custom --allow-host <host of the model service>";
@@ -1128,27 +1104,17 @@ mod tests {
             proxied(&setup, Some(1), &["--model", "acme/robot"]).unwrap_err(),
             "cannot tell which host pi's model service uses (provider: acme). Use --network custom --allow-host <host of the model service>"
         );
-        let custom = proxied(
-            &setup,
-            Some(1),
-            &[
-                "--model",
-                "acme/robot",
-                "--network",
-                "custom",
-                "--allow-host",
-                "robot.example",
-            ],
-        )
-        .unwrap();
-        assert!(custom.service_hosts.is_empty());
-        let full = proxied(
-            &setup,
-            Some(1),
-            &["--model", "acme/robot", "--network", "full"],
-        )
-        .unwrap();
-        assert!(full.service_hosts.is_empty());
+        let custom = [
+            "--model",
+            "acme/robot",
+            "--network",
+            "custom",
+            "--allow-host",
+            "robot.example",
+        ];
+        assert!(proxied(&setup, Some(1), &custom).is_ok());
+        let full = ["--model", "acme/robot", "--network", "full"];
+        assert!(proxied(&setup, Some(1), &full).is_ok());
     }
 
     #[test]
@@ -1195,8 +1161,6 @@ mod tests {
         expected.extend(fixed("/opt/bin/pi"));
         expected.extend(["--model", "deepseek/deepseek-flash"].map(str::to_string));
         assert_eq!(launch.argv, expected);
-        assert!(!launch.signal_wrapped_child);
-        assert_eq!(launch.service_hosts, ["api.deepseek.com"]);
         assert!(launch.env.contains(&(
             OsString::from("HTTPS_PROXY"),
             OsString::from("http://127.0.0.1:41234")

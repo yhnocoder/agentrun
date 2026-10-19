@@ -9,8 +9,6 @@ use std::ffi::OsString;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use crate::cli::{NetworkMode, Runtime};
-
 pub use rule::HostRule;
 
 pub(crate) use address::in_cidr;
@@ -30,15 +28,6 @@ const PROXY_VARIABLES: [&str; 6] = [
 ];
 const NO_PROXY_VARIABLES: [&str; 2] = ["NO_PROXY", "no_proxy"];
 const LISTEN_ADDRESS: Ipv4Addr = Ipv4Addr::LOCALHOST;
-
-pub(crate) fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> bool {
-    sandboxed
-        && match runtime {
-            Runtime::Pi => true,
-            Runtime::ClaudeCode => mode != NetworkMode::None,
-            Runtime::Codex => mode == NetworkMode::Custom,
-        }
-}
 
 pub fn proxy_environment(port: &str) -> Vec<(OsString, OsString)> {
     let address = format!("http://{LISTEN_ADDRESS}:{port}");

@@ -10,23 +10,8 @@ use tempfile::TempDir;
 
 use super::upstream::{Upstream, parse_no_proxy};
 use super::*;
+use crate::cli::NetworkMode;
 use crate::output::{Network, NetworkReason};
-
-#[test]
-fn proxy_runs_only_with_a_sandbox_and_depends_on_the_runtime() {
-    for mode in [NetworkMode::None, NetworkMode::Full, NetworkMode::Custom] {
-        assert!(proxy_needed(Runtime::Pi, mode, true), "{mode:?}");
-        assert!(!proxy_needed(Runtime::Pi, mode, false), "{mode:?}");
-        assert!(!proxy_needed(Runtime::ClaudeCode, mode, false), "{mode:?}");
-        assert!(!proxy_needed(Runtime::Codex, mode, false), "{mode:?}");
-    }
-    assert!(!proxy_needed(Runtime::ClaudeCode, NetworkMode::None, true));
-    assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Full, true));
-    assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Custom, true));
-    assert!(!proxy_needed(Runtime::Codex, NetworkMode::None, true));
-    assert!(!proxy_needed(Runtime::Codex, NetworkMode::Full, true));
-    assert!(proxy_needed(Runtime::Codex, NetworkMode::Custom, true));
-}
 
 #[test]
 fn proxy_environment_sets_both_cases_and_clears_no_proxy() {

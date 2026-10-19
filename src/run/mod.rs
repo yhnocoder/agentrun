@@ -209,7 +209,7 @@ fn set_up(
     guards: &mut Guards,
 ) -> Result<Prepared, String> {
     let mut ready = prepare(caller, runtime, args, format, adapters)?;
-    let proxy_needed = network::proxy_needed(
+    let proxy_needed = runtime::proxy_needed(
         ready.invocation.runtime,
         ready.invocation.args.network,
         ready.invocation.sandbox.runs(),

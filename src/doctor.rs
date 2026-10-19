@@ -9,13 +9,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::credential::write_session_credential;
 use crate::network::{
-    self, FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, check_usage, in_cidr,
+    FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, check_usage, in_cidr,
     proxy_environment,
 };
 use crate::output::{Network, NetworkReason, Signal};
@@ -41,7 +42,6 @@ const TEMPDIR_PREFIX: &str = "agentrun-doctor-";
 const PROMPT: &str = "agentrun doctor";
 const VERSION_FLAG: &str = "--version";
 const ERROR_MARKER: &str = "Error:";
-const ORDER: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
 const SANDBOX_SCRIPT: &str = r#"echo ok > "$1/inside.txt"; echo ok > "$2/outside.txt" 2>/dev/null; cat "$2/unreadable.txt" 2>/dev/null; echo done"#;
 const INSIDE_FILE: &str = "inside.txt";
 const OUTSIDE_FILE: &str = "outside.txt";
@@ -256,14 +256,11 @@ fn write_json(stdout: &Arc<Mutex<dyn Write + Send>>, items: &Mutex<Vec<Item>>) {
 }
 
 fn plan(caller: &Caller, args: &DoctorArgs) -> Result<Plan, String> {
-    let runtimes: Vec<Runtime> = if args.runtimes.is_empty() {
-        ORDER.to_vec()
-    } else {
-        ORDER
-            .into_iter()
-            .filter(|runtime| args.runtimes.contains(runtime))
-            .collect()
-    };
+    let runtimes: Vec<Runtime> = Runtime::value_variants()
+        .iter()
+        .copied()
+        .filter(|runtime| args.runtimes.is_empty() || args.runtimes.contains(runtime))
+        .collect();
     if let (true, Some(model)) = (runtimes.contains(&Runtime::Pi), &args.model) {
         pi::parse_model(model)?;
     }
@@ -781,8 +778,8 @@ impl Doctor {
                     return None;
                 }
             };
-        let result = match (runtime, executable) {
-            (Runtime::Codex, None) => Err("executable not found".to_string()),
+        let result = match (&sandbox.wrapper, executable) {
+            (Wrapper::Codex, None) => Err("executable not found".to_string()),
             _ => self.sandbox_test(target, executable, &sandbox),
         };
         self.record_result(runtime, Check::Sandbox, result);
@@ -900,10 +897,14 @@ impl Doctor {
             return Err("a read of a denied path succeeded".to_string());
         }
         let mut detail = format!("{}: wrote inside, blocked outside", wrap.name());
-        if runtime == Runtime::Pi {
+        if runtime::starts_inside_wrapper(runtime) {
+            let name = runtime.name();
             match executable {
-                Some(pi) => {
-                    let version = vec![pi.to_string_lossy().into_owned(), "--version".to_string()];
+                Some(path) => {
+                    let version = vec![
+                        path.to_string_lossy().into_owned(),
+                        VERSION_FLAG.to_string(),
+                    ];
                     let finished = self.execute(
                         runtime,
                         Check::Sandbox,
@@ -917,13 +918,16 @@ impl Doctor {
                     )?;
                     if finished.exit_code != Some(0) {
                         return Err(bwrap_hint(
-                            format!("pi did not start in the sandbox: {}", finished.message()),
+                            format!(
+                                "{name} did not start in the sandbox: {}",
+                                finished.message()
+                            ),
                             &finished,
                         ));
                     }
-                    detail.push_str(", pi started");
+                    detail.push_str(&format!(", {name} started"));
                 }
-                None => detail.push_str(", pi not started (executable not found)"),
+                None => detail.push_str(&format!(", {name} not started (executable not found)")),
             }
         }
         Ok(detail)
@@ -949,8 +953,8 @@ impl Doctor {
             );
             return;
         };
-        let result = match (runtime, executable) {
-            (Runtime::Codex, None) => Err("executable not found".to_string()),
+        let result = match (&sandbox.wrapper, executable) {
+            (Wrapper::Codex, None) => Err("executable not found".to_string()),
             _ => self.network_test(target, executable, sandbox),
         };
         self.record_result(runtime, Check::Network, result);
@@ -986,18 +990,18 @@ impl Doctor {
         let mode = self.args.network;
         let dirs = self.check_dirs(runtime, Check::Network)?;
         let allowed = self.allowed_target(target);
-        let denied = match (mode, runtime) {
+        let denied = match (mode, &sandbox.wrapper) {
             (NetworkMode::Custom, _) => {
                 Some((DENIED_HOST, SERVICE_PORT, NetworkReason::NotAllowed))
             }
-            (_, Runtime::Codex) => None,
+            (_, Wrapper::Codex) => None,
             _ => Some((PRIVATE_HOST, PRIVATE_PORT, NetworkReason::PrivateAddress)),
         };
         let records: Arc<Mutex<Vec<Network>>> = Arc::default();
         let mut proxy = None;
         let mut env = Vec::new();
         let mut endpoint = None;
-        if network::proxy_needed(runtime, mode, sandbox.runs()) {
+        if runtime::proxy_needed(runtime, mode, sandbox.runs()) {
             let mut bound = FilterProxy::bind(&self.tempdir)?;
             let service_hosts = runtime::service_hosts(
                 runtime,
@@ -1046,7 +1050,7 @@ impl Doctor {
         };
         let result = self.judge(&allowed, denied, &connect, &records);
         drop(proxy);
-        result.map_err(|detail| self.fake_ip_hint(target, &allowed.0, detail))
+        result.map_err(|detail| self.fake_ip_hint(sandbox, &allowed.0, detail))
     }
 
     fn judge(
@@ -1109,8 +1113,8 @@ impl Doctor {
         }
     }
 
-    fn fake_ip_hint(&self, target: &Target, allowed_host: &str, detail: String) -> String {
-        if target.runtime != Runtime::Codex || self.args.network != NetworkMode::Custom {
+    fn fake_ip_hint(&self, sandbox: &Sandbox, allowed_host: &str, detail: String) -> String {
+        if sandbox.wrapper != Wrapper::Codex || self.args.network != NetworkMode::Custom {
             return detail;
         }
         for host in [allowed_host, codex::SERVICE_HOST] {

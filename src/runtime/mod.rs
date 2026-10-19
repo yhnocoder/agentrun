@@ -6,9 +6,10 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use serde_json::Value;
 
-use crate::cli::{Format, RunArgs, Runtime, SandboxMode};
+use crate::cli::{Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::image::Image;
 use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{Record, SandboxKind};
@@ -31,7 +32,6 @@ pub const DENIED_HOME_ENTRIES: [&str; 9] = [
     ".config/gcloud",
     ".azure",
 ];
-const RUNTIMES: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
@@ -125,14 +125,37 @@ pub(crate) fn service_hosts(
     }
 }
 
+pub(crate) fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> bool {
+    sandboxed
+        && match runtime {
+            Runtime::Pi => true,
+            Runtime::ClaudeCode => mode != NetworkMode::None,
+            Runtime::Codex => mode == NetworkMode::Custom,
+        }
+}
+
+pub(crate) fn starts_inside_wrapper(runtime: Runtime) -> bool {
+    match runtime {
+        Runtime::Pi => true,
+        Runtime::ClaudeCode | Runtime::Codex => false,
+    }
+}
+
+fn state_dir(runtime: Runtime, session: &Session, cwd: &Path) -> Option<PathBuf> {
+    match runtime {
+        Runtime::Pi => pi::user_state_dir(session, cwd),
+        Runtime::ClaudeCode | Runtime::Codex => None,
+    }
+}
+
 pub(crate) fn sandbox_state(
     runtime: Runtime,
     session: &Session,
     cwd: &Path,
 ) -> Result<Option<PiState>, String> {
-    match runtime {
-        Runtime::Pi => pi::session_state(pi::user_state_dir(session, cwd).as_deref(), false),
-        Runtime::ClaudeCode | Runtime::Codex => Ok(None),
+    match state_dir(runtime, session, cwd) {
+        Some(dir) => pi::session_state(Some(&dir), false),
+        None => Ok(None),
     }
 }
 
@@ -144,8 +167,19 @@ pub(crate) fn login_file(runtime: Runtime, session: &Session, cwd: &Path) -> Opt
     }
 }
 
+fn history_paths(runtime: Runtime, session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    match runtime {
+        Runtime::ClaudeCode => claudecode::history_paths(session, cwd),
+        Runtime::Codex => codex::history_paths(session, cwd),
+        Runtime::Pi => Vec::new(),
+    }
+}
+
 fn reads_login_inside_sandbox(runtime: Runtime) -> bool {
-    runtime == Runtime::Pi
+    match runtime {
+        Runtime::Pi => true,
+        Runtime::ClaudeCode | Runtime::Codex => false,
+    }
 }
 
 pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> Vec<PathBuf> {
@@ -159,13 +193,16 @@ pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> 
         .flat_map(|home| DENIED_HOME_ENTRIES.iter().map(|entry| home.join(entry)))
         .collect();
     paths.extend(
-        RUNTIMES
-            .into_iter()
-            .filter(|other| *other != runtime || !reads_login_inside_sandbox(runtime))
-            .filter_map(|other| login_file(other, session, cwd)),
+        Runtime::value_variants()
+            .iter()
+            .filter(|other| **other != runtime || !reads_login_inside_sandbox(runtime))
+            .filter_map(|other| login_file(*other, session, cwd)),
     );
-    paths.extend(claudecode::history_paths(session, cwd));
-    paths.extend(codex::history_paths(session, cwd));
+    paths.extend(
+        Runtime::value_variants()
+            .iter()
+            .flat_map(|other| history_paths(*other, session, cwd)),
+    );
     paths.retain(|path| !contains(path, cwd));
     paths
 }
@@ -178,12 +215,13 @@ pub(crate) fn denied_reads(
     temp_base: &Path,
 ) -> Result<Vec<PathBuf>, String> {
     let mut needed = vec![
-        ("working directory", cwd.to_path_buf()),
-        ("temporary directory", temp_base.to_path_buf()),
+        ("working directory".to_string(), cwd.to_path_buf()),
+        ("temporary directory".to_string(), temp_base.to_path_buf()),
     ];
-    if runtime == Runtime::Pi {
-        needed.extend(pi::user_state_dir(session, cwd).map(|dir| ("pi state directory", dir)));
-    }
+    needed.extend(
+        state_dir(runtime, session, cwd)
+            .map(|dir| (format!("{} state directory", runtime.name()), dir)),
+    );
     let mut paths = if args.no_default_deny_read {
         Vec::new()
     } else {
@@ -317,8 +355,6 @@ pub struct Launch {
     pub argv: Vec<String>,
     pub stdin: Vec<u8>,
     pub env: Vec<(OsString, OsString)>,
-    pub signal_wrapped_child: bool,
-    pub service_hosts: Vec<String>,
     pub wrapped: SandboxKind,
     pub private_dirs: Vec<PrivateDir>,
 }
@@ -371,6 +407,11 @@ mod tests {
         let pi = session(Runtime::Pi, Some(&state_dir));
         let cases = [
             (Some("deepseek/deepseek-v4-flash"), Some("api.deepseek.com")),
+            (Some("anthropic/m"), Some("api.anthropic.com")),
+            (Some("openai/m"), Some("api.openai.com")),
+            (Some("google/m"), Some("generativelanguage.googleapis.com")),
+            (Some("openrouter/m"), Some("openrouter.ai")),
+            (Some("acme/robot"), None),
             (Some("deepseek"), None),
             (None, None),
         ];
@@ -399,6 +440,22 @@ mod tests {
             service_hosts(Runtime::Pi, None, &pi, cwd),
             ["openrouter.ai"]
         );
+    }
+
+    #[test]
+    fn proxy_runs_only_with_a_sandbox_and_depends_on_the_runtime() {
+        for mode in [NetworkMode::None, NetworkMode::Full, NetworkMode::Custom] {
+            assert!(proxy_needed(Runtime::Pi, mode, true), "{mode:?}");
+            assert!(!proxy_needed(Runtime::Pi, mode, false), "{mode:?}");
+            assert!(!proxy_needed(Runtime::ClaudeCode, mode, false), "{mode:?}");
+            assert!(!proxy_needed(Runtime::Codex, mode, false), "{mode:?}");
+        }
+        assert!(!proxy_needed(Runtime::ClaudeCode, NetworkMode::None, true));
+        assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Full, true));
+        assert!(proxy_needed(Runtime::ClaudeCode, NetworkMode::Custom, true));
+        assert!(!proxy_needed(Runtime::Codex, NetworkMode::None, true));
+        assert!(!proxy_needed(Runtime::Codex, NetworkMode::Full, true));
+        assert!(proxy_needed(Runtime::Codex, NetworkMode::Custom, true));
     }
 
     #[test]
