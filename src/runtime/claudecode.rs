@@ -156,8 +156,11 @@ impl ClaudeCode {
         }
         if self.call_ids.get(&parent) != Some(&message_id) {
             self.call_ids.insert(parent.clone(), message_id);
-            records.push(Record::CallStart { parent });
+            records.push(Record::CallStart {
+                parent: parent.clone(),
+            });
         }
+        records.push(Record::CallUsage { parent, counts });
         records
     }
 
@@ -932,6 +935,20 @@ mod tests {
         }
     }
 
+    fn call_usage(parent: Option<&str>, output: u64) -> Record {
+        let Record::Usage { parent, counts, .. } = usage(parent, output) else {
+            unreachable!("usage returns a usage record")
+        };
+        Record::CallUsage { parent, counts }
+    }
+
+    fn without_call_usage(records: Vec<Record>) -> Vec<Record> {
+        records
+            .into_iter()
+            .filter(|record| !matches!(record, Record::CallUsage { .. }))
+            .collect()
+    }
+
     #[test]
     fn same_message_id_outputs_one_usage_with_the_last_values() {
         let mut adapter = ClaudeCode::new();
@@ -939,20 +956,24 @@ mod tests {
         let text = json!({"type": "text", "text": "hi"});
         assert_eq!(
             adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", thinking, 5)),
-            vec![call(None)]
+            vec![call(None), call_usage(None, 5)]
         );
         assert_eq!(
             adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", text.clone(), 9)),
-            vec![Record::Text {
-                parent: None,
-                text: "hi".to_string()
-            }]
+            vec![
+                call_usage(None, 9),
+                Record::Text {
+                    parent: None,
+                    text: "hi".to_string()
+                }
+            ]
         );
         assert_eq!(
             adapter.translate(&assistant(None, "m2", "claude-sonnet-5-5", text.clone(), 1)),
             vec![
                 usage(None, 9),
                 call(None),
+                call_usage(None, 1),
                 Record::Text {
                     parent: None,
                     text: "hi".to_string()
@@ -975,7 +996,13 @@ mod tests {
         let mut adapter = ClaudeCode::new();
         let agent = |id: &str| json!({"type": "tool_use", "id": id, "name": "Agent", "input": {"description": "look\nmore", "subagent_type": "Explore", "model": "haiku"}});
         let text = json!({"type": "text", "text": "t"});
-        let records = adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", agent("A"), 1));
+        let records = without_call_usage(adapter.translate(&assistant(
+            None,
+            "m1",
+            "claude-sonnet-5-5",
+            agent("A"),
+            1,
+        )));
         assert_eq!(
             records,
             vec![
@@ -989,16 +1016,22 @@ mod tests {
                 }
             ]
         );
-        let records = adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", agent("B"), 2));
+        let records = without_call_usage(adapter.translate(&assistant(
+            None,
+            "m1",
+            "claude-sonnet-5-5",
+            agent("B"),
+            2,
+        )));
         assert_eq!(records.len(), 1);
         assert_eq!(
-            adapter.translate(&assistant(
+            without_call_usage(adapter.translate(&assistant(
                 Some("A"),
                 "a1",
                 "claude-sonnet-5-5",
                 text.clone(),
                 3
-            )),
+            ))),
             vec![
                 call(Some("A")),
                 Record::Text {
@@ -1008,13 +1041,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            adapter.translate(&assistant(
+            without_call_usage(adapter.translate(&assistant(
                 Some("B"),
                 "b1",
                 "claude-sonnet-5-5",
                 text.clone(),
                 4
-            )),
+            ))),
             vec![
                 call(Some("B")),
                 Record::Text {
@@ -1024,7 +1057,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            adapter.translate(&assistant(Some("A"), "a1", "claude-sonnet-5-5", text, 5)),
+            without_call_usage(adapter.translate(&assistant(
+                Some("A"),
+                "a1",
+                "claude-sonnet-5-5",
+                text,
+                5
+            ))),
             vec![Record::Text {
                 parent: Some("A".to_string()),
                 text: "t".to_string()
@@ -1056,7 +1095,13 @@ mod tests {
             }]
         );
         assert_eq!(
-            adapter.translate(&assistant(None, "m1", "claude-sonnet-5-5", agent("C"), 6)),
+            without_call_usage(adapter.translate(&assistant(
+                None,
+                "m1",
+                "claude-sonnet-5-5",
+                agent("C"),
+                6
+            ))),
             vec![Record::SubagentStart {
                 id: "C".to_string(),
                 parent: None,
@@ -1110,7 +1155,10 @@ mod tests {
             json!({"type": "tool_use", "id": "h", "name": "SubagentHandback", "input": {}}),
             1,
         );
-        assert_eq!(adapter.translate(&handback), vec![call(Some("A"))]);
+        assert_eq!(
+            without_call_usage(adapter.translate(&handback)),
+            vec![call(Some("A"))]
+        );
     }
 
     #[test]

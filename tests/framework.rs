@@ -598,12 +598,17 @@ fn replay_fake_fixture() {
 }
 
 #[test]
-fn limit_reached_on_the_last_lines_is_reported_after_the_runtime_exits() {
-    let env = with_output(concat!(
-        r#"{"record":"usage","parent":null,"model":"m1","input_tokens":100,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0}"#,
-        "\n",
-        r#"{"record":"text","parent":null,"text":"done"}"#,
-    ));
+fn limit_reached_on_the_last_lines_of_a_failing_runtime_is_always_limit() {
+    let env = Env::with(
+        "claude",
+        concat!(
+            "#!/bin/sh\ncat <<'EOF'\n",
+            r#"{"record":"usage","parent":null,"model":"m1","input_tokens":100,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0}"#,
+            "\n",
+            r#"{"record":"text","parent":null,"text":"done"}"#,
+            "\nEOF\nexit 1\n",
+        ),
+    );
     for _ in 0..20 {
         let outcome = run(&env, &["--max-tokens", "10"], false);
         let events = outcome.events();

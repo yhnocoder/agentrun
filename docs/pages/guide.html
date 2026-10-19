@@ -99,7 +99,7 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <span class="dim">[end]</span> limit 5.5s  in 50.8k  out 48  cached 91%  --max-turns 2 reached: the main agent started turn 3
 <span class="prompt">$</span> echo $?
 4</div>
-<p><code>[end]</code> 行的最后写出是哪个上限、你给的值和实际的值。主 agent 开始第 3 次调用时 agentrun 停止了运行，所以最后一个 <code>tool</code> 是这次调用请求的命令，它可能没有执行，也可能已经开始执行。<code>--max-tokens</code> 的结果写成 <code>--max-tokens 5000 exceeded: 7389 tokens</code>。</p>
+<p><code>[end]</code> 行的最后写出是哪个上限、你给的值和实际的值。主 agent 开始第 3 次调用时 agentrun 停止了运行，所以最后一个 <code>tool</code> 是这次调用请求的命令，它可能没有执行，也可能已经开始执行。<code>--max-tokens</code> 的结果写成 <code>--max-tokens 5000 exceeded: 7389 tokens</code>。agent 在超过上限时恰好已经完成任务、正常退出的，结果仍是 <code>finished</code>。</p>
 <p>codex 只在运行结束时报告用量，agentrun 无法在运行中停止它，所以 codex 不接受这两个选项，给出时直接报错。两个上限的计数方法见<a href="run.html#limits">轮数与 token 上限</a>。</p>
 
 <h2 id="containers">在 docker 与 Cloud Managed 容器里运行</h2>

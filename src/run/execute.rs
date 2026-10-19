@@ -562,11 +562,11 @@ pub fn conclude(
     let (status, detail) = match (exit.signal, exit.timed_out, &exit.limit) {
         (Some(signal), _, _) => (EndStatus::Interrupted(signal), String::new()),
         (None, true, _) => (EndStatus::Timeout, String::new()),
-        (None, false, Some(limit)) => (EndStatus::Limit, limit.clone()),
-        (None, false, None) => match adapter.failure(exit.code) {
-            None => (EndStatus::Finished, String::new()),
-            Some(Failure::Message(detail)) => (EndStatus::Failed, detail),
-            Some(Failure::Unexplained) => (
+        (None, false, limit) => match (adapter.failure(exit.code), limit) {
+            (None, _) => (EndStatus::Finished, String::new()),
+            (Some(_), Some(limit)) => (EndStatus::Limit, limit.clone()),
+            (Some(Failure::Message(detail)), None) => (EndStatus::Failed, detail),
+            (Some(Failure::Unexplained), None) => (
                 EndStatus::Failed,
                 wrapper_failure(wrapped, exit.code, stderr_tail)
                     .unwrap_or_else(|| unexplained_detail(stderr_tail, adapter.runtime())),
@@ -718,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn limit_comes_after_signals_and_timeout_and_before_failure() {
+    fn limit_comes_after_signals_and_timeout_and_only_replaces_a_failure() {
         let exit = |signal, timed_out, limit: Option<&str>| Exit {
             code: None,
             signal,
@@ -741,6 +741,10 @@ mod tests {
         assert_eq!(
             status(exit(None, false, None), failed()),
             (EndStatus::Failed, "failed".to_string())
+        );
+        assert_eq!(
+            status(exit(None, false, Some("over")), None),
+            (EndStatus::Finished, String::new())
         );
     }
 

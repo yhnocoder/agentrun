@@ -39,6 +39,10 @@ pub enum Record {
     CallStart {
         parent: Option<String>,
     },
+    CallUsage {
+        parent: Option<String>,
+        counts: TokenCounts,
+    },
     Usage {
         parent: Option<String>,
         model: Option<String>,
@@ -78,6 +82,7 @@ pub struct Aggregator {
     running: Vec<RunningSubagent>,
     started_subagents: u64,
     main_calls: u64,
+    call_tokens: HashMap<Option<String>, u64>,
     usages: Vec<UsageEntry>,
     run_usage: Option<Usage>,
     result: Option<String>,
@@ -116,6 +121,7 @@ impl Aggregator {
             running: Vec::new(),
             started_subagents: 0,
             main_calls: 0,
+            call_tokens: HashMap::new(),
             usages: Vec::new(),
             run_usage: None,
             result: None,
@@ -209,11 +215,15 @@ impl Aggregator {
                         self.main_calls += 1;
                     }
                 }
+                Record::CallUsage { parent, counts } => {
+                    self.call_tokens.insert(parent, counts.total());
+                }
                 Record::Usage {
                     parent,
                     model,
                     counts,
                 } => {
+                    self.call_tokens.remove(&parent);
                     let parent = self.known_parent(parent);
                     self.usages.push(UsageEntry {
                         parent: parent.clone(),
@@ -263,7 +273,8 @@ impl Aggregator {
     }
 
     pub fn tokens(&self) -> u64 {
-        self.usages.iter().map(|entry| entry.counts.total()).sum()
+        let reported: u64 = self.usages.iter().map(|entry| entry.counts.total()).sum();
+        reported + self.call_tokens.values().sum::<u64>()
     }
 
     pub fn open_tools(&self) -> OpenTools {
@@ -402,6 +413,36 @@ mod tests {
         };
         assert_eq!(shown, tool.summary);
         assert_eq!(shown.chars().count(), SUMMARY_MAX_CHARS);
+    }
+
+    #[test]
+    fn call_usage_counts_until_the_usage_of_the_same_parent_arrives() {
+        let counts = |output| TokenCounts {
+            input_tokens: Some(10),
+            output_tokens: Some(output),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+        };
+        let call_usage = |parent: Option<&str>, output| Record::CallUsage {
+            parent: parent.map(str::to_string),
+            counts: counts(output),
+        };
+        let mut aggregator = Aggregator::new(false);
+        let translated = aggregator.push(vec![
+            call_usage(None, 1),
+            call_usage(None, 5),
+            call_usage(Some("s1"), 2),
+        ]);
+        assert!(translated.events.is_empty());
+        assert_eq!(aggregator.tokens(), 27);
+        aggregator.push(vec![Record::Usage {
+            parent: None,
+            model: None,
+            counts: counts(5),
+        }]);
+        assert_eq!(aggregator.tokens(), 27);
+        aggregator.push(vec![call_usage(None, 0)]);
+        assert_eq!(aggregator.tokens(), 37);
     }
 
     #[test]
