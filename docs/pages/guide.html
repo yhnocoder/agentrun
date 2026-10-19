@@ -203,7 +203,7 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <p>agentrun 在 PATH 里找不到运行时。确认运行时已经安装；它装在 PATH 之外时，用 <code>--path</code> 把它所在的目录加进来：</p>
 <pre><code class="language-bash">agentrun codex --path ~/tools/codex/bin --prompt "..."</code></pre>
 
-<h3><code>requires &gt;= 2.1.288</code></h3>
+<h3><code>requires &gt;= X.Y.Z</code></h3>
 <p>doctor 找到的运行时版本低于 agentrun 要求的最低版本。<code>executable</code> 一行写出路径、找到的版本和要求的版本：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code --path /opt/claude-old/bin
 <span class="warn">[fail]</span> claude-code  executable  /opt/claude-old/bin/claude 2.1.287, requires &gt;= 2.1.288

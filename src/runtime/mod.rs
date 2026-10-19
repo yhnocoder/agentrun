@@ -324,10 +324,32 @@ mod tests {
     }
 
     #[test]
-    fn min_versions_match_the_documented_table() {
-        assert_eq!(min_version(Runtime::ClaudeCode), Version(2, 1, 288));
-        assert_eq!(min_version(Runtime::Codex), Version(0, 159, 2));
-        assert_eq!(min_version(Runtime::Pi), Version(1, 0, 1));
+    fn min_versions_match_the_documented_tables() {
+        let run_page = include_str!("../../docs/pages/run.html");
+        let quickstart = include_str!("../../docs/pages/quickstart.html");
+        for runtime in [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi] {
+            let run_item = format!("<li>{}: >= ", runtime.name());
+            let documented = run_page
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(run_item.as_str()))
+                .and_then(Version::find);
+            assert_eq!(
+                documented,
+                Some(min_version(runtime)),
+                "run.html {runtime:?}"
+            );
+            let quickstart_row = format!("<code>agentrun {}</code>", runtime.name());
+            let documented = quickstart
+                .lines()
+                .find(|line| line.contains(&quickstart_row))
+                .and_then(|line| line.split(&quickstart_row).nth(1))
+                .and_then(Version::find);
+            assert_eq!(
+                documented,
+                Some(min_version(runtime)),
+                "quickstart.html {runtime:?}"
+            );
+        }
     }
 
     #[test]

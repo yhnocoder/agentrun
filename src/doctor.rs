@@ -326,6 +326,13 @@ impl Finished {
             .find_map(Version::find)
     }
 
+    fn failure(&self) -> String {
+        match self.stderr_line().or_else(|| self.stdout_line()) {
+            Some(line) => format!("{}: {line}", self.exit_text),
+            None => self.exit_text.clone(),
+        }
+    }
+
     fn output(&self) -> String {
         self.stdout_line()
             .or_else(|| self.stderr_line())
@@ -541,6 +548,9 @@ impl Doctor {
                 |_| false,
             )
             .map_err(|error| format!("{path}: {error}"))?;
+        if finished.exit_code != Some(0) {
+            return Err(format!("{path}: {VERSION_FLAG} {}", finished.failure()));
+        }
         let required = runtime::min_version(target.runtime);
         match finished.version() {
             Some(version) if version < required => {

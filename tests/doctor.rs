@@ -337,6 +337,29 @@ fn executable_check_compares_the_runtime_version() {
             env.bin().join("pi").display()
         )
     );
+
+    env.install(
+        "pi",
+        "#!/bin/sh\necho \"Error: Cannot find module '/nonexistent/cli.js'\" >&2\necho 'Node.js v22.22.0' >&2\nexit 1\n",
+    );
+    env.install("codex", "#!/bin/sh\nexit 2\n");
+    let output = run(&env, &["codex", "pi", "--sandbox", "off"]);
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stdout_lines(&output);
+    assert_eq!(
+        line_for(&lines, "pi", "executable"),
+        format!(
+            "[fail] pi           executable  {}: --version exited with code 1: Error: Cannot find module '/nonexistent/cli.js'",
+            env.bin().join("pi").display()
+        )
+    );
+    assert_eq!(
+        line_for(&lines, "codex", "executable"),
+        format!(
+            "[fail] codex        executable  {}: --version exited with code 2",
+            env.bin().join("codex").display()
+        )
+    );
     assert!(env.leftovers().is_empty());
 }
 
