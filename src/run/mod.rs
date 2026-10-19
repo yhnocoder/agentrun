@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use clap::Parser;
 use clap::error::ErrorKind as ClapErrorKind;
+use clap::{CommandFactory, Parser};
 use tempfile::TempDir;
 
 use crate::cli::{
-    Cli, ConnectArgs, DoctorArgs, Format, Parsed, RunArgs, Runtime, default_format, prescan_format,
-    usage_error_detail,
+    Cli, ConnectArgs, DoctorArgs, Format, MISSING_COMMAND, Parsed, RunArgs, Runtime,
+    default_format, prescan_format, usage_error_detail,
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
@@ -29,7 +29,7 @@ use crate::transcript::{self, Saved};
 use execute::execute;
 use signal::SharedWriter;
 
-pub(crate) use execute::TEMP_ENV_VARS;
+pub(crate) use execute::temp_environment;
 pub use execute::{Exit, conclude, stderr_tail, translate_line};
 pub use signal::Signals;
 
@@ -172,6 +172,11 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
 }
 
 fn parse_command(caller: &Caller) -> Command {
+    if caller.args.len() <= 1 {
+        caller.signals.finishing();
+        caller.print_error_line(Cli::command().render_help().to_string().trim_end());
+        return Command::Exit(EndStatus::Rejected.exit_code());
+    }
     let cli = match Cli::try_parse_from(&caller.args) {
         Ok(cli) => cli,
         Err(error) => {
@@ -181,8 +186,11 @@ fn parse_command(caller: &Caller) -> Command {
                     caller.print_lines(&[error.render().to_string().trim_end().to_string()]);
                     Command::Exit(0)
                 }
-                _ => {
-                    let detail = usage_error_detail(&error.render().to_string());
+                kind => {
+                    let detail = match kind {
+                        ClapErrorKind::MissingSubcommand => MISSING_COMMAND.to_string(),
+                        _ => usage_error_detail(&error.render().to_string()),
+                    };
                     if doctor::selected(&caller.args) {
                         caller.signals.finishing();
                         caller.print_error_line(&format!("agentrun: {detail}"));
@@ -294,7 +302,11 @@ fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -
             End::early(EndStatus::Rejected, detail.to_string(), started),
         )
     });
-    caller.print_error_line(&format!("agentrun: {detail}"));
+    let end_line_on_terminal =
+        format != Format::Jsonl && caller.stdout_is_terminal && caller.stderr_is_terminal;
+    if !end_line_on_terminal {
+        caller.print_error_line(&format!("agentrun: {detail}"));
+    }
     EndStatus::Rejected.exit_code()
 }
 
@@ -379,11 +391,10 @@ fn resolve_session_dir(
     };
     let dir = std::path::absolute(dir)
         .map_err(|error| format!("--session-dir {}: {error}", dir.display()))?;
-    let store = transcript::store(&dir, runtime);
     let resume = args
         .resume
         .as_deref()
-        .map(|id| transcript::locate(&store, runtime, id))
+        .map(|id| transcript::locate(&dir, runtime, id))
         .transpose()?;
     args.session_dir = Some(dir);
     Ok((args, resume))

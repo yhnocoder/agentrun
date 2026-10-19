@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, Version, detail_head};
+use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, display_path};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::image::write_copies;
 use crate::json::{first_line, joined_text, optional_string, string};
@@ -62,6 +62,7 @@ pub struct Pi {
     last_stop: Option<Stop>,
     session_stage: Option<PathBuf>,
     session_id: Option<String>,
+    cwd: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -93,6 +94,7 @@ impl Pi {
             last_stop: None,
             session_stage: None,
             session_id: None,
+            cwd: PathBuf::new(),
         }
     }
 
@@ -200,6 +202,7 @@ impl Adapter for Pi {
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
+        self.cwd = invocation.cwd.clone();
         self.model_option = invocation.args.model.clone();
         self.expected = match &invocation.args.model {
             Some(model) => Some(parse_model(model)?),
@@ -286,7 +289,7 @@ impl Adapter for Pi {
             }
             Some("tool_execution_start") => {
                 let name = string(&line["toolName"]);
-                let summary = tool_summary(&name, &line["args"]);
+                let summary = tool_summary(&name, &line["args"], &self.cwd);
                 vec![Record::ToolStart {
                     id: string(&line["toolCallId"]),
                     parent: None,
@@ -501,13 +504,18 @@ fn counts(usage: &Value) -> TokenCounts {
     }
 }
 
-fn tool_summary(name: &str, args: &Value) -> String {
+fn tool_summary(name: &str, args: &Value, cwd: &Path) -> String {
     let value = match name {
         "bash" => args["command"]
             .as_str()
             .map(|command| first_line(command).to_string()),
-        "read" | "write" | "edit" => args["path"].as_str().map(str::to_string),
-        "ls" => Some(args["path"].as_str().unwrap_or(".").to_string()),
+        "read" | "write" | "edit" => args["path"]
+            .as_str()
+            .map(|path| display_path(Path::new(path), cwd)),
+        "ls" => Some(display_path(
+            Path::new(args["path"].as_str().unwrap_or(".")),
+            cwd,
+        )),
         "grep" | "find" => args["pattern"].as_str().map(str::to_string),
         _ => None,
     };
@@ -1496,6 +1504,12 @@ mod tests {
                 "write: a.txt",
             ),
             ("edit", json!({"path": "/etc/hosts"}), "edit: /etc/hosts"),
+            (
+                "write",
+                json!({"path": "/work/repo/src/a.txt"}),
+                "write: src/a.txt",
+            ),
+            ("ls", json!({"path": "/work/repo"}), "ls: ."),
             ("ls", json!({"path": "src"}), "ls: src"),
             ("ls", json!({}), "ls: ."),
             ("ls", json!({"path": null}), "ls: ."),
@@ -1507,7 +1521,11 @@ mod tests {
             ("fetch", json!({"url": "https://example.com"}), "fetch"),
         ];
         for (name, args, expected) in cases {
-            assert_eq!(tool_summary(name, &args), expected, "{name} {args}");
+            assert_eq!(
+                tool_summary(name, &args, Path::new("/work/repo")),
+                expected,
+                "{name} {args}"
+            );
         }
     }
 
