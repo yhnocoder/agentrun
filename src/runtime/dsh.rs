@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
@@ -58,6 +59,9 @@ const COMPLETED: &str = "completed";
 const ERROR_KIND: &str = "error";
 const NO_IMAGES: &str = "--image is not supported by dsh: its headless mode takes text only";
 const NO_TURN_END_DETAIL: &str = "dsh produced no turn_end";
+const SHELL_TOOLS: [&str; 2] = ["bash", "pwsh"];
+const EXIT_CODE_MARKER: &str = "\n[exit code: ";
+const SIGNAL_MARKER: &str = "\n[killed by signal: ";
 const PROJECT_KEY_MAX: usize = 251;
 
 #[derive(Default)]
@@ -69,6 +73,7 @@ pub struct Dsh {
     session_id: Option<String>,
     turn_end: Option<Value>,
     error: Option<String>,
+    shell_calls: HashSet<String>,
 }
 
 impl Dsh {
@@ -222,24 +227,34 @@ impl Adapter for Dsh {
                 vec![Record::Text { parent: None, text }]
             }
             Some("tool_call") => {
+                let id = string(&line["callId"]);
                 let name = string(&line["tool"]);
                 let summary = self.tool_summary(&name, &line["input"]);
+                if SHELL_TOOLS.contains(&name.as_str()) {
+                    self.shell_calls.insert(id.clone());
+                }
                 vec![Record::ToolStart {
-                    id: string(&line["callId"]),
+                    id,
                     parent: None,
                     name,
                     summary,
                 }]
             }
-            Some("tool_result") => vec![Record::ToolEnd {
-                id: string(&line["callId"]),
-                denied: false,
-                error: match line["status"].as_str() {
+            Some("tool_result") => {
+                let id = string(&line["callId"]);
+                let shell = self.shell_calls.remove(&id);
+                let error = match line["status"].as_str() {
                     Some("error") => Some(true),
+                    Some(COMPLETED) if shell => line["result"].as_str().map(command_failed),
                     Some(COMPLETED) => Some(false),
                     _ => None,
-                },
-            }],
+                };
+                vec![Record::ToolEnd {
+                    id,
+                    denied: false,
+                    error,
+                }]
+            }
             Some("final") => {
                 let text = string(&line["text"]);
                 if text.is_empty() {
@@ -321,6 +336,19 @@ pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
         .map(|home| home.join(SESSIONS_SUBDIR))
         .into_iter()
         .collect()
+}
+
+fn command_failed(result: &str) -> bool {
+    let marker_value = |marker: &str| {
+        result
+            .rsplit_once(marker)
+            .and_then(|(_, rest)| rest.strip_suffix(']'))
+            .filter(|value| !value.is_empty() && !value.contains([']', '\n']))
+    };
+    marker_value(SIGNAL_MARKER).is_some()
+        || marker_value(EXIT_CODE_MARKER)
+            .and_then(|code| code.parse::<u32>().ok())
+            .is_some_and(|code| code != 0)
 }
 
 pub(crate) fn saved_session(store: &Path, id: &str) -> Option<PathBuf> {
@@ -841,6 +869,50 @@ mod tests {
                 }]
             );
         }
+        for (result, error) in [
+            (json!("ok"), Some(false)),
+            (json!("out\n[exit code: 0]"), Some(false)),
+            (
+                json!("[stderr]\nRead-only file system\n[exit code: 1]"),
+                Some(true),
+            ),
+            (json!("000\n[exit code: 56]"), Some(true)),
+            (json!("partial\n[killed by signal: SIGTERM]"), Some(true)),
+            (json!("echo '\n[exit code: 3]' done"), Some(false)),
+            (json!({"text": "x"}), None),
+        ] {
+            translate(
+                &mut adapter,
+                json!({"type": "tool_call", "callId": "s1", "tool": "bash", "input": {"command": "make"}}),
+            );
+            assert_eq!(
+                translate(
+                    &mut adapter,
+                    json!({"type": "tool_result", "callId": "s1", "status": "completed", "result": result})
+                ),
+                vec![Record::ToolEnd {
+                    id: "s1".to_string(),
+                    denied: false,
+                    error
+                }],
+                "{result}"
+            );
+        }
+        translate(
+            &mut adapter,
+            json!({"type": "tool_call", "callId": "r1", "tool": "read", "input": {"file_path": "log"}}),
+        );
+        assert_eq!(
+            translate(
+                &mut adapter,
+                json!({"type": "tool_result", "callId": "r1", "status": "completed", "result": "x\n[exit code: 1]"})
+            ),
+            vec![Record::ToolEnd {
+                id: "r1".to_string(),
+                denied: false,
+                error: Some(false)
+            }]
+        );
         assert_eq!(
             translate(
                 &mut adapter,

@@ -168,9 +168,12 @@ pub(super) fn execute(
         .session_dir
         .as_deref()
         .map(|dir| transcript::store(dir, invocation.runtime));
-    let status = relay.finish(&exit, wrapped, &stderr_tail, store.as_deref(), started);
+    let (status, unsaved) = relay.finish(&exit, wrapped, &stderr_tail, store.as_deref(), started);
+    for dir in &mut guards.private_dirs {
+        dir.keep |= unsaved;
+    }
     if let Some(tempdir) = guards.tempdir.take() {
-        finish_tempdir(tempdir, debug);
+        finish_tempdir(tempdir, debug || unsaved);
     }
     Ok(status.exit_code())
 }
@@ -341,6 +344,7 @@ struct Relay<'a> {
     rich_stderr: bool,
     limits: Limits,
     limit: Option<String>,
+    unsaved: bool,
 }
 
 impl<'a> Relay<'a> {
@@ -363,6 +367,7 @@ impl<'a> Relay<'a> {
             rich_stderr,
             limits,
             limit: None,
+            unsaved: false,
         }
     }
 
@@ -377,8 +382,18 @@ impl<'a> Relay<'a> {
         let saved = self.adapter.transcript()?;
         match transcript::save(&saved, store) {
             Ok(()) => Some(saved.id),
-            Err(detail) => {
-                self.error_line(&format!("agentrun: cannot save the session: {detail}"));
+            Err(error) => {
+                self.unsaved = true;
+                let detail = error.detail;
+                let kept = error
+                    .kept
+                    .iter()
+                    .map(|entry| entry.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error_line(&format!(
+                    "agentrun: cannot save the session: {detail}. The session is kept in {kept}"
+                ));
                 None
             }
         }
@@ -440,7 +455,7 @@ impl<'a> Relay<'a> {
         stderr_tail: &str,
         store: Option<&Path>,
         started: Instant,
-    ) -> EndStatus {
+    ) -> (EndStatus, bool) {
         let session_id = store.and_then(|store| self.save_transcript(store));
         let (events, status) = conclude(
             self.aggregator,
@@ -455,7 +470,7 @@ impl<'a> Relay<'a> {
             self.caller.emit(&mut self.output, event);
         }
         drop(self.raw);
-        status
+        (status, self.unsaved)
     }
 }
 

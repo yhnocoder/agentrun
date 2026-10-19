@@ -227,10 +227,16 @@ pub fn hidden(denied_reads: &[PathBuf]) -> Vec<Hidden> {
         let Ok(path) = std::fs::canonicalize(path) else {
             continue;
         };
-        if hidden.iter().any(|entry| entry.path == path) {
+        if hidden
+            .iter()
+            .any(|entry| entry.path == path || entry.dir && path.starts_with(&entry.path))
+        {
             continue;
         }
         let dir = path.is_dir();
+        if dir {
+            hidden.retain(|entry| !entry.path.starts_with(&path));
+        }
         hidden.push(Hidden { path, dir });
     }
     hidden
