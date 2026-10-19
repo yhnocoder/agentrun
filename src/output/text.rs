@@ -15,6 +15,7 @@ pub struct TextFormatter {
     notes: Vec<String>,
     labels: HashMap<String, String>,
     subagent_models: HashMap<String, String>,
+    last_main_text: Option<String>,
 }
 
 impl TextFormatter {
@@ -25,6 +26,7 @@ impl TextFormatter {
             notes: Vec::new(),
             labels: HashMap::new(),
             subagent_models: HashMap::new(),
+            last_main_text: None,
         }
     }
 
@@ -57,6 +59,9 @@ impl TextFormatter {
                 )]
             }
             Body::Text(text) => {
+                if text.parent.is_none() {
+                    self.last_main_text = Some(text.text.clone());
+                }
                 let mut lines = preview(&text.text);
                 lines[0] = format!("[{}] text {}", self.label(text.parent.as_deref()), lines[0]);
                 lines
@@ -115,7 +120,7 @@ impl TextFormatter {
                     return vec![format!("[end] rejected {}", single_line(&end.detail))];
                 }
                 let mut lines = match &end.result {
-                    Some(result) if content_lines(result).count() > PREVIEW_LINES => {
+                    Some(result) if self.result_not_shown(result) => {
                         std::iter::once(RESULT_HEADER.to_string())
                             .chain(
                                 result
@@ -171,6 +176,11 @@ impl TextFormatter {
 
     pub fn subagent_model(&self, id: &str) -> Option<&str> {
         self.subagent_models.get(id).map(String::as_str)
+    }
+
+    fn result_not_shown(&self, result: &str) -> bool {
+        content_lines(result).count() > PREVIEW_LINES
+            || self.last_main_text.as_deref().map(str::trim) != Some(result.trim())
     }
 
     fn label(&self, agent: Option<&str>) -> String {
@@ -577,8 +587,24 @@ mod tests {
             event
         };
         assert_eq!(
-            text.lines(&with_result("a\nb\n\nc\n", EndStatus::Finished)),
+            text.lines(&with_result("OK", EndStatus::Finished)),
+            vec!["[result]", "OK", "[end] finished 31.3s"]
+        );
+        text.lines(&event(Body::Text(Text {
+            parent: None,
+            text: "a\nb\n\nc\n".to_string(),
+        })));
+        text.lines(&event(Body::Text(Text {
+            parent: Some("s1".to_string()),
+            text: "from a subagent".to_string(),
+        })));
+        assert_eq!(
+            text.lines(&with_result("a\nb\n\nc", EndStatus::Finished)),
             vec!["[end] finished 31.3s"]
+        );
+        assert_eq!(
+            text.lines(&with_result("a\nb", EndStatus::Finished)),
+            vec!["[result]", "a", "b", "[end] finished 31.3s"]
         );
         assert_eq!(
             text.lines(&with_result(
