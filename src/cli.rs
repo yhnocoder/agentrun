@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 #[derive(Parser, Debug)]
@@ -391,6 +391,35 @@ pub(crate) fn prescan_format(args: &[OsString]) -> Option<Format> {
                 }
             }
             None => {}
+        }
+    }
+    None
+}
+
+pub(crate) fn option_after_prompt(args: &[OsString]) -> Option<String> {
+    let runtime = Runtime::from_str(args.get(1)?.to_str()?, false).ok()?;
+    let command = Cli::command();
+    let subcommand = command.find_subcommand(runtime.name())?;
+    let options: Vec<String> = subcommand
+        .get_arguments()
+        .filter_map(|arg| arg.get_long())
+        .chain(["help"])
+        .map(|long| format!("--{long}"))
+        .collect();
+    let mut rest = args.iter().skip(1).map(|arg| arg.to_str());
+    while let Some(arg) = rest.next() {
+        match arg {
+            Some("--") => return None,
+            Some("--prompt") => {
+                let value = rest.next().flatten()?;
+                let given = value.split_once('=').map_or(value, |(name, _)| name);
+                if options.iter().any(|option| option == given) {
+                    return Some(format!(
+                        "--prompt is followed by the option {given}; to use it as the prompt, write --prompt={value}"
+                    ));
+                }
+            }
+            _ => {}
         }
     }
     None

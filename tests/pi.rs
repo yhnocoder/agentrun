@@ -253,22 +253,50 @@ fn prompt_starting_with_at_reaches_pi_on_stdin_and_not_as_an_argument() {
 #[test]
 fn prompt_starting_with_a_hyphen_is_the_prompt() {
     let env = Env::with("pi", STDIN_PI);
-    for prompt in ["- fix the parser\n- add a test", "--help", "-v"] {
-        let output = run(
-            &env,
-            &[
-                "--sandbox",
-                "off",
-                "--model",
-                "deepseek/deepseek-flash",
-                "--prompt",
-                prompt,
-            ],
-        );
+    for (args, prompt) in [
+        (
+            &["--prompt", "- fix the parser\n- add a test"][..],
+            "- fix the parser\n- add a test",
+        ),
+        (&["--prompt", "-v"][..], "-v"),
+        (&["--prompt=--help"][..], "--help"),
+    ] {
+        let mut given = vec!["--sandbox", "off", "--model", "deepseek/deepseek-flash"];
+        given.extend(args);
+        let output = run(&env, &given);
         assert_eq!(output.status.code(), Some(0), "{prompt}: {output:?}");
         let stdin = std::fs::read_to_string(env.work().join("stdin.txt")).unwrap();
         assert_eq!(stdin, prompt);
     }
+}
+
+#[test]
+fn prompt_followed_by_an_option_is_a_usage_error() {
+    let env = Env::with("pi", STDIN_PI);
+    for (args, detail) in [
+        (
+            &["--prompt", "--dry-run"][..],
+            "--prompt is followed by the option --dry-run; to use it as the prompt, write --prompt=--dry-run",
+        ),
+        (
+            &["--prompt", "--sandbox", "off"][..],
+            "--prompt is followed by the option --sandbox; to use it as the prompt, write --prompt=--sandbox",
+        ),
+        (
+            &["--prompt", "--help"][..],
+            "--prompt is followed by the option --help; to use it as the prompt, write --prompt=--help",
+        ),
+    ] {
+        let mut given = vec!["--model", "deepseek/deepseek-flash"];
+        given.extend(args);
+        let output = run(&env, &given);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        let end = support::events(&output).pop().unwrap();
+        assert_eq!(end["status"], "rejected");
+        assert_eq!(end["detail"], detail);
+        assert!(!env.work().join("stdin.txt").exists());
+    }
+    assert!(env.leftovers().is_empty());
 }
 
 #[test]
