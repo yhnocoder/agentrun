@@ -99,7 +99,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
         }
     };
     let mut aggregator = Aggregator::new(adapter.echoes_prompt());
-    let mut events = aggregator.begin(prompt);
+    let mut events = aggregator.begin(prompt, Vec::new());
     for line in content.split(|byte| *byte == b'\n') {
         events.extend(translate_line(line, adapter, &mut aggregator).events);
     }

@@ -211,7 +211,7 @@ fn fake_codex_run_without_sandbox() {
     assert_eq!(
         events[1..],
         [
-            json!({"schema": 1, "type": "prompt", "text": "say hi"}),
+            json!({"schema": 1, "type": "prompt", "text": "say hi", "images": []}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "working"}),
             json!({"schema": 1, "type": "tool_start", "id": "item_1", "parent": null, "name": "command_execution", "summary": "shell: ls"}),
             json!({"schema": 1, "type": "tool", "id": "item_1", "parent": null, "name": "command_execution", "summary": "shell: ls", "denied": false}),

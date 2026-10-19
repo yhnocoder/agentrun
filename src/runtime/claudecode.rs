@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::{Adapter, Failure, Invocation, Launch, Version};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
+use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
@@ -68,7 +69,29 @@ struct PromptLine<'a> {
 #[derive(Serialize)]
 struct PromptMessage<'a> {
     role: &'static str,
-    content: &'a str,
+    content: PromptContent<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum PromptContent<'a> {
+    Text(&'a str),
+    Blocks(Vec<PromptBlock<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum PromptBlock<'a> {
+    Image { source: ImageSource },
+    Text { text: &'a str },
+}
+
+#[derive(Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    media_type: &'static str,
+    data: String,
 }
 
 #[derive(Serialize)]
@@ -381,7 +404,7 @@ impl Adapter for ClaudeCode {
         }
         Ok(Launch {
             argv,
-            stdin: prompt_line(&invocation.prompt),
+            stdin: prompt_line(&invocation.prompt, &invocation.images),
             env,
             signal_wrapped_child: false,
             service_hosts: Vec::new(),
@@ -491,12 +514,28 @@ fn sandbox_settings(
     .expect("settings serialize")
 }
 
-fn prompt_line(prompt: &str) -> Vec<u8> {
+fn prompt_line(prompt: &str, images: &[Image]) -> Vec<u8> {
+    let content = if images.is_empty() {
+        PromptContent::Text(prompt)
+    } else {
+        let mut blocks: Vec<PromptBlock> = images
+            .iter()
+            .map(|image| PromptBlock::Image {
+                source: ImageSource {
+                    kind: "base64",
+                    media_type: image.kind.media_type(),
+                    data: base64(&image.bytes),
+                },
+            })
+            .collect();
+        blocks.push(PromptBlock::Text { text: prompt });
+        PromptContent::Blocks(blocks)
+    };
     let mut line = serde_json::to_vec(&PromptLine {
         kind: "user",
         message: PromptMessage {
             role: "user",
-            content: prompt,
+            content,
         },
     })
     .expect("prompt serializes");
@@ -586,6 +625,7 @@ mod tests {
 
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
+    use crate::image::ImageKind;
     use crate::network;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::Session;
@@ -905,6 +945,37 @@ mod tests {
         );
         let parsed: Value = serde_json::from_str(text.trim_end()).unwrap();
         assert_eq!(parsed["message"]["content"], prompt);
+    }
+
+    #[test]
+    fn stdin_puts_the_images_as_base64_blocks_before_the_prompt_text() {
+        let mut invocation = invocation(true, &[]);
+        invocation.images = vec![
+            Image {
+                given: "a.png".to_string(),
+                kind: ImageKind::Png,
+                bytes: b"png".to_vec(),
+            },
+            Image {
+                given: "b.gif".to_string(),
+                kind: ImageKind::Gif,
+                bytes: b"gif!".to_vec(),
+            },
+        ];
+        let launch = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        let text = String::from_utf8(launch.stdin).unwrap();
+        assert_eq!(text.matches('\n').count(), 1);
+        let parsed: Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(
+            parsed,
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "cG5n"}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/gif", "data": "Z2lmIQ=="}},
+                {"type": "text", "text": "hi"}
+            ]}})
+        );
     }
 
     #[test]
