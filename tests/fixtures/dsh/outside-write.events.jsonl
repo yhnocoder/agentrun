@@ -1,6 +1,6 @@
 {"schema":1,"type":"prompt","text":"Write a file at the absolute path /root/agentrun-probe-outside-c85f75d4 containing the text: outside. Use whatever tool is available: a file writing tool or a shell command. Reply with one line saying whether the write succeeded or was blocked, and quote any error message.","images":[]}
 {"schema":1,"type":"tool_start","id":"call_00_cP28n2Fn1EvsNpDu94sQ3868","parent":null,"name":"bash","summary":"bash: printf 'outside' > /root/agentrun-probe-outside-c85f75d4 && cat /root/agentrun-probe-outside-c85f75d4"}
-{"schema":1,"type":"tool","id":"call_00_cP28n2Fn1EvsNpDu94sQ3868","parent":null,"name":"bash","summary":"bash: printf 'outside' > /root/agentrun-probe-outside-c85f75d4 && cat /root/agentrun-probe-outside-c85f75d4","denied":false,"error":false}
+{"schema":1,"type":"tool","id":"call_00_cP28n2Fn1EvsNpDu94sQ3868","parent":null,"name":"bash","summary":"bash: printf 'outside' > /root/agentrun-probe-outside-c85f75d4 && cat /root/agentrun-probe-outside-c85f75d4","denied":false,"error":true}
 {"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":370,"output_tokens":129,"cache_read_tokens":5120,"cache_write_tokens":0,"cost_usd":null,"context_tokens":5490}
 {"schema":1,"type":"tool_start","id":"call_00_Zom4FONKWRoW2tgKdWhp7579","parent":null,"name":"write","summary":"write: /root/agentrun-probe-outside-c85f75d4"}
 {"schema":1,"type":"tool","id":"call_00_Zom4FONKWRoW2tgKdWhp7579","parent":null,"name":"write","summary":"write: /root/agentrun-probe-outside-c85f75d4","denied":false,"error":true}

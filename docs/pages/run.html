@@ -39,7 +39,7 @@
     <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>MIN_VERSION</code>、<code>Model</code>、<code>parse_model</code>、<code>model_service</code>、<code>session_state</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
     <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
     <tr><td><code>src/runtime/dsh.rs</code></td><td><code>Dsh</code>、<code>MIN_VERSION</code>、<code>KEY_VARIABLE</code>、<code>REMOVED_PREFIX</code>、<code>service_host</code>、<code>saved_session</code>、<code>login_outcome</code></td><td>dsh</td></tr>
-    <tr><td><code>src/transcript.rs</code></td><td><code>Saved</code>、<code>Transcript</code>、<code>store</code>、<code>create_store</code>、<code>locate</code>、<code>find_file</code>、<code>find_file_within</code>、<code>copy_into</code>、<code>copy_dir_into</code>、<code>save</code></td><td>保存与继续会话</td></tr>
+    <tr><td><code>src/transcript.rs</code></td><td><code>Saved</code>、<code>Transcript</code>、<code>SaveError</code>、<code>store</code>、<code>create_store</code>、<code>locate</code>、<code>find_file</code>、<code>find_file_within</code>、<code>copy_into</code>、<code>copy_dir_into</code>、<code>save</code></td><td>保存与继续会话</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code>、<code>selected</code>、<code>COMMAND_TIMEOUT</code>、<code>USAGE_EXIT_CODE</code></td><td>doctor 检查</td></tr>
     <tr><td><code>src/image.rs</code></td><td><code>Image</code>、<code>ImageKind</code>、<code>read_images</code>、<code>write_copies</code></td><td>图片</td></tr>
     <tr><td><code>src/encoding.rs</code></td><td><code>base64</code></td><td>图片</td></tr>
@@ -58,8 +58,8 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><th>选项</th><th>含义</th><th>默认</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>--cwd DIR</code></td><td>会话的工作目录，必须存在。沙箱运行时，它与会话临时目录是 agent 仅有的可写目录</td><td>当前目录</td></tr>
-    <tr><td><code>--prompt TEXT</code></td><td>提示词</td><td>无</td></tr>
+    <tr><td><code>--cwd DIR</code></td><td>会话的工作目录，必须存在。agentrun 把它解析为真实路径（展开符号链接），运行时、沙箱、claude-code 的放行规则与 <code>start</code> 事件都用这个路径，理由：bwrap 不能把目录挂载到符号链接上，claude-code 按真实路径匹配放行规则。沙箱运行时，它与会话临时目录是 agent 仅有的可写目录</td><td>当前目录</td></tr>
+    <tr><td><code>--prompt TEXT</code></td><td>提示词。以 <code>-</code> 开头的值也是提示词，例如以 Markdown 列表开头的任务。<code>--prompt</code> 后面的参数是 agentrun 运行子命令的长选项（例如 <code>--dry-run</code>，或带 <code>=值</code> 的写法）或 <code>--</code> 时是用法错误，<code>detail</code> 为 <code>--prompt is followed by the option --dry-run; to use it as the prompt, write --prompt=--dry-run</code>；要用这样的提示词时写成 <code>--prompt=--dry-run</code>。理由：脚本里没加引号的空变量会让 <code>--prompt</code> 吞掉后面的选项，运行照常开始</td><td>无</td></tr>
     <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词。与 <code>--prompt</code> 同时给出是用法错误</td><td>无</td></tr>
     <tr><td><code>--image FILE</code></td><td>与提示词一起交给模型的图片，可重复，见<a href="#images">图片</a>。dsh 不支持，给出时是用法错误</td><td>无</td></tr>
     <tr><td>标准输入</td><td>前两项都没给时从标准输入读提示词。标准输入是终端时不等待，直接报用法错误；提示词为空也是用法错误</td><td></td></tr>
@@ -163,7 +163,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 <ul>
   <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。目录在所有启动前检查通过之后才创建，<code>--dry-run</code> 与被拒绝的运行不创建目录。<code>DIR</code> 要放在工作目录与会话临时目录之外：沙箱里的 agent 能写这两处，<code>DIR</code> 在里面时 agent 能改写已保存的会话。沙箱运行、<code>DIR</code> 等于或在工作目录之内时（与 <code>--deny-read</code> 相同的包含判断，见<a href="isolation.html#read">读取限制</a>；判断在创建 <code>DIR</code> 之后进行，所以 <code>DIR</code> 总是跟随符号链接展开后比较，第一次使用时也一样），运行照常进行，text 与 rich 格式在 <code>start</code> 的位置输出一行 <code>[note] --session-dir DIR is inside the working directory. The agent can change the saved sessions</code>；jsonl 格式没有这一行。不拒绝运行，理由：调用方可能有意把会话放在工作目录里，例如沙箱之外另有隔离时。会话临时目录每次新建、名字随机，<code>DIR</code> 不会在它里面，所以不检查。沙箱没有运行时不输出这一行，沙箱关闭的 <code>[note]</code> 已经说明 agentrun 不限制写入。</li>
   <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件；dsh 的记录是一个目录，找名为 <code>session-ID</code> 的目录。ID 必须是完整的会话 id，四个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>；这个 id 在 <code>DIR</code> 里另一个运行时的子目录里找得到时，后面再加 <code>; it was saved by &lt;运行时名&gt;, continue it with agentrun &lt;运行时名&gt;</code>，按 claude-code、codex、pi、dsh 的顺序取第一个找到的。</li>
-  <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。源与目标不在同一个文件系统时先复制再删除源。</li>
+  <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;. The session is kept in &lt;路径&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。保存先把新记录放到目标旁边的 <code>.&lt;文件名&gt;.agentrun-saving</code>（同一个文件系统时改名，不在同一个文件系统时复制），完整放好之后才替换已保存的旧记录：文件直接改名覆盖，目录先把旧目录改名为 <code>.&lt;目录名&gt;.agentrun-replaced</code>，新目录改名到位后再删除旧目录。放置或替换失败时已保存的旧记录不变，放了一半的副本被删除，这一行末尾列出还没有保存的记录现在所在的路径，记录改名到暂存位置后替换失败时改回原处，会话临时目录与 codex 的私有目录在结束时保留，不删除。保存在两次改名之间中断时会留下 <code>.&lt;目录名&gt;.agentrun-replaced</code>，之后的 <code>--resume</code> 查找与保存在目标不存在时把它改回原名，目标存在时删除它。理由：继续会话后旧记录与新记录同名，先删旧记录再复制时，磁盘满或复制出错会同时丢掉两份。</li>
   <li>继续时 claude-code、codex 与 pi 的 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）；dsh 的 <code>--cwd</code> 必须与第一次相同，见下表。<code>--model</code> 等选项每次照常传给运行时。</li>
   <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex、pi 与 dsh 后结束的那次覆盖先结束的那次。</li>
 </ul>
@@ -186,7 +186,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 
 <h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
-<p>按当前环境检查运行时能否使用。不写运行时时检查全部四个，顺序固定为 claude-code、codex、pi、dsh。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
+<p>按当前环境检查运行时能否使用。不写运行时时检查全部四个，顺序固定为 claude-code、codex、pi、dsh。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--model</code> 只由 pi 与 dsh 的检查使用：pi 的登录检查把它与实际使用的模型比较，dsh 的登录检查用它调用一次模型；claude-code 与 codex 的登录检查不调用模型，不检查模型名是否存在；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
 <table>
   <thead>
     <tr><th>检查项</th><th>通过条件</th></tr>
@@ -564,7 +564,7 @@ agentrun variables: (none)</div>
     <tr><td>没有对应的原始事件</td><td><code>prompt</code>：dsh 不回显提示词，agentrun 在 <code>start</code> 之后用自己传入的提示词输出</td></tr>
     <tr><td><code>session</code></td><td>不输出；<code>sessionId</code> 去掉 <code>session-</code> 前缀是会话 id，见<a href="#sessions">保存与继续会话</a></td></tr>
     <tr><td><code>tool_call</code></td><td><code>tool_start</code>：<code>id</code> 为 <code>callId</code>，<code>name</code> 为 <code>tool</code>，<code>parent</code> 为 null，summary 由 <code>input</code> 计算</td></tr>
-    <tr><td><code>tool_result</code></td><td><code>tool</code>：<code>id</code> 为 <code>callId</code>，<code>denied</code> 为 false；<code>status</code> 为 <code>error</code> 时 <code>error</code> 为 true，为 <code>completed</code> 时为 false，其他值为 null</td></tr>
+    <tr><td><code>tool_result</code></td><td><code>tool</code>：<code>id</code> 为 <code>callId</code>，<code>denied</code> 为 false；<code>status</code> 为 <code>error</code> 时 <code>error</code> 为 true；为 <code>completed</code> 时，<code>bash</code> 与 <code>pwsh</code> 的 <code>error</code> 按 <code>result</code> 末尾的退出标记判定，<code>[exit code: N]</code> 的 N 不为 0 或有 <code>[killed by signal: X]</code> 时为 true，没有标记或 N 为 0 时为 false，<code>result</code> 不是字符串时为 null，其他工具为 false；<code>status</code> 为其他值时为 null。理由：dsh 在命令退出码不为 0 时也报 <code>completed</code>，claude-code 与 pi 对同样的命令报告出错，dsh 只在 <code>result</code> 末尾写出退出码，没有退出码时表示命令正常退出（0.2.1-rc.2 的 <code>@deepseek-ai/dsh-shell</code>）</td></tr>
     <tr><td><code>text</code></td><td><code>text</code>，空字符串不输出。dsh 输出的是一段完整的文字，不是增量</td></tr>
     <tr><td><code>status</code>，<code>phase</code> 为 <code>step_end</code> 且带 <code>usage</code></td><td><code>usage</code>：<code>inputTokens</code>、<code>outputTokens</code>、<code>cacheReadTokens</code>、<code>cacheWriteTokens</code> 对应四个字段（<code>inputTokens</code> 不含缓存命中，实测）。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null；dsh 不报告费用，<code>cost_usd</code> 为 null。模型请求失败的那一步没有 <code>usage</code>，不输出</td></tr>
     <tr><td><code>status</code>，<code>phase</code> 为 <code>turn_end</code></td><td>不输出；<code>reason</code> 用于失败判定</td></tr>
