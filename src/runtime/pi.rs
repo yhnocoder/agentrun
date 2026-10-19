@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, detail_head, reject_max_turns};
+use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, reject_max_turns};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::proxy_environment;
@@ -13,6 +13,7 @@ use crate::sandbox::{self, PiState};
 use crate::session::Session;
 use crate::transcript::{Transcript, copy_into, create_store, find_file};
 
+pub(crate) const MIN_VERSION: Version = Version(1, 0, 1);
 const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const STATE_HOME_SUBDIR: &str = ".pi/agent";
 const SERVICE_HOSTS: [(&str, &str); 5] = [
@@ -467,6 +468,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["output"].as_u64(),
         cache_read_tokens: usage["cacheRead"].as_u64(),
         cache_write_tokens: usage["cacheWrite"].as_u64(),
+        cost_usd: usage["cost"]["total"].as_f64(),
     }
 }
 
@@ -1452,6 +1454,7 @@ mod tests {
                         output_tokens: Some(2),
                         cache_read_tokens: Some(5),
                         cache_write_tokens: Some(0),
+                        cost_usd: Some(0.1),
                     },
                 }
             ]

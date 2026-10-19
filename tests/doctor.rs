@@ -21,10 +21,10 @@ use support::WebServer;
 use support::env::{Env, WAIT_LIMIT, poll_until, wait_until};
 use support::process::{describe, process_is_gone};
 
-const CLAUDE_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s\\n' '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'; exit 0; fi\nexit 0\n";
+const CLAUDE_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '2.1.288 (Claude Code)'; exit 0; fi\nif [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s\\n' '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'; exit 0; fi\nexit 0\n";
 const PI_DEEPSEEK: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"system\"}}'\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"deepseek-flash\"}}'\n/bin/sleep 30\n";
-const PI_UNKNOWN_MODEL: &str = "#!/bin/sh\necho 'Warning: Model \"no-such-model\" not found for provider \"deepseek\". Using custom model id.' >&2\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"no-such-model\"}}'\n/bin/sleep 30\n";
-const CODEX_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = sandbox ]; then while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"; fi\nexit 0\n";
+const PI_UNKNOWN_MODEL: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\necho 'Warning: Model \"no-such-model\" not found for provider \"deepseek\". Using custom model id.' >&2\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"no-such-model\"}}'\n/bin/sleep 30\n";
+const CODEX_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.159.2'; exit 0; fi\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = sandbox ]; then while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"; fi\nexit 0\n";
 
 fn doctor(env: &Env, args: &[&str]) -> Command {
     let mut command = env.command(&[&["doctor"], args].concat());
@@ -211,7 +211,7 @@ fn claude_code_login_reports_token_auth_method_and_failures() {
     assert_eq!(
         line_for(&lines, "claude-code", "executable"),
         format!(
-            "[ok]   claude-code  executable  {}",
+            "[ok]   claude-code  executable  {} 2.1.288",
             env.bin().join("claude").display()
         )
     );
@@ -262,6 +262,103 @@ fn claude_code_login_reports_token_auth_method_and_failures() {
     assert_eq!(
         line_for(&stdout_lines(&output), "claude-code", "login"),
         "[fail] claude-code  login       claude auth status failed: not json"
+    );
+    assert!(env.leftovers().is_empty());
+}
+
+#[test]
+fn executable_check_compares_the_runtime_version() {
+    let env = Env::new();
+    let claude = env.bin().join("claude");
+    env.install(
+        "claude",
+        &CLAUDE_LOGGED_IN.replace("2.1.288 (Claude Code)", "2.1.287 (Claude Code)"),
+    );
+    let output = run(&env, &["claude-code", "--sandbox", "off", "--debug"]);
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stdout_lines(&output);
+    assert_eq!(
+        line_for(&lines, "claude-code", "executable"),
+        format!(
+            "[fail] claude-code  executable  {} 2.1.287, requires >= 2.1.288",
+            claude.display()
+        )
+    );
+    assert_eq!(
+        line_for(&lines, "claude-code", "login"),
+        "[ok]   claude-code  login       claude.ai"
+    );
+    let debug = stderr(&output);
+    assert!(
+        debug.contains(&format!(
+            "[debug] claude-code executable command: {} --version\n",
+            claude.display()
+        )),
+        "{debug}"
+    );
+    std::fs::remove_dir_all(kept_dir(&debug)).unwrap();
+
+    env.install(
+        "claude",
+        &CLAUDE_LOGGED_IN.replace("2.1.288 (Claude Code)", "dev build"),
+    );
+    let output = run(&env, &["claude-code", "--sandbox", "off"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        line_for(&stdout_lines(&output), "claude-code", "executable"),
+        format!(
+            "[ok]   claude-code  executable  {}, version not recognized: dev build",
+            claude.display()
+        )
+    );
+
+    env.install(
+        "codex",
+        &CODEX_LOGGED_IN.replace("codex-cli 0.159.2", "codex-cli 0.160.0-alpha.3"),
+    );
+    write_home(&env, ".codex/auth.json", "{}");
+    env.install(
+        "pi",
+        "#!/bin/sh\ncase \"$1\" in --version) echo 0.9.12 >&2; exit 0;; esac\nexit 3\n",
+    );
+    let output = run(&env, &["codex", "pi", "--sandbox", "off"]);
+    let lines = stdout_lines(&output);
+    assert_eq!(
+        line_for(&lines, "codex", "executable"),
+        format!(
+            "[ok]   codex        executable  {} 0.160.0",
+            env.bin().join("codex").display()
+        )
+    );
+    assert_eq!(
+        line_for(&lines, "pi", "executable"),
+        format!(
+            "[fail] pi           executable  {} 0.9.12, requires >= 1.0.1",
+            env.bin().join("pi").display()
+        )
+    );
+
+    env.install(
+        "pi",
+        "#!/bin/sh\nprintf '%s\\n' 'node:internal/modules/cjs/loader:1386' '  throw err;' '  ^' '' \"Error: Cannot find module '/nonexistent/cli.js'\" '    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)' '' 'Node.js v22.22.0' >&2\nexit 1\n",
+    );
+    env.install("codex", "#!/bin/sh\nexit 2\n");
+    let output = run(&env, &["codex", "pi", "--sandbox", "off"]);
+    assert_eq!(output.status.code(), Some(1));
+    let lines = stdout_lines(&output);
+    assert_eq!(
+        line_for(&lines, "pi", "executable"),
+        format!(
+            "[fail] pi           executable  {}: --version exited with code 1: Error: Cannot find module '/nonexistent/cli.js'",
+            env.bin().join("pi").display()
+        )
+    );
+    assert_eq!(
+        line_for(&lines, "codex", "executable"),
+        format!(
+            "[fail] codex        executable  {}: --version exited with code 2",
+            env.bin().join("codex").display()
+        )
     );
     assert!(env.leftovers().is_empty());
 }
@@ -446,6 +543,13 @@ fn pi_login_times_out_when_pi_hangs() {
     assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(code, 1);
     let text = String::from_utf8(stdout.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains(&format!(
+            "[fail] pi           executable  {}: pi did not finish within 1 seconds\n",
+            env.bin().join("pi").display()
+        )),
+        "{text}"
+    );
     assert!(
         text.contains("[fail] pi           login       pi did not finish within 1 seconds\n"),
         "{text}"
@@ -922,7 +1026,7 @@ fn json_output_is_one_array_after_all_checks() {
             "runtime": "claude-code",
             "check": "executable",
             "status": "ok",
-            "detail": env.bin().join("claude").to_str().unwrap(),
+            "detail": format!("{} 2.1.288", env.bin().join("claude").display()),
         })
     );
     assert_eq!(
@@ -943,7 +1047,10 @@ fn interrupt_during_pi_login(env: &Env, json: bool) -> Output {
     let marker = env.root().join("started");
     env.install(
         "pi",
-        &format!("#!/bin/sh\necho $$ > {}\n/bin/sleep 30\n", marker.display()),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\necho $$ > {}\n/bin/sleep 30\n",
+            marker.display()
+        ),
     );
     let mut args = vec!["pi", "--sandbox", "off"];
     if json {
@@ -984,7 +1091,7 @@ fn sigint_kills_the_check_and_keeps_the_finished_lines() {
     assert_eq!(
         stdout_lines(&output),
         [format!(
-            "[ok]   pi           executable  {}",
+            "[ok]   pi           executable  {} 1.0.1",
             env.bin().join("pi").display()
         )]
     );

@@ -31,7 +31,7 @@
   </thead>
   <tbody>
     <tr><td><code>src/output/event.rs</code></td><td><code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>ToolStart</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code>）、<code>EndStatus</code>、<code>Signal</code></td><td>统一事件流、end.status</td></tr>
-    <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code></td><td>用量、text 格式里的用量写法</td></tr>
+    <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code>、<code>cost</code></td><td>用量与费用、text 格式里的用量与费用写法</td></tr>
     <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>）、<code>Record</code>、<code>Translated</code></td><td>tool_start 与 tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
     <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
     <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
@@ -109,6 +109,7 @@ interface UsageEvent extends EventBase {
   output_tokens: number | null
   cache_read_tokens: number | null
   cache_write_tokens: number | null
+  cost_usd: number | null            // 这次调用的费用，单位美元
   context_tokens: number | null      // input_tokens、cache_read_tokens、cache_write_tokens 之和，即送进模型的全部上下文；三项有一项为 null 时为 null
 }
 
@@ -158,6 +159,7 @@ interface TokenCounts {
   output_tokens: number | null
   cache_read_tokens: number | null
   cache_write_tokens: number | null
+  cost_usd: number | null     // 单位美元
 }
 
 interface Usage extends TokenCounts {
@@ -234,6 +236,7 @@ interface Usage extends TokenCounts {
   "output_tokens": 85,
   "cache_read_tokens": 9800,
   "cache_write_tokens": 1200,
+  "cost_usd": null,
   "context_tokens": 14120
 }
 {
@@ -248,12 +251,14 @@ interface Usage extends TokenCounts {
     "output_tokens": 85,
     "cache_read_tokens": 9800,
     "cache_write_tokens": 1200,
+    "cost_usd": null,
     "by_model": {
       "claude-haiku-4-5": {
         "input_tokens": 3120,
         "output_tokens": 85,
         "cache_read_tokens": 9800,
-        "cache_write_tokens": 1200
+        "cache_write_tokens": 1200,
+        "cost_usd": null
       }
     }
   }
@@ -297,18 +302,21 @@ interface Usage extends TokenCounts {
     "output_tokens": 912,
     "cache_read_tokens": 42000,
     "cache_write_tokens": 5100,
+    "cost_usd": 0.0436916,
     "by_model": {
       "claude-sonnet-5-5": {
         "input_tokens": 15114,
         "output_tokens": 827,
         "cache_read_tokens": 32200,
-        "cache_write_tokens": 3900
+        "cache_write_tokens": 3900,
+        "cost_usd": 0.0384916
       },
       "claude-haiku-4-5": {
         "input_tokens": 3120,
         "output_tokens": 85,
         "cache_read_tokens": 9800,
-        "cache_write_tokens": 1200
+        "cache_write_tokens": 1200,
+        "cost_usd": 0.0052
       }
     }
   },
@@ -340,7 +348,24 @@ interface Usage extends TokenCounts {
   <li>运行时自己生成、没有调用模型的消息（claude-code 里 model 为 <code>&lt;synthetic&gt;</code> 的错误文字）不输出 <code>usage</code>。</li>
 </ul>
 <p><code>end.usage</code> 取运行时自己报告的整次运行总量；运行时没有总量时（pi、codex）取全部 <code>usage</code> 事件的合计。claude-code 的总量里有它内部的一笔 haiku 调用（auto 模式的分类器），这笔调用没有对应的 <code>usage</code> 事件，所以 <code>end.usage</code> 可能大于 <code>usage</code> 事件之和。理由：与实际计费一致。<code>subagent_end.usage</code> 是 parent 链上属于这个 subagent 的 <code>usage</code> 事件之和，只用于展示，已经包含在 <code>end.usage</code> 里。</p>
-<p><code>end.usage</code> 的字段为 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>，另有 <code>by_model</code> 按模型给出同样的四个字段，模型未知时键为 <code>unknown</code>。所有来源都没报告的字段为 null；一次运行没有任何用量时四个总量为 null，<code>by_model</code> 为 <code>{}</code>。</p>
+<p><code>end.usage</code> 的字段为 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code>、<code>cost_usd</code>，另有 <code>by_model</code> 按模型给出同样的五个字段，模型未知时键为 <code>unknown</code>。合计只加非 null 的值，所有来源都没报告的字段为 null；一次运行没有任何用量时五个总量为 null，<code>by_model</code> 为 <code>{}</code>。</p>
+<h3 id="cost">费用</h3>
+<p><code>cost_usd</code> 是运行时自己报告的费用，单位美元，agentrun 不按单价计算。三个运行时报告的范围不同：</p>
+<table>
+  <thead>
+    <tr><th>运行时</th><th><code>usage</code> 事件</th><th><code>end.usage</code></th><th><code>subagent_end.usage</code></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>claude-code</td><td>null，逐次调用的用量里没有费用</td><td>总量取最后一个 result 的 <code>total_cost_usd</code>，<code>by_model</code> 取 <code>modelUsage</code> 各模型的 <code>costUSD</code>。总量用运行时自己的合计，与 token 字段不同，不保证等于 <code>by_model</code> 之和；样本里两者相等</td><td>null</td></tr>
+    <tr><td>pi</td><td>这次调用的 <code>usage.cost.total</code></td><td><code>usage</code> 事件之和</td><td>没有 subagent</td></tr>
+    <tr><td>codex</td><td>null</td><td>null</td><td>没有这个事件</td></tr>
+  </tbody>
+</table>
+<ul>
+  <li>claude-code 在输出第一个 result 之前结束时（例如第一轮还没完成就被中断或超时），<code>end.usage</code> 取 <code>usage</code> 事件的合计，<code>cost_usd</code> 为 null。<code>modelUsage</code> 为空时 <code>cost_usd</code> 也为 null，与 token 字段一致，即使 <code>total_cost_usd</code> 为 0。</li>
+  <li>claude-code 与 pi 都按自己的单价表计算。claude-code 用订阅登录时同样给出按单价表计算的金额（<code>modelUsage</code> 的 <code>costBasis</code> 为 <code>list</code>），与订阅的实际扣费无关。</li>
+  <li>合计是浮点数相加，jsonl 输出原始值，不做舍入。</li>
+</ul>
 
 <h2 id="status">end.status</h2>
 <p>按表中从上到下的顺序取第一个成立的状态。理由：超时或被中断时，运行时可能已经输出了失败事件（例如 claude-code 收到 SIGINT 后的 result 为错误），这时调用方需要知道的是超时或中断。</p>
@@ -374,7 +399,7 @@ interface Usage extends TokenCounts {
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net denied 主机:端口 (原因)</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
-  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、<code>session 会话id</code>（<code>session_id</code> 不为 null 时）与 <code>detail</code>；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、费用、<code>session 会话id</code>（<code>session_id</code> 不为 null 时）与 <code>detail</code>；费用写成 <code>$</code> 加四位小数，例如 <code>$0.0437</code>，<code>end.usage.cost_usd</code> 为 null 时省去；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
   <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
   <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
   <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
@@ -395,7 +420,7 @@ interface Usage extends TokenCounts {
 <span class="dim">[general-purpose#2]</span> agent finished 20.8s claude-sonnet-5-5  in 9.4k  out 0.5k
 <span class="dim">[main]</span> tool Bash: cargo test
 <span class="dim">[main]</span> text 修复了 parse_line 对空行的处理，测试全部通过。
-<span class="dim">[end]</span> finished 31.3s  in 65.3k  out 0.9k  cached 64%</div>
+<span class="dim">[end]</span> finished 31.3s  in 65.3k  out 0.9k  cached 64%  $0.0437</div>
 
 <h2>rich 格式</h2>
 <p><code>--format rich</code> 在终端里显示动态界面，分三个区域。标准输出不是终端时，<code>rich</code> 按 <code>text</code> 输出。</p>

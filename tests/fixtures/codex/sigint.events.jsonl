@@ -2,4 +2,4 @@
 {"schema":1,"type":"text","parent":null,"text":"I’ll create counting.txt with all 1,500 integers in a single file-writing call.\n"}
 {"schema":1,"type":"tool_start","id":"item_1","parent":null,"name":"file_change","summary":"patch: counting.txt"}
 {"schema":1,"type":"tool","id":"item_1","parent":null,"name":"file_change","summary":"patch: counting.txt","denied":false}
-{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"codex failed without an error message","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":"I’ll create counting.txt with all 1,500 integers in a single file-writing call.\n","session_id":null}
+{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"codex failed without an error message","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}},"result":"I’ll create counting.txt with all 1,500 integers in a single file-writing call.\n","session_id":null}

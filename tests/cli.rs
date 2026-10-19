@@ -47,7 +47,7 @@ fn assert_rejected(output: &Output) -> String {
     assert_eq!(end["result"], Value::Null);
     assert_eq!(
         end["usage"],
-        serde_json::json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "by_model": {}})
+        serde_json::json!({"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "cost_usd": null, "by_model": {}})
     );
     let detail = end["detail"].as_str().unwrap().to_string();
     assert!(!detail.is_empty());
