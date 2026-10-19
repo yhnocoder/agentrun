@@ -637,4 +637,6 @@ fn session_dir_inside_the_working_directory_gets_a_note() {
     assert_eq!(stdout.lines().next(), Some(note.as_str()), "{stdout}");
     let stdout = text_run(&env.root().join("outside"));
     assert!(!stdout.contains("[note]"), "{stdout}");
+    let stdout = text_run(&env.work().join("../outside-by-parent/sessions"));
+    assert!(!stdout.contains("[note]"), "{stdout}");
 }
