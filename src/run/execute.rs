@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::signal::Signals;
+use super::signal::{LimitStop, Signals};
 use super::{Caller, Guards, Resources, create_raw, elapsed_ms};
 use crate::cli::Runtime;
 use crate::network::{FilterProxy, Policy};
@@ -33,7 +33,12 @@ pub struct Exit {
     pub code: Option<i32>,
     pub signal: Option<Signal>,
     pub timed_out: bool,
-    pub limit: Option<String>,
+    pub limit: Option<Reached>,
+}
+
+pub struct Reached {
+    pub stop: LimitStop,
+    pub detail: String,
 }
 
 #[derive(Clone, Copy)]
@@ -306,7 +311,7 @@ struct Relay<'a> {
     debug: bool,
     rich_stderr: bool,
     limits: Limits,
-    limit: Option<String>,
+    limit: Option<Reached>,
 }
 
 impl<'a> Relay<'a> {
@@ -366,9 +371,9 @@ impl<'a> Relay<'a> {
             self.caller.signals.kill_group();
         } else if self.limit.is_none()
             && let Some(detail) = self.limits.exceeded(&self.aggregator)
-            && self.caller.signals.stop_for_limit()
+            && let Some(stop) = self.caller.signals.stop_for_limit()
         {
-            self.limit = Some(detail);
+            self.limit = Some(Reached { stop, detail });
         }
     }
 
@@ -562,9 +567,12 @@ pub fn conclude(
     let (status, detail) = match (exit.signal, exit.timed_out, &exit.limit) {
         (Some(signal), _, _) => (EndStatus::Interrupted(signal), String::new()),
         (None, true, _) => (EndStatus::Timeout, String::new()),
+        (None, false, Some(limit)) if limit.stop == LimitStop::Terminated => {
+            (EndStatus::Limit, limit.detail.clone())
+        }
         (None, false, limit) => match (adapter.failure(exit.code), limit) {
             (None, _) => (EndStatus::Finished, String::new()),
-            (Some(_), Some(limit)) => (EndStatus::Limit, limit.clone()),
+            (Some(_), Some(limit)) => (EndStatus::Limit, limit.detail.clone()),
             (Some(Failure::Message(detail)), None) => (EndStatus::Failed, detail),
             (Some(Failure::Unexplained), None) => (
                 EndStatus::Failed,
@@ -718,33 +726,44 @@ mod tests {
     }
 
     #[test]
-    fn limit_comes_after_signals_and_timeout_and_only_replaces_a_failure() {
-        let exit = |signal, timed_out, limit: Option<&str>| Exit {
+    fn limit_comes_after_signals_and_timeout_and_after_exit_only_replaces_a_failure() {
+        let exit = |signal, timed_out, stop: Option<LimitStop>| Exit {
             code: None,
             signal,
             timed_out,
-            limit: limit.map(str::to_string),
+            limit: stop.map(|stop| Reached {
+                stop,
+                detail: "over".to_string(),
+            }),
         };
         let failed = || Some(Failure::Message("failed".to_string()));
+        let terminated = Some(LimitStop::Terminated);
+        let after_exit = Some(LimitStop::AfterExit);
         assert_eq!(
-            status(exit(Some(Signal::Interrupt), false, Some("over")), failed()),
+            status(exit(Some(Signal::Interrupt), false, terminated), failed()),
             (EndStatus::Interrupted(Signal::Interrupt), String::new())
         );
         assert_eq!(
-            status(exit(None, true, Some("over")), failed()),
+            status(exit(None, true, terminated), failed()),
             (EndStatus::Timeout, String::new())
         );
+        for stop in [terminated, after_exit] {
+            assert_eq!(
+                status(exit(None, false, stop), failed()),
+                (EndStatus::Limit, "over".to_string())
+            );
+        }
         assert_eq!(
-            status(exit(None, false, Some("over")), failed()),
+            status(exit(None, false, terminated), None),
             (EndStatus::Limit, "over".to_string())
+        );
+        assert_eq!(
+            status(exit(None, false, after_exit), None),
+            (EndStatus::Finished, String::new())
         );
         assert_eq!(
             status(exit(None, false, None), failed()),
             (EndStatus::Failed, "failed".to_string())
-        );
-        assert_eq!(
-            status(exit(None, false, Some("over")), None),
-            (EndStatus::Finished, String::new())
         );
     }
 
