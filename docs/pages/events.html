@@ -322,7 +322,7 @@ interface Usage extends TokenCounts {
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
 <h3>tool 事件在调用结束时输出</h3>
-<p><code>tool</code> 在收到这次调用的结果时输出，因为调用是否被拒绝要在调用之后才知道。运行时结束时还没有结果的调用，在 <code>end</code> 之前补发。被拒绝的调用不改变 <code>end.status</code>：运行时会把拒绝结果交还模型，由模型决定下一步，是否算失败由调用方根据 <code>denied</code> 判断。不提供「被拒绝即停止」的选项。</p>
+<p><code>tool</code> 在收到这次调用的结果时输出，因为调用是否被拒绝、是否出错要在调用之后才知道。运行时结束时还没有结果的调用，在 <code>end</code> 之前补发。被拒绝的调用不改变 <code>end.status</code>：运行时会把拒绝结果交还模型，由模型决定下一步，是否算失败由调用方根据 <code>denied</code> 判断。不提供「被拒绝即停止」的选项。</p>
 <p>调用开始时先输出 <code>tool_start</code>，调用方据此显示正在执行的工具。同一次调用的 <code>tool_start</code> 与 <code>tool</code> 的 <code>id</code>、<code>parent</code>、<code>name</code>、<code>summary</code> 相同，<code>parent</code> 在调用开始时按已经启动的 subagent 确定，结束时沿用。每个 <code>tool_start</code> 之后都有一个同 <code>id</code> 的 <code>tool</code>，包括在 <code>end</code> 之前补发的。运行时只在调用结束时才报告这次调用的，<code>tool_start</code> 与 <code>tool</code> 一起输出。</p>
 <p><code>denied</code> 只表示运行时权限机制的拒绝，例如 claude-code 的 auto 模式分类器拒绝一条命令。被沙箱拦下的命令表现为命令出错，<code>denied</code> 为 false，<code>error</code> 为 true。pi 没有权限机制，<code>denied</code> 恒为 false。</p>
 <p><code>error</code> 表示这次调用执行了但出错，例如命令的退出码不为 0、要读的文件不存在。取值来自运行时自己的报告，每个运行时用哪个字段见<a href="run.html">运行</a>页各运行时的输出映射。被拒绝的调用没有执行，<code>error</code> 为 false。理由：claude-code 拒绝一次调用时，交还模型的结果也标为出错，只看 <code>error</code> 会把拒绝算成执行出错。运行时没有报告时 <code>error</code> 为 null，在 <code>end</code> 之前补发的 <code>tool</code> 也为 null。出错的调用同样不改变 <code>end.status</code>，理由与被拒绝的调用相同。</p>
