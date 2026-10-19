@@ -44,10 +44,10 @@ agentrun claude-code &lt; task.md</code></pre>
 <h2 id="images">让 agent 看图片</h2>
 <p>需要模型看截图、设计稿或照片时，用 <code>--image</code> 把图片和提示词一起传入。有多张图片时重复这个选项，模型按你给出的顺序看到它们：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --image screenshot.png --prompt "图里写的是什么？只回答图里的文字。"
-<span class="dim">[main]</span> prompt 图里写的是什么？只回答图里的文字。
+<span class="dim">[main]</span> prompt 图里写的是什么？只回答图里的文字。 (+1 image)
 <span class="dim">[main]</span> text ZEBRA 4721
-<span class="dim">[end]</span> finished 5.3s  in 17.8k  out 0.1k  cached 70%</div>
-<p>图片可以放在任何你能读到的位置，不需要放进工作目录。在 jsonl 输出里，<code>prompt</code> 事件的 <code>images</code> 列出你给的路径，可以用来核对这次运行带了哪些图片：</p>
+<span class="dim">[end]</span> finished 6.3s  in 17.8k  out 26  cached 74%</div>
+<p>text 与 rich 格式在 prompt 一行的末尾写出图片的张数。图片可以放在任何你能读到的位置，不需要放进工作目录。在 jsonl 输出里，<code>prompt</code> 事件的 <code>images</code> 列出你给的路径，可以用来核对这次运行带了哪些图片：</p>
 <pre><code class="language-json">{
   "schema": 1,
   "type": "prompt",
