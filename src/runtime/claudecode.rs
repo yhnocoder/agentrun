@@ -39,7 +39,11 @@ const SYNTHETIC_MODEL: &str = "<synthetic>";
 const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
 const RANDOM_SOURCE: &str = "/dev/urandom";
-const SETTINGS_DENIAL: &str = "denied by your permission settings";
+const TOOL_USE_ERROR_TAG: &str = "<tool_use_error>";
+const SETTINGS_DENIALS: [&str; 2] = [
+    "denied by your permission settings",
+    "Read deny rule in your permission settings",
+];
 
 #[derive(Default)]
 pub struct ClaudeCode {
@@ -538,8 +542,10 @@ pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
 }
 
 fn denied_by_settings(block: &Value) -> bool {
+    let text = joined_text(&block["content"]);
     block["is_error"] == Value::Bool(true)
-        && joined_text(&block["content"]).contains(SETTINGS_DENIAL)
+        && text.starts_with(TOOL_USE_ERROR_TAG)
+        && SETTINGS_DENIALS.iter().any(|denial| text.contains(denial))
 }
 
 fn denied_paths(denied_reads: &[PathBuf]) -> Vec<String> {
@@ -1368,16 +1374,32 @@ mod tests {
                 error: Some(false),
             }]
         );
-        let read_denied = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t4", "is_error": true,
-            "content": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"}]}});
-        assert_eq!(
-            adapter.translate(&read_denied),
-            vec![Record::ToolEnd {
-                id: "t4".to_string(),
-                denied: true,
-                error: Some(true),
-            }]
-        );
+        let results = [
+            (
+                "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>",
+                true,
+            ),
+            (
+                "<tool_use_error>File is covered by a Read deny rule in your permission settings and cannot be written.</tool_use_error>",
+                true,
+            ),
+            (
+                "Exit code 1\nFile is in a directory that is denied by your permission settings.",
+                false,
+            ),
+        ];
+        for (content, denied) in results {
+            let result = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t4", "is_error": true, "content": content}]}});
+            assert_eq!(
+                adapter.translate(&result),
+                vec![Record::ToolEnd {
+                    id: "t4".to_string(),
+                    denied,
+                    error: Some(true),
+                }],
+                "{content}"
+            );
+        }
         let handback = assistant(
             Some("A"),
             "m",
