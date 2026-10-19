@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::cli::Runtime;
+use crate::runtime::dsh;
 
 pub const CODEX_AUTH_VARIABLE: &str = "AGENTRUN_CODEX_AUTH";
 pub const PI_AUTH_VARIABLE: &str = "AGENTRUN_PI_AUTH";
@@ -105,6 +106,7 @@ fn removed_by(runtime: Runtime, name: &OsStr) -> bool {
             .any(|prefix| name.as_bytes().starts_with(prefix)),
         Runtime::Codex => CODEX_REMOVED.iter().any(|removed| name == *removed),
         Runtime::Pi => false,
+        Runtime::Dsh => name.as_bytes().starts_with(dsh::REMOVED_PREFIX),
     }
 }
 

@@ -1,5 +1,6 @@
 pub mod claudecode;
 pub mod codex;
+pub mod dsh;
 pub mod pi;
 
 use std::ffi::OsString;
@@ -17,6 +18,7 @@ use crate::session::Session;
 use crate::transcript::{Saved, Transcript};
 use claudecode::ClaudeCode;
 use codex::Codex;
+use dsh::Dsh;
 use pi::Pi;
 
 pub const DETAIL_MAX_CHARS: usize = 500;
@@ -37,6 +39,7 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+        Runtime::Dsh => Box::new(Dsh::new()),
     }
 }
 
@@ -80,6 +83,7 @@ pub(crate) fn min_version(runtime: Runtime) -> Version {
         Runtime::ClaudeCode => claudecode::MIN_VERSION,
         Runtime::Codex => codex::MIN_VERSION,
         Runtime::Pi => pi::MIN_VERSION,
+        Runtime::Dsh => dsh::MIN_VERSION,
     }
 }
 
@@ -95,6 +99,7 @@ pub(crate) fn model_service_host(
         Runtime::Pi => pi::model_service(model, pi::user_state_dir(session, cwd).as_deref())
             .host
             .map(str::to_string),
+        Runtime::Dsh => dsh::service_host(session),
     }
 }
 
@@ -107,7 +112,7 @@ pub(crate) fn service_hosts(
     match runtime {
         Runtime::ClaudeCode => Vec::new(),
         Runtime::Codex => codex::SERVICE_HOSTS.map(str::to_string).to_vec(),
-        Runtime::Pi => model_service_host(runtime, model, session, cwd)
+        Runtime::Pi | Runtime::Dsh => model_service_host(runtime, model, session, cwd)
             .into_iter()
             .collect(),
     }
@@ -120,7 +125,7 @@ pub(crate) fn sandbox_state(
 ) -> Result<Option<PiState>, String> {
     match runtime {
         Runtime::Pi => pi::session_state(pi::user_state_dir(session, cwd).as_deref(), false),
-        Runtime::ClaudeCode | Runtime::Codex => Ok(None),
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Dsh => Ok(None),
     }
 }
 
@@ -334,7 +339,12 @@ mod tests {
     fn min_versions_match_the_documented_tables() {
         let run_page = include_str!("../../docs/pages/run.html");
         let quickstart = include_str!("../../docs/pages/quickstart.html");
-        for runtime in [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi] {
+        for runtime in [
+            Runtime::ClaudeCode,
+            Runtime::Codex,
+            Runtime::Pi,
+            Runtime::Dsh,
+        ] {
             let run_item = format!("<li>{}: >= ", runtime.name());
             let documented = run_page
                 .lines()

@@ -25,10 +25,12 @@
 <p class="lead">每一节回答一个「我想做什么」，可以单独读。第一次用 agentrun，先读<a href="quickstart.html">快速开始</a>。全部选项见<a href="run.html">运行</a>。</p>
 
 <h2 id="runtime-model">选择运行时与模型</h2>
-<p>子命令决定运行时：<code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个子命令接受同一组选项，换运行时只需要换子命令。</p>
+<p>子命令决定运行时：<code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>、<code>agentrun dsh</code>。四个子命令接受同一组选项，换运行时只需要换子命令。</p>
 <p>不写 <code>--model</code> 时，运行时用它自己的默认模型。要指定模型，用 <code>--model</code>，值原样交给运行时；推理强度用 <code>--effort</code>：</p>
 <pre><code class="language-bash">agentrun claude-code --model sonnet --effort high --prompt "..."
-agentrun pi --model deepseek/deepseek-flash --prompt "..."</code></pre>
+agentrun pi --model deepseek/deepseek-flash --prompt "..."
+agentrun dsh --model deepseek-v4-pro --effort max --prompt "..."</code></pre>
+<p>dsh 的模型名直接写 DeepSeek 的模型，例如 <code>deepseek-flash</code> 或 <code>deepseek-v4-pro</code>；<code>--effort</code> 取 <code>off</code>、<code>low</code>、<code>high</code>、<code>max</code>。模型名写错时，dsh 在第一次请求模型时失败，<code>detail</code> 以 <code>INVALID_REQUEST:</code> 开头并列出可用的模型。</p>
 <p>pi 的模型必须写成 <code>服务商/模型</code>。pi 找不到指定的模型时会改用别的模型继续运行，所以 agentrun 会在 pi 开始请求之前核对 pi 实际选中的模型，不一致就停止运行。只写模型名会直接报错：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek-flash --format text --prompt hi
 <span class="dim">[end]</span> rejected --model for pi must be provider/model, got 'deepseek-flash'
@@ -55,7 +57,7 @@ agentrun claude-code &lt; task.md</code></pre>
   "text": "图里写的是什么？只回答图里的文字。",
   "images": ["screenshot.png"]
 }</code></pre>
-<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、不是普通文件、类型不对（包括动画 PNG）或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。传法的细节见<a href="run.html#images">图片</a>。</p>
+<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、不是普通文件、类型不对（包括动画 PNG）或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。dsh 不能传图片，给出 <code>--image</code> 时 agentrun 报用法错误 <code>--image is not supported by dsh: its headless mode takes text only</code>。传法的细节见<a href="run.html#images">图片</a>。</p>
 
 <h2 id="network">让 agent 访问网络</h2>
 <p>默认情况下，agent 运行的命令不能联网。运行时自己访问模型服务不受影响。需要联网时有两种放开方式：</p>
@@ -118,6 +120,7 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <span class="dim">[main]</span> tool Bash: echo "Hello! Wishing you a smooth and happy day!" &gt;&gt; /tmp/demo/notes.txt &amp;&amp; cat /tmp/demo/notes.txt
 <span class="dim">[main]</span> text 已把英文翻译追加到 `/tmp/demo/notes.txt`。现在文件内容是:
 <span class="dim">[end]</span> finished 6.9s  in 54.2k  out 0.4k  cached 86%  $0.0347  session e5e30275-bbaf-467c-a1d7-1c3f5e22468c</div>
+<p>用 dsh 时，继续会话要用与第一次相同的 <code>--cwd</code>，换了工作目录时 dsh 报错，这次运行失败，见<a href="#faq">常见问题</a>。</p>
 <p>继续后会话 id 不变，可以一直用同一个 id 接着运行。会话记录按运行时分开保存在 <code>~/agent-sessions/claude-code/</code> 这样的子目录里，只能用同一个子命令继续。<code>--session-dir</code> 放在工作目录之外，否则 agent 能改写保存的会话。不要同时用同一个 id 运行两次。保存的方式见<a href="run.html#sessions">保存与继续会话</a>。</p>
 
 <h2 id="containers">在 docker 与 Cloud Managed 容器里运行</h2>
@@ -131,10 +134,11 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
   -e CLAUDE_CODE_OAUTH_TOKEN \
   -e AGENTRUN_CODEX_AUTH="$(cat ~/.codex/auth.json)" \
   -e AGENTRUN_PI_AUTH="$(cat ~/.pi/agent/auth.json)" \
+  -e DEEPSEEK_API_KEY \
   -v "$PWD":/work -w /work \
   my-agent-image \
   agentrun claude-code --prompt "给 greet.py 写一个测试并运行"</code></pre>
-<p>镜像里要装好 agentrun 和你用的运行时。三个登录变量按需要传：</p>
+<p>镜像里要装好 agentrun 和你用的运行时。登录变量按需要传：</p>
 <table>
   <thead>
     <tr><th>运行时</th><th>环境变量</th><th>内容</th></tr>
@@ -143,6 +147,7 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
     <tr><td>claude-code</td><td><code>CLAUDE_CODE_OAUTH_TOKEN</code></td><td>在本机运行 <code>claude setup-token</code> 得到的令牌</td></tr>
     <tr><td>codex</td><td><code>AGENTRUN_CODEX_AUTH</code></td><td><code>~/.codex/auth.json</code> 的内容</td></tr>
     <tr><td>pi</td><td><code>AGENTRUN_PI_AUTH</code></td><td><code>~/.pi/agent/auth.json</code> 的内容；用 API key 的服务商也可以直接传 key 变量，例如 <code>DEEPSEEK_API_KEY</code></td></tr>
+    <tr><td>dsh</td><td><code>DEEPSEEK_API_KEY</code></td><td>DeepSeek 的 API key。dsh 只用这个变量登录，不读 <code>~/.dsh/.env</code></td></tr>
   </tbody>
 </table>
 <p>agentrun 把 <code>AGENTRUN_CODEX_AUTH</code> 与 <code>AGENTRUN_PI_AUTH</code> 写成运行时的登录文件，然后从 agent 的环境里删掉这两个变量，agent 读不到它们。</p>
@@ -169,7 +174,7 @@ Bash: ls missing.txt</div>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --format jsonl --prompt "回复 OK" &gt; run.jsonl
 <span class="prompt">$</span> jq -c 'select(.type == "end") | {status, cost_usd: .usage.cost_usd}' run.jsonl
 {"status":"finished","cost_usd":0.000072288}</div>
-<p>codex 不报告费用，<code>cost_usd</code> 为 null；claude-code 没完成一轮就被中断时也为 null。金额由运行时按单价表计算，用订阅登录时它不是实际扣费。按模型拆分的金额与各运行时的差别见<a href="events.html#cost">费用</a>。</p>
+<p>codex 与 dsh 不报告费用，<code>cost_usd</code> 为 null；claude-code 没完成一轮就被中断时也为 null。金额由运行时按单价表计算，用订阅登录时它不是实际扣费。按模型拆分的金额与各运行时的差别见<a href="events.html#cost">费用</a>。</p>
 
 <h2 id="parallel">同时运行多个 agent</h2>
 <p>需要几个 agent 同时处理不同的任务时，在后台启动多个 agentrun，每个用自己的 <code>--cwd</code>，输出写到各自的文件，再用 <code>wait</code> 等它们都结束：</p>
@@ -300,6 +305,19 @@ No API key found for anthropic.
 agentrun: no saved claude-code session 76393ad0-3433-47bd-a4d4-47d35df96724 in /root/agent-sessions/claude-code</div>
 <p>只写了 id 的一部分时报 <code>--resume "76393ad0" is not a session id</code>，从 <code>[end]</code> 行或 <code>end</code> 事件复制完整的 id。</p>
 
+<h3><code>DEEPSEEK_API_KEY is not set in the session environment</code></h3>
+<p>用 dsh 时，会话环境里没有 DeepSeek 的 API key。agentrun 只从环境变量取这个 key，写在 <code>~/.dsh/.env</code> 或工作目录 <code>.env</code> 里的 key 不起作用：</p>
+<div class="term"><span class="prompt">$</span> agentrun dsh --format text --prompt hi
+<span class="dim">[end]</span> rejected DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=&lt;key&gt;
+agentrun: DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=&lt;key&gt;</div>
+<p>先 <code>export DEEPSEEK_API_KEY=...</code>，或者写成 <code>--env DEEPSEEK_API_KEY=...</code>。key 无效时运行会启动，结果是 <code>failed</code>，<code>detail</code> 以 <code>AUTH:</code> 开头；<code>agentrun doctor dsh</code> 的 <code>login</code> 一行也会报出同样的原因。</p>
+<h3><code>failed to observe session ... corrupt session log</code></h3>
+<p>用 dsh 继续会话时换了 <code>--cwd</code>。dsh 只能在第一次运行的工作目录里继续一个会话：</p>
+<div class="term"><span class="prompt">$</span> agentrun dsh --cwd ../other --session-dir ~/agent-sessions --resume 9f0e32d7-31b3-4357-a505-8662035efd9a --format text --prompt "What word?"
+<span class="dim">[main]</span> prompt What word?
+dsh: failed to observe session "session-9f0e32d7-31b3-4357-a505-8662035efd9a": corrupt session log <span class="dim">（后略）</span>
+<span class="dim">[end]</span> failed 2.6s  session 9f0e32d7-31b3-4357-a505-8662035efd9a  failed to observe session <span class="dim">（后略）</span></div>
+<p>回到第一次运行时的目录再继续，保存的会话不受这次失败的影响。</p>
 <h3><code>--env NAME: not set in the caller's environment</code></h3>
 <p>你写了 <code>--env NAME</code>，但当前环境里没有这个变量。先 <code>export NAME=...</code>，或者写成 <code>--env NAME=VALUE</code>。</p>
 </main>

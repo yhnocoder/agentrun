@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/yhnocoder/agentrun/actions/workflows/ci.yml/badge.svg)](https://github.com/yhnocoder/agentrun/actions/workflows/ci.yml)
 
-Run claude-code, codex and pi in a sandbox with one command, on macOS, Linux, cloud containers and docker.
+Run claude-code, codex, pi and dsh in a sandbox with one command, on macOS, Linux, cloud containers and docker.
 
 ## What agentrun does
 
@@ -10,7 +10,7 @@ A program that needs a coding agent calls agentrun with a runtime and a prompt. 
 
 - It starts the runtime in a sandbox. The agent can write only to the working directory and to a temporary directory for the session, and its commands cannot reach the network unless `--network` allows it.
 - It keeps the agent away from the user's own runtime configuration, plugins, rules and session history.
-- It converts the different output of the three runtimes into one event stream and decides success or failure in the same way for all of them. The exit code reports the result: 0 when the agent finished, 1 when it failed, 2 when agentrun refused to start it.
+- It converts the different output of the four runtimes into one event stream and decides success or failure in the same way for all of them. The exit code reports the result: 0 when the agent finished, 1 when it failed, 2 when agentrun refused to start it.
 - It checks before starting that the runtime, its login and the sandbox can be used. `agentrun doctor` runs the same checks on their own, and every failed check says what to fix.
 
 ## Supported runtimes and environments
@@ -20,11 +20,12 @@ A program that needs a coding agent calls agentrun with a runtime and a prompt. 
 | claude-code | `agentrun claude-code` | 2.1.288 |
 | codex | `agentrun codex` | 0.159.2 |
 | pi (npm package `@earendil-works/pi-coding-agent`) | `agentrun pi` | 1.0.1 |
+| dsh, DeepSeek Harness (npm package `@deepseek-ai/dsh`) | `agentrun dsh` | 0.2.1-rc.2 |
 
 | Environment | Sandbox | What the caller adds |
 |---|---|---|
 | macOS | Seatbelt, part of the system | nothing |
-| Linux | bubblewrap (`bwrap`); claude-code and pi also need `socat` | nothing |
+| Linux | bubblewrap (`bwrap`); claude-code, pi and dsh also need `socat` | nothing |
 | Cloud managed container, such as Claude Code on the web | bubblewrap, as on Linux; the container needs `bwrap` and `socat` and must allow user namespaces | nothing |
 | docker container | none, because a default docker container cannot create user namespaces; the container is the isolation boundary | `--sandbox off`, or `AGENTRUN_SANDBOX=off` |
 

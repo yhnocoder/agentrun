@@ -4,6 +4,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use crate::cli::Runtime;
+use crate::runtime::dsh;
 
 const FILE_SUFFIX: &str = ".jsonl";
 const UUID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
@@ -42,7 +43,11 @@ pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String>
     if !is_session_id(id) {
         return Err(format!("--resume {id:?} is not a session id"));
     }
-    find_file(store, id)
+    let found = match runtime {
+        Runtime::Dsh => dsh::saved_session(store, id),
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Pi => find_file(store, id),
+    };
+    found
         .map(|file| Saved {
             id: id.to_string(),
             file,
@@ -128,6 +133,19 @@ pub fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
             std::fs::copy(file, &target)
                 .map(|_| ())
                 .map_err(|error| format!("cannot copy {}: {error}", file.display()))
+        })
+        .map(|()| target)
+}
+
+pub fn copy_dir_into(source: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| format!("{} has no file name", source.display()))?;
+    let target = dir.join(name);
+    create_store(dir)
+        .and_then(|()| {
+            copy_tree(source, &target)
+                .map_err(|error| format!("cannot copy {}: {error}", source.display()))
         })
         .map(|()| target)
 }

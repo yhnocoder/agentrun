@@ -24,6 +24,7 @@ use support::process::{describe, process_is_gone};
 const CLAUDE_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '2.1.288 (Claude Code)'; exit 0; fi\nif [ \"$1\" = auth ] && [ \"$2\" = status ]; then printf '%s\\n' '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'; exit 0; fi\nexit 0\n";
 const PI_DEEPSEEK: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\n[ -n \"$(/bin/cat)\" ] || exit 0\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"system\"}}'\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"deepseek-flash\"}}'\n/bin/sleep 30\n";
 const PI_UNKNOWN_MODEL: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 1.0.1; exit 0;; esac\n[ -n \"$(/bin/cat)\" ] || exit 0\necho 'Warning: Model \"no-such-model\" not found for provider \"deepseek\". Using custom model id.' >&2\necho '{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"provider\":\"deepseek\",\"model\":\"no-such-model\"}}'\n/bin/sleep 30\n";
+const DSH_REPLIES: &str = "#!/bin/sh\ncase \"$1\" in --version) echo 0.2.1-rc.2; exit 0;; esac\n[ -n \"$(/bin/cat)\" ] || exit 0\nprintf '%s\\n' \"$TMPDIR\" \"$DSH_HOME\" > \"$HOME/dsh-env.txt\"\necho '{\"type\":\"session\",\"sessionId\":\"session-1\"}'\necho '{\"type\":\"status\",\"phase\":\"step_end\",\"usage\":{\"inputTokens\":1}}'\n/bin/sleep 30\n";
 const CODEX_LOGGED_IN: &str = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.159.2'; exit 0; fi\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = sandbox ]; then while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"; fi\nexit 0\n";
 
 fn doctor(env: &Env, args: &[&str]) -> Command {
@@ -494,6 +495,63 @@ fn pi_login_compares_the_chosen_model() {
     assert_eq!(
         line_for(&stdout_lines(&output), "pi", "login"),
         "[fail] pi           login       pi exited with code 3 before choosing a model"
+    );
+    assert!(env.leftovers().is_empty());
+}
+
+#[test]
+fn dsh_login_waits_for_the_first_model_reply() {
+    let env = Env::new();
+    env.install("dsh", DSH_REPLIES);
+    let output = doctor(&env, &["dsh", "--sandbox", "off"])
+        .env_remove("DEEPSEEK_API_KEY")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        line_for(&stdout_lines(&output), "dsh", "login"),
+        "[fail] dsh          login       DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=<key>"
+    );
+    let started = Instant::now();
+    let output = doctor(
+        &env,
+        &["dsh", "--sandbox", "off", "--model", "deepseek-v4-pro"],
+    )
+    .env("DEEPSEEK_API_KEY", "test-key")
+    .output()
+    .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(20));
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        line_for(&stdout_lines(&output), "dsh", "login"),
+        "[ok]   dsh          login       DEEPSEEK_API_KEY (deepseek-v4-pro)"
+    );
+    let recorded = std::fs::read_to_string(env.home().join("dsh-env.txt")).unwrap();
+    let mut recorded = recorded.lines();
+    let tmpdir = PathBuf::from(recorded.next().unwrap());
+    assert!(tmpdir.ends_with("dsh-login"), "{tmpdir:?}");
+    assert!(tmpdir.starts_with(env.tmp()), "{tmpdir:?}");
+    assert_eq!(recorded.next(), tmpdir.join("dsh-home").to_str());
+    env.install(
+        "dsh",
+        "#!/bin/sh\n/bin/cat > /dev/null\necho '{\"type\":\"status\",\"phase\":\"turn_end\",\"reason\":{\"kind\":\"error\",\"error\":{\"code\":\"AUTH\",\"message\":\"bad key\"}}}'\nexit 1\n",
+    );
+    let output = doctor(&env, &["dsh", "--sandbox", "off"])
+        .env("DEEPSEEK_API_KEY", "test-key")
+        .output()
+        .unwrap();
+    assert_eq!(
+        line_for(&stdout_lines(&output), "dsh", "login"),
+        "[fail] dsh          login       AUTH: bad key"
+    );
+    env.install("dsh", "#!/bin/sh\nexit 3\n");
+    let output = doctor(&env, &["dsh", "--sandbox", "off"])
+        .env("DEEPSEEK_API_KEY", "test-key")
+        .output()
+        .unwrap();
+    assert_eq!(
+        line_for(&stdout_lines(&output), "dsh", "login"),
+        "[fail] dsh          login       dsh exited with code 3 before the first model reply"
     );
     assert!(env.leftovers().is_empty());
 }

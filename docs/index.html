@@ -22,10 +22,10 @@
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
 <h1>agentrun</h1>
-<p class="lead">agentrun 用<mark>一条命令</mark>在沙箱里运行 claude-code、codex 和 pi，支持 macOS、Linux、Cloud Managed 容器和 docker 容器。</p>
+<p class="lead">agentrun 用<mark>一条命令</mark>在沙箱里运行 claude-code、codex、pi 和 dsh，支持 macOS、Linux、Cloud Managed 容器和 docker 容器。</p>
 
 <h2>Motivation</h2>
-<p>在脚本或 CI 里让 claude-code、codex 或 pi 去改代码，每次都要处理同样的事：agent 能写哪些文件、能不能联网、会不会读到你自己的配置和账号；三个运行时的参数、输出格式和成败判定各不相同；同一段脚本换到 docker 或 Cloud Managed 容器里，可能因为缺少沙箱工具或登录而失败，报错也看不出原因。</p>
+<p>在脚本或 CI 里让 claude-code、codex、pi 或 dsh 去改代码，每次都要处理同样的事：agent 能写哪些文件、能不能联网、会不会读到你自己的配置和账号；各运行时的参数、输出格式和成败判定各不相同；同一段脚本换到 docker 或 Cloud Managed 容器里，可能因为缺少沙箱工具或登录而失败，报错也看不出原因。</p>
 <p>agentrun 把这些事放进一条命令。它在当前环境能提供的沙箱里启动运行时，把运行时的输出转换成同一种事件流，按统一的规则给出退出码；<code>agentrun doctor</code> 在启动前检查环境，失败时说明原因和改法。选哪个模型、失败后是否重试、怎么安装运行时，仍由调用方决定。</p>
 <figure>
 <svg class="diagram" viewBox="0 0 600 232" style="max-width:600px" role="img" aria-label="agentrun 在沙箱里启动运行时，把输出转换成统一的事件流与退出码"><defs><marker id="arr-mot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>
@@ -34,9 +34,10 @@
 <rect x="168" y="14" width="254" height="180" rx="10"/><text x="295" y="38" text-anchor="middle">agentrun</text>
 <rect x="182" y="52" width="226" height="94" rx="8" style="fill:none;stroke:var(--muted);stroke-dasharray:5 4"/>
 <text class="note" x="295" y="70" text-anchor="middle">沙箱：只写工作目录 · 网络经过滤代理</text>
-<rect x="188" y="88" width="88" height="34" rx="6"/><text x="232" y="110" text-anchor="middle">claude-code</text>
-<rect x="282" y="88" width="60" height="34" rx="6"/><text x="312" y="110" text-anchor="middle">codex</text>
-<rect x="348" y="88" width="54" height="34" rx="6"/><text x="375" y="110" text-anchor="middle">pi</text>
+<rect x="188" y="88" width="86" height="34" rx="6"/><text x="231" y="110" text-anchor="middle">claude-code</text>
+<rect x="278" y="88" width="50" height="34" rx="6"/><text x="303" y="110" text-anchor="middle">codex</text>
+<rect x="332" y="88" width="30" height="34" rx="6"/><text x="347" y="110" text-anchor="middle">pi</text>
+<rect x="366" y="88" width="36" height="34" rx="6"/><text x="384" y="110" text-anchor="middle">dsh</text>
 <text class="note" x="295" y="138" text-anchor="middle">不读你的运行时配置</text>
 <text x="295" y="174" text-anchor="middle">doctor 检查环境 · 转换输出 · 判定成败</text>
 <path d="M422,108 L474,108" marker-end="url(#arr-mot)"/>
@@ -71,8 +72,8 @@
 <h2>Environment</h2>
 <p>开发者文档从这一节开始。下图是源代码里各模块的关系，每个页面开头的「代码位置」列出对应的源文件。</p>
 <figure>
-<svg class="diagram" viewBox="0 0 600 460" style="max-width:600px" role="img" aria-label="agentrun 的模块关系"><defs><marker id="arr-mod" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="215" y="10" width="170" height="44" rx="8"/><text x="300" y="37" text-anchor="middle">命令行 cli.rs</text><path d="M300,54 L300,88" marker-end="url(#arr-mod)"/><rect x="20" y="90" width="160" height="56" rx="8"/><text x="100" y="114" text-anchor="middle">会话环境</text><text x="100" y="132" text-anchor="middle">session.rs credential.rs</text><rect x="215" y="90" width="170" height="44" rx="8"/><text x="300" y="117" text-anchor="middle">运行框架 run/</text><rect x="420" y="90" width="160" height="44" rx="8"/><text x="500" y="117" text-anchor="middle">doctor.rs</text><path d="M215,112 L182,112" marker-end="url(#arr-mod)"/><path d="M385,112 L418,112" marker-end="url(#arr-mod)"/><rect x="20" y="190" width="160" height="56" rx="8"/><text x="100" y="214" text-anchor="middle">沙箱</text><text x="100" y="232" text-anchor="middle">sandbox/</text><rect x="215" y="190" width="170" height="44" rx="8"/><text x="300" y="217" text-anchor="middle">适配器接口 runtime/</text><rect x="420" y="190" width="160" height="56" rx="8"/><text x="500" y="214" text-anchor="middle">过滤代理</text><text x="500" y="232" text-anchor="middle">network/</text><path d="M300,134 L300,188" marker-end="url(#arr-mod)"/><path d="M240,134 C240,165 140,160 140,188" marker-end="url(#arr-mod)"/><path d="M360,134 C360,165 460,160 460,188" marker-end="url(#arr-mod)"/><path d="M500,134 L500,188" marker-end="url(#arr-mod)"/><path d="M100,146 L100,188" marker-end="url(#arr-mod)"/><rect x="20" y="290" width="160" height="44" rx="8"/><text x="100" y="317" text-anchor="middle">claudecode.rs</text><rect x="220" y="290" width="160" height="44" rx="8"/><text x="300" y="317" text-anchor="middle">codex.rs</text><rect x="420" y="290" width="160" height="44" rx="8"/><text x="500" y="317" text-anchor="middle">pi.rs</text><path d="M300,234 L300,288" marker-end="url(#arr-mod)"/><path d="M260,234 C260,265 100,260 100,288" marker-end="url(#arr-mod)"/><path d="M340,234 C340,265 500,260 500,288" marker-end="url(#arr-mod)"/><text class="note" x="310" y="266" text-anchor="start">launch / translate / failure</text><path d="M100,334 L100,378" marker-end="url(#arr-mod)"/><path d="M300,334 L300,378" marker-end="url(#arr-mod)"/><path d="M500,334 L500,378" marker-end="url(#arr-mod)"/><text class="note" x="310" y="360" text-anchor="start">Record</text><rect x="20" y="380" width="560" height="60" rx="8"/><text x="300" y="404" text-anchor="middle">事件输出</text><text x="300" y="424" text-anchor="middle">output/：aggregate.rs → event.rs → mod.rs（text.rs、rich.rs），用量在 usage.rs</text></svg>
-<figcaption>模块关系。运行框架调用会话环境、沙箱与过滤代理做启动前检查，通过适配器接口启动运行时并翻译它的输出；doctor 复用沙箱与过滤代理做检查。三个适配器在 runtime/ 下。</figcaption>
+<svg class="diagram" viewBox="0 0 600 460" style="max-width:600px" role="img" aria-label="agentrun 的模块关系"><defs><marker id="arr-mod" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="215" y="10" width="170" height="44" rx="8"/><text x="300" y="37" text-anchor="middle">命令行 cli.rs</text><path d="M300,54 L300,88" marker-end="url(#arr-mod)"/><rect x="20" y="90" width="160" height="56" rx="8"/><text x="100" y="114" text-anchor="middle">会话环境</text><text x="100" y="132" text-anchor="middle">session.rs credential.rs</text><rect x="215" y="90" width="170" height="44" rx="8"/><text x="300" y="117" text-anchor="middle">运行框架 run/</text><rect x="420" y="90" width="160" height="44" rx="8"/><text x="500" y="117" text-anchor="middle">doctor.rs</text><path d="M215,112 L182,112" marker-end="url(#arr-mod)"/><path d="M385,112 L418,112" marker-end="url(#arr-mod)"/><rect x="20" y="190" width="160" height="56" rx="8"/><text x="100" y="214" text-anchor="middle">沙箱</text><text x="100" y="232" text-anchor="middle">sandbox/</text><rect x="215" y="190" width="170" height="44" rx="8"/><text x="300" y="217" text-anchor="middle">适配器接口 runtime/</text><rect x="420" y="190" width="160" height="56" rx="8"/><text x="500" y="214" text-anchor="middle">过滤代理</text><text x="500" y="232" text-anchor="middle">network/</text><path d="M300,134 L300,188" marker-end="url(#arr-mod)"/><path d="M240,134 C240,165 140,160 140,188" marker-end="url(#arr-mod)"/><path d="M360,134 C360,165 460,160 460,188" marker-end="url(#arr-mod)"/><path d="M500,134 L500,188" marker-end="url(#arr-mod)"/><path d="M100,146 L100,188" marker-end="url(#arr-mod)"/><rect x="20" y="290" width="125" height="44" rx="8"/><text x="82" y="317" text-anchor="middle">claudecode.rs</text><rect x="165" y="290" width="125" height="44" rx="8"/><text x="228" y="317" text-anchor="middle">codex.rs</text><rect x="310" y="290" width="125" height="44" rx="8"/><text x="372" y="317" text-anchor="middle">pi.rs</text><rect x="455" y="290" width="125" height="44" rx="8"/><text x="518" y="317" text-anchor="middle">dsh.rs</text><path d="M300,234 L300,270"/><path d="M82,270 L518,270"/><path d="M82,270 L82,288" marker-end="url(#arr-mod)"/><path d="M228,270 L228,288" marker-end="url(#arr-mod)"/><path d="M372,270 L372,288" marker-end="url(#arr-mod)"/><path d="M518,270 L518,288" marker-end="url(#arr-mod)"/><text class="note" x="310" y="263" text-anchor="start">launch / translate / failure</text><path d="M82,334 L82,378" marker-end="url(#arr-mod)"/><path d="M228,334 L228,378" marker-end="url(#arr-mod)"/><path d="M372,334 L372,378" marker-end="url(#arr-mod)"/><path d="M518,334 L518,378" marker-end="url(#arr-mod)"/><text class="note" x="382" y="360" text-anchor="start">Record</text><rect x="20" y="380" width="560" height="60" rx="8"/><text x="300" y="404" text-anchor="middle">事件输出</text><text x="300" y="424" text-anchor="middle">output/：aggregate.rs → event.rs → mod.rs（text.rs、rich.rs），用量在 usage.rs</text></svg>
+<figcaption>模块关系。运行框架调用会话环境、沙箱与过滤代理做启动前检查，通过适配器接口启动运行时并翻译它的输出；doctor 复用沙箱与过滤代理做检查。四个适配器在 runtime/ 下。</figcaption>
 </figure>
 <p>可见性按目录限定：每个目录下的文件都是私有子模块，外部只能用 <code>mod.rs</code> re-export 的项：<code>tests/</code> 或 <code>main.rs</code> 用到的写 <code>pub use</code>，只有 crate 内其他目录用到的写 <code>pub(crate) use</code>。私有子模块里的项可以保持 <code>pub</code>，能不能从外部访问由 <code>mod.rs</code> 是否 re-export 决定。唯一的例外是 <code>runtime/</code> 的 <code>claudecode</code>、<code>codex</code>、<code>pi</code> 三个子模块声明为 <code>pub mod</code>，因为每个适配器有自己的集成测试。理由：编译器只对外部访问不到的项报告未使用，可见性按目录限定后，新的死代码才会被报出来。<code>run/</code> 把 <code>doctor</code> 子命令分派给 <code>doctor.rs</code>，<code>doctor.rs</code> 复用 <code>run/</code> 的 <code>Caller</code> 与临时目录函数，这一处是有意保留的分派关系。</p>
 <p>平台相关的代码按平台分文件：<code>process_tree/</code> 的 <code>linux.rs</code> 与 <code>macos.rs</code>、<code>sandbox/</code> 的 <code>bubblewrap.rs</code> 与 <code>seatbelt.rs</code>，同一目录的两个文件提供同一组项，由 <code>mod.rs</code> 按操作系统选择；包裹命令与 Seatbelt 配置在两个平台都编译。理由：单元测试在 Linux 上也能检查 macOS 的包裹参数。</p>
@@ -93,7 +94,7 @@
       <div class="pv-line pv-a pv-s2">--sandbox on|relax|off</div>
       <div class="pv-line pv-a pv-s3">--network none|full|custom</div>
     </div>
-    <div class="card-body"><strong>沙箱与网络</strong><span>--sandbox on|relax|off、--network、三个运行时怎么关进沙箱、剩余风险。</span>
+    <div class="card-body"><strong>沙箱与网络</strong><span>--sandbox on|relax|off、--network、各运行时怎么关进沙箱、剩余风险。</span>
     <div class="card-tags"><i>sandbox</i><i>network</i></div></div>
   </a></li>
 </ul>
@@ -106,12 +107,12 @@
   </thead>
   <tbody>
     <tr><td>本机 macOS</td><td>Seatbelt，系统自带</td><td>不用写 <code>--sandbox</code></td></tr>
-    <tr><td>本机 Linux</td><td>bubblewrap（<code>bwrap</code>，claude-code 与 pi 另需 <code>socat</code>）；codex 用它自己的沙箱</td><td>不用写；没装 <code>bwrap</code> 时 agentrun 报错并给出安装命令</td></tr>
+    <tr><td>本机 Linux</td><td>bubblewrap（<code>bwrap</code>，claude-code、pi 与 dsh 另需 <code>socat</code>）；codex 用它自己的沙箱</td><td>不用写；没装 <code>bwrap</code> 时 agentrun 报错并给出安装命令</td></tr>
     <tr><td>Cloud Managed 容器（Claude 云端、Codex 云端）</td><td>同本机 Linux，要求容器里装了 <code>bwrap</code> 与 <code>socat</code>，且能创建用户命名空间</td><td>不用写。在 Claude 云端验证过；Codex 云端没有验证过</td></tr>
     <tr><td>docker 容器</td><td>默认的 docker 容器不能创建用户命名空间，沙箱无法启动</td><td>启动方写 <code>--sandbox off</code> 或设 <code>AGENTRUN_SANDBOX=off</code>，隔离边界是容器本身</td></tr>
   </tbody>
 </table>
-<p>Cloud Managed 容器有两种：Claude 云端只运行 claude-code 与 pi，Codex 云端只运行 codex 与 pi。工具不区分这两种容器，由启动方选择运行时。</p>
+<p>Cloud Managed 容器有两种：Claude 云端只运行 claude-code、pi 与 dsh，Codex 云端只运行 codex 与 pi。工具不区分这两种容器，由启动方选择运行时。</p>
 
 <h2>Event and Output</h2>
 <p>agentrun 输出的统一事件流与三种输出格式。后两页是运行时原始输出的字段参考。</p>
@@ -154,8 +155,8 @@
       <div class="pv-line pv-a pv-s2"><b>$</b> agentrun pi</div>
       <div class="pv-line pv-a pv-s3"><b>$</b> agentrun codex</div>
     </div>
-    <div class="card-body"><strong>运行：命令行与运行时</strong><span>命令行选项、启动前检查、保存与继续会话、doctor、退出码，以及 claude-code、pi、codex 的参数、输出映射与失败判定。</span>
-    <div class="card-tags"><i>claude-code</i><i>pi</i><i>codex</i></div></div>
+    <div class="card-body"><strong>运行：命令行与运行时</strong><span>命令行选项、启动前检查、保存与继续会话、doctor、退出码，以及 claude-code、pi、codex、dsh 的参数、输出映射与失败判定。</span>
+    <div class="card-tags"><i>claude-code</i><i>pi</i><i>codex</i><i>dsh</i></div></div>
   </a></li>
 </ul>
 
