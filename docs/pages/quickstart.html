@@ -22,7 +22,7 @@
 <button type="button" class="copy-page" title="Copy this page as Markdown"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg><span>Copy page</span></button>
 </div>
 <h1>快速开始</h1>
-<p class="lead">agentrun 用一条命令在沙箱里运行 claude-code、codex 和 pi，支持 macOS、Linux、Cloud Managed 容器和 docker 容器。这一页带你装好 agentrun，检查环境，在沙箱里运行第一个任务，再把它放进脚本。照着做一遍大约需要五分钟。</p>
+<p class="lead">agentrun 用一条命令在沙箱里运行 claude-code、codex、pi 和 dsh，支持 macOS、Linux、Cloud Managed 容器和 docker 容器。这一页带你装好 agentrun，检查环境，在沙箱里运行第一个任务，再把它放进脚本。照着做一遍大约需要五分钟。</p>
 
 <h2 id="install">安装 agentrun</h2>
 <p>agentrun 是一个独立的可执行文件，支持 macOS 与 Linux 的 x86_64 与 arm64。从 <a href="https://github.com/yhnocoder/agentrun/releases">GitHub Releases</a> 下载与你的系统对应的文件，放进 PATH。把命令里的 <code>linux-x86_64</code> 换成 <code>linux-arm64</code>、<code>macos-arm64</code> 或 <code>macos-x86_64</code>：</p>
@@ -54,9 +54,13 @@ agentrun 1.0.1</div>
     <tr><td>claude-code</td><td><code>agentrun claude-code</code></td><td>&gt;= 2.1.288</td></tr>
     <tr><td>codex</td><td><code>agentrun codex</code></td><td>&gt;= 0.159.2</td></tr>
     <tr><td>pi（npm 包 <code>@earendil-works/pi-coding-agent</code>）</td><td><code>agentrun pi</code></td><td>&gt;= 1.0.1</td></tr>
+    <tr><td>dsh（DeepSeek Harness，npm 包 <code>@deepseek-ai/dsh</code>）</td><td><code>agentrun dsh</code></td><td>&gt;= 0.2.1-rc.2</td></tr>
   </tbody>
 </table>
 <p>agentrun 在 PATH 里查找运行时，并沿用你已有的登录。用 pi 时，在 pi 的设置里选好默认模型，或者每次用 <code>--model 服务商/模型</code> 指定。</p>
+<p>dsh 的 npm 默认标签还是更早的 0.2.0-rc.2，安装时写明版本。装好后的 <code>node_modules</code> 约 860 MB，比其他运行时大得多。dsh 用 DeepSeek 的 API key 登录：把它导出为环境变量 <code>DEEPSEEK_API_KEY</code>。agentrun 不读 <code>~/.dsh/.env</code>，写在那里的 key 不起作用。</p>
+<pre><code class="language-bash">npm install -g @deepseek-ai/dsh@0.2.1-rc.2
+export DEEPSEEK_API_KEY=...</code></pre>
 <p>在 macOS 上，沙箱由系统提供，不需要另外安装。在 Linux 上，安装 <code>bwrap</code> 与 <code>socat</code>：</p>
 <pre><code class="language-bash"># Debian、Ubuntu
 sudo apt install bubblewrap socat
@@ -90,13 +94,14 @@ printf 'def greet(name):\n    return "hello " + name\n' &gt; greet.py</code></pr
 <ul>
   <li>每行开头的 <code>[main]</code> 表示这一行来自主 agent。agent 启动 subagent 时，subagent 的行以它自己的标签开头，例如 <code>[explore#1]</code>。</li>
   <li><code>tool</code> 行是一次完成的工具调用，<code>text</code> 行是 agent 说的话。调用被拒绝时 <code>tool</code> 行末尾有 <code>(denied)</code>，执行出错时有 <code>(error)</code>，例如测试没有通过。</li>
-  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出、输入中命中缓存的比例，最后是运行时报告的费用，单位美元。运行时不报告费用时（例如 codex）不显示费用。</li>
+  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出、输入中命中缓存的比例，最后是运行时报告的费用，单位美元。运行时不报告费用时（例如 codex 与 dsh）不显示费用。</li>
 </ul>
 <p>这次运行发生在沙箱里：agent 只能写 <code>hello</code> 目录和一个临时目录，它运行的命令不能联网，它也读不到你自己的运行时配置、插件和会话记录。</p>
 <p>不加 <code>--format text</code> 时，终端里显示的是动态界面：上方滚动显示同样的行，下方显示正在运行的 subagent 和主 agent 的状态。</p>
-<p>换成 pi 或 codex，只需要换子命令：</p>
+<p>换成 pi、codex 或 dsh，只需要换子命令：</p>
 <pre><code class="language-bash">agentrun pi --model deepseek/deepseek-flash --prompt "给 greet.py 写一个测试并运行"
-agentrun codex --prompt "给 greet.py 写一个测试并运行"</code></pre>
+agentrun codex --prompt "给 greet.py 写一个测试并运行"
+agentrun dsh --prompt "给 greet.py 写一个测试并运行"</code></pre>
 
 <h2 id="script">在脚本里使用</h2>
 <p>输出不是终端时，agentrun 默认输出 jsonl：每行一个 JSON 事件，最后一行是 <code>end</code> 事件，里面有结果和 agent 的最后一段话。用退出码判断成败，用 <code>jq</code> 取结果：</p>

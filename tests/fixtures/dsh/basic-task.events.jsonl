@@ -1,0 +1,10 @@
+{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents.","images":[]}
+{"schema":1,"type":"tool_start","id":"call_00_Qcy6A0jIsaFdjJJmzPkS0643","parent":null,"name":"write","summary":"write: probe.txt"}
+{"schema":1,"type":"tool","id":"call_00_Qcy6A0jIsaFdjJJmzPkS0643","parent":null,"name":"write","summary":"write: probe.txt","denied":false,"error":false}
+{"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":208,"output_tokens":141,"cache_read_tokens":5248,"cache_write_tokens":0,"cost_usd":null,"context_tokens":5456}
+{"schema":1,"type":"tool_start","id":"call_00_ET_SjpxlWMkMWw96JuaViRc1802","parent":null,"name":"read","summary":"read: probe.txt"}
+{"schema":1,"type":"tool","id":"call_00_ET_SjpxlWMkMWw96JuaViRc1802","parent":null,"name":"read","summary":"read: probe.txt","denied":false,"error":false}
+{"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":145,"output_tokens":58,"cache_read_tokens":5504,"cache_write_tokens":0,"cost_usd":null,"context_tokens":5649}
+{"schema":1,"type":"text","parent":null,"text":"Created `probe.txt` in `/tmp/agentrun-probe-c85f75d4/basic-task-dsh` and read it back. Its contents are:\n\n```\nhello probe\n```"}
+{"schema":1,"type":"usage","parent":null,"model":null,"input_tokens":139,"output_tokens":41,"cache_read_tokens":5632,"cache_write_tokens":0,"cost_usd":null,"context_tokens":5771}
+{"schema":1,"type":"end","status":"finished","exit_code":0,"detail":"","usage":{"input_tokens":492,"output_tokens":240,"cache_read_tokens":16384,"cache_write_tokens":0,"cost_usd":null,"by_model":{"unknown":{"input_tokens":492,"output_tokens":240,"cache_read_tokens":16384,"cache_write_tokens":0,"cost_usd":null}}},"result":"Created `probe.txt` in `/tmp/agentrun-probe-c85f75d4/basic-task-dsh` and read it back. Its contents are:\n\n```\nhello probe\n```","session_id":null}

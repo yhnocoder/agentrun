@@ -1,0 +1,2 @@
+{"schema":1,"type":"prompt","text":"Reply with the single word OK.","images":[]}
+{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"AUTH: Authentication Fails, Your api key: ****alid is invalid (request_id: 3dde78c7-e9a1-4903-a1d2-e16197b216ab)","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}},"result":null,"session_id":null}
