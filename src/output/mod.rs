@@ -69,6 +69,14 @@ impl Output {
         }
     }
 
+    pub fn add_note(&mut self, note: String) {
+        match self {
+            Output::Jsonl => {}
+            Output::Text(formatter) => formatter.add_note(note),
+            Output::Rich(rich) => rich.add_note(note),
+        }
+    }
+
     pub fn is_rich(&self) -> bool {
         matches!(self, Output::Rich(_))
     }

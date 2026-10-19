@@ -229,7 +229,7 @@ pub(crate) fn denied_reads(
     Ok(unique)
 }
 
-fn contains(path: &Path, dir: &Path) -> bool {
+pub(crate) fn contains(path: &Path, dir: &Path) -> bool {
     if dir.starts_with(path) {
         return true;
     }
@@ -265,6 +265,14 @@ pub fn reject_limits(runtime: Runtime, args: &RunArgs) -> Result<(), String> {
         "{option} is not supported by {name}: {name} reports usage only when the run ends, so agentrun cannot stop it during the run",
         name = runtime.name()
     ))
+}
+
+pub(crate) fn display_path(path: &Path, cwd: &Path) -> String {
+    match path.strip_prefix(cwd) {
+        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+        Ok(relative) => relative.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 pub fn detail_head(text: &str) -> String {

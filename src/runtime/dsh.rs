@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{Adapter, Failure, Invocation, Launch, Version, detail_head};
+use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, display_path};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, optional_string, string};
 use crate::network::{proxy_environment, url_host};
@@ -81,9 +81,9 @@ impl Dsh {
             "bash" => input["command"]
                 .as_str()
                 .map(|command| first_line(command).to_string()),
-            "read" | "write" | "edit" | "read_image" => {
-                input["file_path"].as_str().map(|path| self.relative(path))
-            }
+            "read" | "write" | "edit" | "read_image" => input["file_path"]
+                .as_str()
+                .map(|path| display_path(Path::new(path), &self.cwd)),
             "glob" | "grep" => input["pattern"].as_str().map(str::to_string),
             _ => None,
         };
@@ -91,15 +91,6 @@ impl Dsh {
             Some(value) => format!("{name}: {value}"),
             None => name.to_string(),
         }
-    }
-
-    fn relative(&self, path: &str) -> String {
-        Path::new(path)
-            .strip_prefix(&self.cwd)
-            .ok()
-            .filter(|relative| !relative.as_os_str().is_empty())
-            .map(|relative| relative.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string())
     }
 
     fn status(&mut self, line: &Value) -> Vec<Record> {
@@ -910,7 +901,7 @@ mod tests {
                 json!({"file_path": "/w/i.png"}),
                 "read_image: i.png",
             ),
-            ("edit", json!({"file_path": "/w"}), "edit: /w"),
+            ("edit", json!({"file_path": "/w"}), "edit: ."),
             ("glob", json!({"pattern": "**/*.rs"}), "glob: **/*.rs"),
             ("grep", json!({"pattern": "fn main"}), "grep: fn main"),
             ("bash", json!({}), "bash"),
