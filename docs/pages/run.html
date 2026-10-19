@@ -68,7 +68,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--sandbox on|relax|off</code></td><td>沙箱做不到时怎么办，见<a href="isolation.html#sandbox">沙箱模式</a>。高于环境变量 <code>AGENTRUN_SANDBOX</code></td><td><code>on</code></td></tr>
     <tr><td><code>--network none|full|custom</code></td><td>命令与网页工具能访问哪些主机，见<a href="isolation.html#network">网络</a></td><td><code>none</code></td></tr>
     <tr><td><code>--allow-host HOST[:PORT]</code></td><td>允许访问的主机，可重复，只能与 <code>--network custom</code> 一起给出</td><td>无</td></tr>
-    <tr><td><code>--deny-read PATH</code></td><td>agent 不能读的文件或目录，可重复，加在默认列表之后。以 <code>~</code> 开头，或者等于或包含工作目录、会话临时目录所在的目录、运行 pi 时 pi 的状态目录时是用法错误，见<a href="isolation.html#read">读取限制</a></td><td>无</td></tr>
+    <tr><td><code>--deny-read PATH</code></td><td>agent 不能读的文件或目录，可重复，加在默认列表之后。以 <code>~</code> 开头，或者等于或包含工作目录、会话临时目录所在的目录、运行 pi 时 pi 的状态目录时是用法错误，运行 codex 时路径含 <code>* ? [ ] { }</code> 也是用法错误，见<a href="isolation.html#read">读取限制</a></td><td>无</td></tr>
     <tr><td><code>--no-default-deny-read</code></td><td>不用默认的不可读列表，只限制 <code>--deny-read</code> 给出的路径</td><td>使用默认列表</td></tr>
     <tr><td><code>--path DIR</code></td><td>放在会话 PATH 最前面的目录，可重复，必须存在</td><td>无</td></tr>
     <tr><td><code>--env KEY[=VALUE]</code></td><td>给会话设置一个环境变量，可重复。只写 KEY 时取调用方环境里的同名变量，见<a href="session.html#env">会话环境</a></td><td>无</td></tr>
@@ -122,7 +122,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 <h3 id="preflight">启动前检查</h3>
 <p>以下情形在启动运行时之前报错。标准输出只有一个 <code>end</code> 事件，<code>status</code> 为 <code>rejected</code>，<code>detail</code> 写出原因与修正方法；同一个原因另写一行到标准错误；agentrun 以退出码 2 结束。</p>
 <ul>
-  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--image</code> 读取失败、类型不对或超过上限、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、<code>--deny-read</code> 以 <code>~</code> 开头或者等于或包含运行需要的目录、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
+  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--image</code> 读取失败、类型不对或超过上限、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、<code>--deny-read</code> 以 <code>~</code> 开头、等于或包含运行需要的目录、运行 codex 时含 <code>* ? [ ] { }</code>、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败。</li>

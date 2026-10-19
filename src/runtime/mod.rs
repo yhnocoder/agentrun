@@ -179,7 +179,7 @@ pub(crate) fn denied_reads(
 ) -> Result<Vec<PathBuf>, String> {
     let mut needed = vec![
         ("working directory", cwd.to_path_buf()),
-        ("session temporary directory", temp_base.to_path_buf()),
+        ("temporary directory", temp_base.to_path_buf()),
     ];
     if runtime == Runtime::Pi {
         needed.extend(pi::user_state_dir(session, cwd).map(|dir| ("pi state directory", dir)));
@@ -539,7 +539,7 @@ mod tests {
         let rejected = [
             (
                 "/nonexistent",
-                "contains the session temporary directory /nonexistent/tmp",
+                "contains the temporary directory /nonexistent/tmp",
             ),
             (
                 "/nonexistent/home/.pi",
