@@ -92,7 +92,9 @@ impl Codex {
         let Some(start) = self.tool_start(item) else {
             return Vec::new();
         };
-        self.started_items.insert(string(&item["id"]));
+        if !self.started_items.insert(string(&item["id"])) {
+            return Vec::new();
+        }
         vec![start]
     }
 
@@ -999,6 +1001,13 @@ mod tests {
                 name: "command_execution".to_string(),
                 summary: "shell: latexmk -xelatex".to_string(),
             }]
+        );
+        assert!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","status":"in_progress"}})
+            )
+            .is_empty()
         );
         assert_eq!(
             translate(
