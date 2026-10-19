@@ -458,6 +458,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: Some(field("output_tokens")),
         cache_read_tokens: Some(cached),
         cache_write_tokens: Some(field("cache_write_input_tokens")),
+        cost_usd: None,
     }
 }
 
@@ -1108,6 +1109,7 @@ mod tests {
                     output_tokens: Some(109),
                     cache_read_tokens: Some(8960),
                     cache_write_tokens: Some(3),
+                    cost_usd: None,
                 },
             }]
         );
@@ -1125,6 +1127,7 @@ mod tests {
                     output_tokens: Some(0),
                     cache_read_tokens: Some(9),
                     cache_write_tokens: Some(0),
+                    cost_usd: None,
                 },
             }]
         );

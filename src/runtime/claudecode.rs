@@ -47,6 +47,7 @@ struct LastResult {
     is_error: bool,
     text: Option<String>,
     by_model: Option<Vec<(String, TokenCounts)>>,
+    total_cost_usd: Option<f64>,
 }
 
 struct PendingUsage {
@@ -407,6 +408,7 @@ impl Adapter for ClaudeCode {
                             .map(|(model, usage)| (model.clone(), model_usage_counts(usage)))
                             .collect()
                     }),
+                    total_cost_usd: line["total_cost_usd"].as_f64(),
                 });
                 Vec::new()
             }
@@ -421,11 +423,15 @@ impl Adapter for ClaudeCode {
                 records.push(Record::Result { text: text.clone() });
             }
             if let Some(by_model) = &result.by_model {
-                records.push(Record::RunUsage(Usage::sum(
+                let mut usage = Usage::sum(
                     by_model
                         .iter()
                         .map(|(model, counts)| (Some(model.as_str()), counts)),
-                )));
+                );
+                if !by_model.is_empty() && result.total_cost_usd.is_some() {
+                    usage.totals.cost_usd = result.total_cost_usd;
+                }
+                records.push(Record::RunUsage(usage));
             }
         }
         records
@@ -559,6 +565,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["output_tokens"].as_u64(),
         cache_read_tokens: usage["cache_read_input_tokens"].as_u64(),
         cache_write_tokens: usage["cache_creation_input_tokens"].as_u64(),
+        cost_usd: None,
     }
 }
 
@@ -568,6 +575,7 @@ fn model_usage_counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["outputTokens"].as_u64(),
         cache_read_tokens: usage["cacheReadInputTokens"].as_u64(),
         cache_write_tokens: usage["cacheCreationInputTokens"].as_u64(),
+        cost_usd: usage["costUSD"].as_f64(),
     }
 }
 
@@ -961,6 +969,7 @@ mod tests {
                 output_tokens: Some(output),
                 cache_read_tokens: Some(2),
                 cache_write_tokens: Some(3),
+                cost_usd: None,
             },
         }
     }
@@ -1131,9 +1140,9 @@ mod tests {
         let mut adapter = ClaudeCode::new();
         let first =
             json!({"type": "result", "is_error": false, "result": "early", "modelUsage": {}});
-        let last = json!({"type": "result", "is_error": false, "result": "final", "modelUsage": {
-            "claude-sonnet-5-5": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4},
-            "claude-haiku-4-5": {"inputTokens": 10, "outputTokens": 20}
+        let last = json!({"type": "result", "is_error": false, "result": "final", "total_cost_usd": 0.75, "modelUsage": {
+            "claude-sonnet-5-5": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4, "costUSD": 0.5},
+            "claude-haiku-4-5": {"inputTokens": 10, "outputTokens": 20, "costUSD": 0.25}
         }});
         assert_eq!(adapter.translate(&first), vec![]);
         assert_eq!(adapter.translate(&last), vec![]);
@@ -1152,7 +1161,44 @@ mod tests {
         assert_eq!(usage.totals.cache_read_tokens, Some(3));
         assert_eq!(usage.totals.cache_write_tokens, Some(4));
         assert_eq!(usage.by_model["claude-haiku-4-5"].cache_read_tokens, None);
+        assert_eq!(usage.totals.cost_usd, Some(0.75));
+        assert_eq!(usage.by_model["claude-sonnet-5-5"].cost_usd, Some(0.5));
+        assert_eq!(usage.by_model["claude-haiku-4-5"].cost_usd, Some(0.25));
         assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn run_cost_is_the_reported_total_unless_no_model_was_called() {
+        let cost = |result: Value| {
+            let mut adapter = ClaudeCode::new();
+            adapter.translate(&result);
+            match adapter.after_exit().pop() {
+                Some(Record::RunUsage(usage)) => usage.totals.cost_usd,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            cost(
+                json!({"type": "result", "total_cost_usd": 0.3, "modelUsage": {
+                    "m": {"inputTokens": 1, "costUSD": 0.25}
+                }})
+            ),
+            Some(0.3)
+        );
+        assert_eq!(
+            cost(
+                json!({"type": "result", "modelUsage": {"m": {"inputTokens": 1, "costUSD": 0.25}}})
+            ),
+            Some(0.25)
+        );
+        assert_eq!(
+            cost(json!({"type": "result", "modelUsage": {"m": {"inputTokens": 1}}})),
+            None
+        );
+        assert_eq!(
+            cost(json!({"type": "result", "total_cost_usd": 0, "modelUsage": {}})),
+            None
+        );
     }
 
     #[test]

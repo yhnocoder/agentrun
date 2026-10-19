@@ -417,6 +417,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["output"].as_u64(),
         cache_read_tokens: usage["cacheRead"].as_u64(),
         cache_write_tokens: usage["cacheWrite"].as_u64(),
+        cost_usd: usage["cost"]["total"].as_f64(),
     }
 }
 
@@ -1400,6 +1401,7 @@ mod tests {
                         output_tokens: Some(2),
                         cache_read_tokens: Some(5),
                         cache_write_tokens: Some(0),
+                        cost_usd: Some(0.1),
                     },
                 }
             ]
