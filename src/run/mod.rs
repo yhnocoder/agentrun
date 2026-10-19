@@ -85,7 +85,7 @@ impl Caller {
 }
 
 enum Command {
-    Run(Runtime, RunArgs),
+    Run(Runtime, Box<RunArgs>),
     Doctor(DoctorArgs),
     Connect(ConnectArgs),
     Exit(u8),
@@ -146,7 +146,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
             {
                 return code;
             }
-            let prepared = set_up(&mut caller, runtime, args, format, adapters, &mut guards);
+            let prepared = set_up(&mut caller, runtime, *args, format, adapters, &mut guards);
             (format, prepared)
         }
         Command::UsageError(detail) => (fallback_format, Err(detail)),

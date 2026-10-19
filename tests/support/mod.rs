@@ -50,7 +50,7 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
         sandbox: Sandbox::new(SandboxMode::On, wrapper),
         ..Invocation::new(
             runtime,
-            args,
+            *args,
             cwd.to_path_buf(),
             prompt.to_string(),
             Session::assemble(runtime, &[], &[], &[], &[]),
