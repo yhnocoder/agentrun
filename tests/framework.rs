@@ -57,7 +57,7 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
         vec![
             json!({"schema": 1, "type": "start", "runtime": "claude-code", "sandbox": "none",
                 "network": {"mode": "none", "allow": [], "enforced": false},
-                "model": "m1", "cwd": work, "argv": [executable, "--extra"], "env": []}),
+                "deny_read": [], "model": "m1", "cwd": work, "argv": [executable, "--extra"], "env": []}),
             json!({"schema": 1, "type": "prompt", "text": "hi"}),
             json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "stdin=hi"}),
@@ -367,7 +367,7 @@ fn debug_keeps_tempdir_and_writes_raw_jsonl() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "[debug] sandbox: none (--sandbox off)\n[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
+            "[debug] sandbox: none (--sandbox off)\n[debug] command: {} '<prompt 2 bytes>'\n[debug] PATH: {}\n[debug] set: (none)\n[debug] removed: (none)\n[debug] agentrun variables: (none)\n[debug] deny read: (none)\n[debug] credentials: (none)\n[debug] tempdir: {}\n[debug] raw: {}\n",
             executable.display(),
             env.path_var(),
             dir.display(),
@@ -409,7 +409,7 @@ fn dry_run_prints_quoted_command_and_path() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "command: {} --flag 'it'\\''s' 'two words' '<prompt 2 bytes>'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\n",
+            "command: {} --flag 'it'\\''s' 'two words' '<prompt 2 bytes>'\nPATH: {}\nset: (none)\nremoved: (none)\nagentrun variables: (none)\ndeny read: (none)\n",
             env.bin().join("claude").display(),
             env.path_var()
         )
@@ -440,7 +440,7 @@ fn text_format_shows_note_and_lines() {
     assert_eq!(
         lines[..4],
         [
-            "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches",
+            "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches",
             "[main] prompt hi",
             "[main] agent start explore#1 (haiku): look around",
             "[explore#1] tool Grep: foo",
@@ -498,7 +498,7 @@ fn text_format_note_for_sandbox_off() {
     let outcome = run(&env, &["--format=text"], false);
     assert_eq!(
         outcome.stdout.lines().next().unwrap(),
-        "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches"
+        "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches"
     );
 }
 
@@ -551,7 +551,7 @@ fn start_event_records_none_for_relax_and_off() {
         let text = run(&env, &["--format", "text", "--sandbox", "relax"], false);
         assert_eq!(
             text.stdout.lines().next().unwrap(),
-            "[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent writes or which hosts it reaches"
+            "[note] sandbox not running (--sandbox relax: bwrap cannot start: No permissions to create new namespace). agentrun does not restrict what the agent reads or writes or which hosts it reaches"
         );
     }
     let off = run(&env, &["--sandbox", "off"], false);

@@ -197,6 +197,7 @@ impl Adapter for Pi {
             &invocation.cwd,
             &invocation.tempdir,
             state.as_ref(),
+            &invocation.denied_reads,
             invocation.proxy.as_ref(),
             invocation.args.dry_run,
         )?;
@@ -1054,6 +1055,7 @@ mod tests {
                 &real_path(&setup.work()),
                 &real_path(&setup.tempdir()),
                 Some(&state),
+                &[],
                 Some("41234"),
             )
         );

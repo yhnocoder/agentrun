@@ -5,9 +5,9 @@ use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::time::Instant;
 
-use super::PiState;
 #[cfg(target_os = "macos")]
 use super::{Available, Unavailable, Wrapper, start_check};
+use super::{Hidden, PiState};
 #[cfg(target_os = "macos")]
 use crate::cli::Runtime;
 #[cfg(target_os = "macos")]
@@ -21,6 +21,7 @@ pub fn seatbelt_profile(
     cwd: &Path,
     tempdir: &Path,
     state: Option<&PiState>,
+    hidden: &[Hidden],
     port: Option<&str>,
 ) -> String {
     let quoted = |path: &Path| {
@@ -52,6 +53,13 @@ pub fn seatbelt_profile(
             "(allow network-outbound (remote tcp \"localhost:{port}\"))\n"
         ));
     }
+    if !hidden.is_empty() {
+        let paths: Vec<String> = hidden
+            .iter()
+            .map(|entry| format!("  (subpath {})", quoted(&entry.path)))
+            .collect();
+        profile.push_str(&format!("(deny file-read*\n{})\n", paths.join("\n")));
+    }
     profile
 }
 
@@ -59,12 +67,14 @@ pub fn write_seatbelt_profile(
     cwd: &Path,
     tempdir: &Path,
     state: Option<&PiState>,
+    hidden: &[Hidden],
     port: Option<&str>,
 ) -> std::io::Result<()> {
     let profile = seatbelt_profile(
         &std::fs::canonicalize(cwd)?,
         &std::fs::canonicalize(tempdir)?,
         state,
+        hidden,
         port,
     );
     OpenOptions::new()
@@ -165,6 +175,7 @@ mod tests {
             Path::new("/private/var/work"),
             Path::new("/private/tmp/agentrun-x"),
             Some(&state),
+            &[],
             Some("41234"),
         );
         assert_eq!(
@@ -194,8 +205,39 @@ mod tests {
     }
 
     #[test]
+    fn seatbelt_profile_denies_reading_the_hidden_paths() {
+        let hidden = [
+            Hidden {
+                path: PathBuf::from("/Users/me/.ssh"),
+                dir: true,
+            },
+            Hidden {
+                path: PathBuf::from("/Users/me/.netrc"),
+                dir: false,
+            },
+        ];
+        let profile =
+            seatbelt_profile(Path::new("/work"), Path::new("/tmp/s"), None, &hidden, None);
+        assert!(
+            profile.ends_with(concat!(
+                "(deny network*)\n",
+                "(deny file-read*\n",
+                "  (subpath \"/Users/me/.ssh\")\n",
+                "  (subpath \"/Users/me/.netrc\"))\n",
+            )),
+            "{profile}"
+        );
+    }
+
+    #[test]
     fn seatbelt_profile_without_state_or_port_and_with_quotes_in_paths() {
-        let profile = seatbelt_profile(Path::new("/work/a\"b"), Path::new("/tmp/c\\d"), None, None);
+        let profile = seatbelt_profile(
+            Path::new("/work/a\"b"),
+            Path::new("/tmp/c\\d"),
+            None,
+            &[],
+            None,
+        );
         assert!(
             profile.contains("  (subpath \"/work/a\\\"b\")\n  (subpath \"/tmp/c\\\\d\")\n  (literal \"/dev/null\")\n"),
             "{profile}"
@@ -207,7 +249,13 @@ mod tests {
     #[test]
     fn seatbelt_profile_with_a_plain_login_file_lists_only_the_five_entries() {
         let state = state("/Users/me/.pi/agent", None, &["/Users/me/.pi/agent/bin"]);
-        let profile = seatbelt_profile(Path::new("/work"), Path::new("/tmp/s"), Some(&state), None);
+        let profile = seatbelt_profile(
+            Path::new("/work"),
+            Path::new("/tmp/s"),
+            Some(&state),
+            &[],
+            None,
+        );
         assert_eq!(
             profile.matches("(literal \"/Users/me/").count(),
             5,
@@ -231,13 +279,14 @@ mod tests {
             &real.join("work-link"),
             &real.join("session-link"),
             None,
+            &[],
             Some("7"),
         )
         .unwrap();
         let path = session.join("seatbelt.sb");
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            seatbelt_profile(&work, &session, None, Some("7"))
+            seatbelt_profile(&work, &session, None, &[], Some("7"))
         );
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,

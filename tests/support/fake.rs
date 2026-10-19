@@ -51,6 +51,7 @@ impl Adapter for FakeAdapter {
             &invocation.cwd,
             &invocation.tempdir,
             None,
+            &invocation.denied_reads,
             invocation.proxy.as_ref(),
             invocation.args.dry_run,
         )?;

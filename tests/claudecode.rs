@@ -101,7 +101,15 @@ fn fake_claude_run_without_sandbox() {
     let env = Env::with("claude", FAKE_CLAUDE);
     let output = run(
         &env,
-        &["--sandbox", "off", "--model", "sonnet", "--", "--extra"],
+        &[
+            "--sandbox",
+            "off",
+            "--no-default-deny-read",
+            "--model",
+            "sonnet",
+            "--",
+            "--extra",
+        ],
         "say hi\n",
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -220,7 +228,11 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
         return;
     }
     let env = Env::with("claude", FAKE_CLAUDE);
-    let output = run(&env, &["--dry-run", "--prompt", "hi"], "");
+    let output = run(
+        &env,
+        &["--dry-run", "--no-default-deny-read", "--prompt", "hi"],
+        "",
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let command = stdout.lines().next().unwrap();
@@ -407,7 +419,15 @@ fn unsandboxed_claude_with_full_network_gets_no_settings() {
     let env = Env::with("claude", CURL_CLAUDE);
     let output = run(
         &env,
-        &["--sandbox", "off", "--network", "full", "--prompt", "fetch"],
+        &[
+            "--sandbox",
+            "off",
+            "--no-default-deny-read",
+            "--network",
+            "full",
+            "--prompt",
+            "fetch",
+        ],
         "",
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -432,4 +452,53 @@ fn unsandboxed_claude_with_full_network_gets_no_settings() {
         "code=noproxy socat=unset proxy=unset"
     );
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[test]
+fn deny_read_lists_the_defaults_then_the_given_paths() {
+    let env = Env::with("claude", FAKE_CLAUDE);
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--deny-read",
+            "/nonexistent/secret",
+            "--prompt",
+            "hi",
+        ],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let start = &support::events(&output)[0];
+    let home = env.home();
+    let mut expected: Vec<String> = agentrun::runtime::DENIED_HOME_ENTRIES
+        .iter()
+        .chain(&[".codex/auth.json", ".pi/agent/auth.json"])
+        .map(|entry| home.join(entry).to_string_lossy().into_owned())
+        .collect();
+    expected.push("/nonexistent/secret".to_string());
+    assert_eq!(start["deny_read"], json!(expected));
+}
+
+#[test]
+fn deny_read_containing_the_working_directory_is_rejected() {
+    let env = Env::with("claude", FAKE_CLAUDE);
+    let work = env.work();
+    let parent = work.parent().unwrap().to_str().unwrap();
+    let output = run(
+        &env,
+        &["--sandbox", "off", "--deny-read", parent, "--prompt", "hi"],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        format!(
+            "--deny-read {parent}: contains the working directory {}",
+            work.display()
+        )
+    );
 }

@@ -635,10 +635,12 @@ fn real_bwrap_pi_checks_bind_the_state_dir_and_reach_the_allowed_host() {
         .collect();
     assert_eq!(pi_sandbox_commands.len(), 2, "{debug}");
     let state_dir = std::fs::canonicalize(env.home().join(".pi/agent")).unwrap();
+    let codex_login = std::fs::canonicalize(env.home().join(".codex/auth.json")).unwrap();
     assert!(
         pi_sandbox_commands[0].contains(&format!(
-            "--bind {0} {0} --ro-bind {0}/settings.json {0}/settings.json --dev /dev",
-            state_dir.display()
+            "--bind {0} {0} --ro-bind {0}/settings.json {0}/settings.json --ro-bind /dev/null {1} --dev /dev",
+            state_dir.display(),
+            codex_login.display()
         )),
         "{debug}"
     );

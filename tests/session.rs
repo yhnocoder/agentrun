@@ -158,12 +158,18 @@ fn dry_run_lists_variable_names_and_skips_credentials() {
         false,
     );
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let denied: Vec<String> = agentrun::runtime::DENIED_HOME_ENTRIES
+        .iter()
+        .chain(&[".claude/.credentials.json", ".codex/auth.json"])
+        .map(|entry| format!("{home_str}/{entry}"))
+        .collect();
     assert_eq!(
         outcome.stdout,
         format!(
-            "command: {} '<prompt 2 bytes>'\nPATH: {}\nset: ZED, ALPHA, GH_TOKEN\nremoved: (none)\nagentrun variables: AGENTRUN_PI_AUTH, AGENTRUN_SANDBOX\n",
+            "command: {} '<prompt 2 bytes>'\nPATH: {}\nset: ZED, ALPHA, GH_TOKEN\nremoved: (none)\nagentrun variables: AGENTRUN_PI_AUTH, AGENTRUN_SANDBOX\ndeny read: {}\n",
             env.bin().join("pi").display(),
-            env.path_var()
+            env.path_var(),
+            denied.join(", ")
         )
     );
     assert!(outcome.stderr.is_empty());
@@ -188,11 +194,12 @@ fn debug_lists_removed_variables_for_claude_code() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let lines: Vec<&str> = outcome.stderr.lines().collect();
     assert_eq!(
-        lines[3..7],
+        lines[3..8],
         [
             "[debug] set: ANTHROPIC_API_KEY",
             "[debug] removed: ANTHROPIC_API_KEY, CLAUDE_CODE_USE_BEDROCK",
             "[debug] agentrun variables: AGENTRUN_CODEX_AUTH",
+            "[debug] deny read: (none)",
             "[debug] credentials: (none)",
         ]
     );

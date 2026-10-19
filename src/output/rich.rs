@@ -401,6 +401,7 @@ mod tests {
                 allow: vec![],
                 enforced: false,
             },
+            deny_read: vec![],
             model: model.map(str::to_string),
             cwd: "/work".to_string(),
             argv: vec![],

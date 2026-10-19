@@ -65,6 +65,8 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--sandbox on|relax|off</code></td><td>沙箱做不到时怎么办，见<a href="isolation.html#sandbox">沙箱模式</a>。高于环境变量 <code>AGENTRUN_SANDBOX</code></td><td><code>on</code></td></tr>
     <tr><td><code>--network none|full|custom</code></td><td>命令与网页工具能访问哪些主机，见<a href="isolation.html#network">网络</a></td><td><code>none</code></td></tr>
     <tr><td><code>--allow-host HOST[:PORT]</code></td><td>允许访问的主机，可重复，只能与 <code>--network custom</code> 一起给出</td><td>无</td></tr>
+    <tr><td><code>--deny-read PATH</code></td><td>agent 不能读的文件或目录，可重复，加在默认列表之后。等于或包含工作目录时是用法错误，见<a href="isolation.html#read">读取限制</a></td><td>无</td></tr>
+    <tr><td><code>--no-default-deny-read</code></td><td>不用默认的不可读列表，只限制 <code>--deny-read</code> 给出的路径</td><td>使用默认列表</td></tr>
     <tr><td><code>--path DIR</code></td><td>放在会话 PATH 最前面的目录，可重复，必须存在</td><td>无</td></tr>
     <tr><td><code>--env KEY[=VALUE]</code></td><td>给会话设置一个环境变量，可重复。只写 KEY 时取调用方环境里的同名变量，见<a href="session.html#env">会话环境</a></td><td>无</td></tr>
     <tr><td><code>--env-file FILE</code></td><td>从文件读取环境变量，可重复，按给出的顺序加载</td><td>无</td></tr>
@@ -83,8 +85,9 @@ command: /usr/local/bin/pi -p --mode json --no-session ... -- '&lt;prompt 12 byt
 PATH: /usr/local/bin:/usr/bin:/bin
 set: GH_TOKEN
 removed: (none)
-agentrun variables: (none)</div>
-<p><code>agentrun variables</code> 一行列出调用方环境里以 <code>AGENTRUN_</code> 开头的变量名，它们只给 agentrun 自己用，不进入会话，见<a href="session.html#env">会话环境</a>。</p>
+agentrun variables: (none)
+deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json, /home/me/.codex/auth.json</div>
+<p><code>agentrun variables</code> 一行列出调用方环境里以 <code>AGENTRUN_</code> 开头的变量名，它们只给 agentrun 自己用，不进入会话，见<a href="session.html#env">会话环境</a>。<code>deny read</code> 一行列出 agent 不能读的路径，与 <code>start</code> 事件的 <code>deny_read</code> 相同，见<a href="isolation.html#read">读取限制</a>。</p>
 
 <p>另外有 <code>agentrun doctor</code>。在 <a href="#doctor_check">后文</a> 详细描述。</p>
 
@@ -102,7 +105,7 @@ agentrun variables: (none)</div>
 <h3 id="preflight">启动前检查</h3>
 <p>以下情形在启动运行时之前报错。标准输出只有一个 <code>end</code> 事件，<code>status</code> 为 <code>rejected</code>，<code>detail</code> 写出原因与修正方法；同一个原因另写一行到标准错误；agentrun 以退出码 2 结束。</p>
 <ul>
-  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
+  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、<code>--deny-read</code> 等于或包含工作目录、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败。</li>
@@ -192,7 +195,7 @@ agentrun variables: (none)</div>
   --session-id &lt;新生成的 UUID v4&gt;
   --tools Read,Edit,Write,Glob,Grep,Bash,Task
   --allowedTools &lt;放行列表&gt;
-  [--settings &lt;沙箱设置&gt;]
+  [--settings &lt;权限与沙箱设置&gt;]
   [--model ID] [--effort LEVEL] [--max-turns N]
   &lt;-- 之后的调用方参数&gt;</code></pre>
 <ul>
@@ -205,22 +208,26 @@ agentrun variables: (none)</div>
   <li><code>--network full</code> 时两个列表都加上 <code>WebFetch</code> 与 <code>WebSearch</code>；<code>custom</code> 时 <code>--tools</code> 加 <code>WebFetch</code>，<code>--allowedTools</code> 每个主机加一条 <code>WebFetch(domain:HOST)</code>。</li>
   <li>提示词从标准输入传入，不在命令行里：写入一行 JSON <code>{"type":"user","message":{"role":"user","content":"&lt;提示词&gt;"}}</code>，然后关闭标准输入。<code>--replay-user-messages</code> 让 claude-code 把这条消息回显到输出里，agentrun 据此输出 <code>prompt</code> 事件。不加这两个选项时，输出里没有提示词。实测关闭标准输入后进程正常结束（退出码 0）；多行提示词与约 200 KB 的提示词，回显与原文逐字相同；收到 SIGINT 时，回显在中断前已经输出。</li>
 </ul>
-<p>沙箱设置（只在沙箱打开时传）：</p>
+<p><code>--settings</code> 在沙箱打开、或者不可读列表不为空时传。<code>permissions</code> 只在不可读列表不为空时写，<code>sandbox</code> 只在沙箱打开时写：</p>
 <pre><code class="language-json">{
+  "permissions": {
+    "deny": ["Read(//&lt;路径&gt;)", "Read(//&lt;路径&gt;/**)", ...]
+  },
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true,
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
     "filesystem": {
-      "allowWrite": ["&lt;cwd 的绝对路径&gt;", "&lt;会话临时目录&gt;"]
+      "allowWrite": ["&lt;cwd 的绝对路径&gt;", "&lt;会话临时目录&gt;"],
+      "denyRead": ["&lt;路径&gt;", ...]
     },
     "network": {
       "allowedDomains": []
     }
   }
 }</code></pre>
-<p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时 <code>network</code> 改为 <code>{"allowedDomains":[],"httpProxyPort":&lt;代理端口&gt;,"socksProxyPort":&lt;代理端口&gt;}</code>，两个端口都是过滤代理的 TCP 端口（过滤代理按第一个字节区分 HTTP 与 SOCKS5）；<code>--dry-run</code> 的命令里端口写成 <code>&lt;proxy port&gt;</code>。</p>
+<p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时 <code>network</code> 改为 <code>{"allowedDomains":[],"httpProxyPort":&lt;代理端口&gt;,"socksProxyPort":&lt;代理端口&gt;}</code>，两个端口都是过滤代理的 TCP 端口（过滤代理按第一个字节区分 HTTP 与 SOCKS5）；<code>--dry-run</code> 的命令里端口写成 <code>&lt;proxy port&gt;</code>。<code>deny</code> 与 <code>denyRead</code> 的路径来自<a href="isolation.html#read">读取限制</a>，路径是符号链接时链接与目标都写；不可读列表为空时没有 <code>denyRead</code>。</p>
 
 <h3>输出映射</h3>
 <p>stream-json 每行一个 JSON 对象。用到的对象与字段：</p>
@@ -285,11 +292,13 @@ agentrun variables: (none)</div>
   --bind &lt;pi 状态目录&gt; &lt;pi 状态目录&gt;
   --ro-bind &lt;状态目录里已有的条目&gt; &lt;同一路径&gt;...
   --bind &lt;auth.json 的链接目标&gt; &lt;同一路径&gt;
+  --tmpfs &lt;不可读的目录&gt; --remount-ro &lt;同一路径&gt;...
+  --ro-bind /dev/null &lt;不可读的文件&gt;...
   --dev /dev --proc /proc --die-with-parent --unshare-net --
   /bin/sh -c '"$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2&gt;/dev/null &amp; shift 2; exec "$@"'
   &lt;socat&gt; &lt;代理端口&gt; &lt;临时目录&gt;/proxy.sock
   &lt;pi 的命令&gt;</code></pre>
-  macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb &lt;pi 的命令&gt;</code>。状态目录的三组参数见<a href="isolation.html">沙箱与网络</a>：<code>--ro-bind</code> 对目录里除五个可写条目之外的每个已有条目各一组，<code>auth.json</code> 不是符号链接时没有最后一组 <code>--bind</code>；算不出状态目录（<code>PI_CODING_AGENT_DIR</code> 与 <code>HOME</code> 都没有）时这三组都没有，<code>--dry-run</code> 下目录不存在时也没有。Linux 的 <code>sh</code> 先在后台启动 <code>socat</code>，把沙箱里 <code>127.0.0.1</code> 上与过滤代理相同的端口号转发到会话临时目录里的 Unix socket，再用 <code>exec</code> 换成 pi，进程组与退出码不变；pi 退出后进程组收到 SIGKILL，socat 一起结束。socat 的标准错误指向 <code>/dev/null</code>：沙箱里的进程中途关闭连接时 socat 会打印一行 read 错误，这些行会混进 pi 的标准错误输出；转发本身不会启动失败，因为命名空间里只有回环接口，socket 文件在启动 pi 之前已经存在。</li>
+  macOS 是 <code>/usr/bin/sandbox-exec -f &lt;临时目录&gt;/seatbelt.sb &lt;pi 的命令&gt;</code>。状态目录的三组参数见<a href="isolation.html">沙箱与网络</a>：<code>--ro-bind</code> 对目录里除五个可写条目之外的每个已有条目各一组，<code>auth.json</code> 不是符号链接时没有最后一组 <code>--bind</code>；算不出状态目录（<code>PI_CODING_AGENT_DIR</code> 与 <code>HOME</code> 都没有）时这三组都没有，<code>--dry-run</code> 下目录不存在时也没有。不可读的路径见<a href="isolation.html#read">读取限制</a>，不存在的路径没有对应的参数。Linux 的 <code>sh</code> 先在后台启动 <code>socat</code>，把沙箱里 <code>127.0.0.1</code> 上与过滤代理相同的端口号转发到会话临时目录里的 Unix socket，再用 <code>exec</code> 换成 pi，进程组与退出码不变；pi 退出后进程组收到 SIGKILL，socat 一起结束。socat 的标准错误指向 <code>/dev/null</code>：沙箱里的进程中途关闭连接时 socat 会打印一行 read 错误，这些行会混进 pi 的标准错误输出；转发本身不会启动失败，因为命名空间里只有回环接口，socket 文件在启动 pi 之前已经存在。</li>
   <li>环境里不另设变量。pi 按 <code>PI_CODING_AGENT_DIR</code>、未设时 <code>~/.pi/agent</code> 使用用户的状态目录，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>
 
@@ -340,7 +349,7 @@ agentrun variables: (none)</div>
 <pre><code class="language-bash">&lt;codex 的绝对路径&gt; exec --json --skip-git-repo-check
   --ignore-user-config --ignore-rules -C &lt;cwd&gt;
   -c default_permissions=agentrun
-  -c 'permissions.agentrun.filesystem={":root"="read", ":workspace_roots"={"."="write"}, "&lt;会话临时目录&gt;"="write"}'
+  -c 'permissions.agentrun.filesystem={":root"="read", ":workspace_roots"={"."="write"}, "&lt;会话临时目录&gt;"="write", "&lt;不可读的路径&gt;"="deny", ...}'
   -c permissions.agentrun.network.enabled=false
   -c approval_policy="never" -c web_search="disabled" -c project_doc_max_bytes=0
   -c skills.include_instructions=false -c skills.bundled.enabled=false -c allow_login_shell=false
@@ -353,7 +362,7 @@ agentrun variables: (none)</div>
   &lt;-- 之后的调用方参数&gt; -</code></pre>
 <ul>
   <li>环境里 <code>CODEX_HOME</code> 指向私有目录，见<a href="session.html#codex-home">私有配置目录</a>；它不出现在 argv、<code>start.env</code> 与 <code>set:</code> 行里。最后的 <code>-</code> 表示从标准输入读提示词，提示词原文写入标准输入后关闭。</li>
-  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
+  <li>沙箱打开时用名为 <code>agentrun</code> 的自定义权限配置，会话临时目录写真实路径（macOS 上 <code>/var</code> 指向 <code>/private/var</code>）。<code>filesystem</code> 表最后给不可读列表里每个存在的路径加一项 <code>"&lt;真实路径&gt;"="deny"</code>，见<a href="isolation.html#read">读取限制</a>。权限参数的三行按沙箱与 <code>--network</code> 取值如下，<code>web_search</code> 只在 <code>full</code> 下为 <code>"live"</code>：</li>
 </ul>
 <table>
   <thead>

@@ -120,6 +120,17 @@ pub struct RunArgs {
     pub allow_host: Vec<String>,
     #[arg(
         long,
+        value_name = "PATH",
+        help = "File or directory the agent may not read, repeatable"
+    )]
+    pub deny_read: Vec<PathBuf>,
+    #[arg(
+        long,
+        help = "Do not deny reading the built-in list of credential paths"
+    )]
+    pub no_default_deny_read: bool,
+    #[arg(
+        long,
         value_name = "DIR",
         help = "Directory prepended to the session PATH, repeatable"
     )]

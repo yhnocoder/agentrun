@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 
 use agentrun::output::SandboxKind;
 use agentrun::runtime::pi::state;
-use agentrun::sandbox::{wrap_seatbelt, wrapper_failure, write_seatbelt_profile};
+use agentrun::sandbox::{Hidden, hidden, wrap_seatbelt, wrapper_failure, write_seatbelt_profile};
 use tempfile::TempDir;
 
 struct Wrapped {
@@ -50,8 +50,18 @@ impl Wrapped {
     }
 
     fn run(&self, body: &str, args: &[&str], port: Option<&str>) -> Output {
+        self.run_hiding(body, args, &[], port)
+    }
+
+    fn run_hiding(
+        &self,
+        body: &str,
+        args: &[&str],
+        hidden: &[Hidden],
+        port: Option<&str>,
+    ) -> Output {
         let state = state(&self.state_dir()).unwrap();
-        write_seatbelt_profile(&self.cwd(), &self.tempdir(), Some(&state), port).unwrap();
+        write_seatbelt_profile(&self.cwd(), &self.tempdir(), Some(&state), hidden, port).unwrap();
         let script = self.tempdir().join("script.sh");
         support::env::write_script(&script, &format!("#!/bin/sh\n{body}"));
         let mut argv = vec![script.to_string_lossy().into_owned()];
@@ -82,6 +92,42 @@ fn outcomes(output: &Output) -> Vec<String> {
 }
 
 const WRITE_EACH: &str = "for f in \"$@\"; do if echo probe > \"$f\" 2>/dev/null; then echo \"written: $f\"; else echo \"blocked: $f\"; fi; done\n";
+
+#[test]
+fn hidden_paths_cannot_be_read_even_inside_the_working_directory() {
+    let wrapped = Wrapped::new();
+    let home = wrapped.home();
+    std::fs::create_dir_all(home.join(".ssh/keys")).unwrap();
+    std::fs::write(home.join(".ssh/keys/id"), "secret in a directory").unwrap();
+    std::fs::write(home.join(".netrc"), "secret file").unwrap();
+    std::os::unix::fs::symlink(home.join(".ssh"), home.join("ssh-link")).unwrap();
+    std::fs::write(wrapped.cwd().join("local.env"), "secret in cwd").unwrap();
+    std::fs::write(home.join("open.txt"), "visible").unwrap();
+    let hidden = hidden(&[
+        home.join("ssh-link"),
+        home.join(".netrc"),
+        wrapped.cwd().join("local.env"),
+        home.join(".missing"),
+    ]);
+    let ssh = std::fs::canonicalize(home.join(".ssh")).unwrap();
+    let output = wrapped.run_hiding(
+        "for f in \"$@\"; do if content=$(cat \"$f\" 2>/dev/null); then echo \"read: $content\"; else echo blocked; fi; done\nls -A \"$HOME/.ssh\" 2>/dev/null\nif echo x > \"$HOME/.ssh/new\" 2>/dev/null; then echo written; else echo not written; fi\n",
+        &[
+            ssh.join("keys/id").to_str().unwrap(),
+            home.join("ssh-link/keys/id").to_str().unwrap(),
+            home.join(".netrc").to_str().unwrap(),
+            wrapped.cwd().join("local.env").to_str().unwrap(),
+            home.join("open.txt").to_str().unwrap(),
+        ],
+        &hidden,
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        stdout(&output),
+        "blocked\nblocked\nblocked\nblocked\nread: visible\nnot written\n"
+    );
+}
 
 #[test]
 fn writes_only_cwd_tempdir_and_the_writable_state_entries() {
@@ -163,7 +209,7 @@ fn paths_with_quotes_and_backslashes_stay_writable() {
     let tempdir = root.path().join("session");
     std::fs::create_dir(&cwd).unwrap();
     std::fs::create_dir(&tempdir).unwrap();
-    write_seatbelt_profile(&cwd, &tempdir, None, None).unwrap();
+    write_seatbelt_profile(&cwd, &tempdir, None, &[], None).unwrap();
     let argv = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
@@ -229,7 +275,7 @@ fn without_a_port_no_connection_is_allowed() {
 #[test]
 fn the_wrapped_command_keeps_the_process_id_and_exit_code() {
     let wrapped = Wrapped::new();
-    write_seatbelt_profile(&wrapped.cwd(), &wrapped.tempdir(), None, None).unwrap();
+    write_seatbelt_profile(&wrapped.cwd(), &wrapped.tempdir(), None, &[], None).unwrap();
     let argv = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),

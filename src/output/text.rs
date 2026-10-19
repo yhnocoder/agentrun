@@ -114,7 +114,7 @@ impl TextFormatter {
             SandboxMode::Off => "--sandbox off".to_string(),
         };
         Some(format!(
-            "[note] sandbox not running ({mode}). agentrun does not restrict what the agent writes or which hosts it reaches"
+            "[note] sandbox not running ({mode}). agentrun does not restrict what the agent reads or writes or which hosts it reaches"
         ))
     }
 
@@ -183,6 +183,7 @@ mod tests {
                 allow: vec![],
                 enforced: false,
             },
+            deny_read: vec![],
             model: None,
             cwd: "/work".to_string(),
             argv: vec![],
@@ -224,14 +225,14 @@ mod tests {
         assert_eq!(
             relax.lines(&start()),
             vec![
-                "[note] sandbox not running (--sandbox relax: not implemented in this build). agentrun does not restrict what the agent writes or which hosts it reaches"
+                "[note] sandbox not running (--sandbox relax: not implemented in this build). agentrun does not restrict what the agent reads or writes or which hosts it reaches"
             ]
         );
         let mut off = TextFormatter::new(SandboxMode::Off, "not implemented in this build");
         assert_eq!(
             off.lines(&start()),
             vec![
-                "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches"
+                "[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches"
             ]
         );
         let mut on = TextFormatter::new(SandboxMode::On, "");

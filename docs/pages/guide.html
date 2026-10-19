@@ -63,6 +63,19 @@ agentrun claude-code &lt; task.md</code></pre>
 <span class="dim">[end]</span> finished 6.8s  in 7.9k  out 0.4k  cached 86%</div>
 <p>被拒绝的连接显示为 <code>net denied</code> 一行，括号里是原因。解析到内网地址的主机默认也会被拒绝，需要访问时把主机名原样写进 <code>--allow-host</code>。agentrun 不支持 IPv6。规则的细节见<a href="isolation.html#network">网络</a>。</p>
 
+<h2 id="deny-read">不让 agent 读某些文件</h2>
+<p>默认情况下，agent 读不到 <code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code>，也读不到另外两个运行时的登录文件。还有别的文件不想让 agent 看到时，用 <code>--deny-read</code> 加上，可以写多次，文件和目录都可以：</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --deny-read .env --format text --prompt "依次运行 cat ~/.aws/config 与 cat .env，然后用一行回复：每个文件是否读到了内容"
+<span class="dim">[main]</span> prompt 依次运行 cat ~/.aws/config 与 cat .env，然后用一行回复：每个文件是否读到了内容
+<span class="dim">[main]</span> text 我会运行这些命令。
+<span class="dim">[main]</span> tool bash: cat ~/.aws/config
+<span class="dim">[main]</span> tool bash: cat .env
+<span class="dim">[main]</span> text `~/.aws/config` 不存在，所以没有读到内容；`.env` 因权限不足（Permission denied）没有读到内容：两个文件都没有读到内容。
+<span class="dim">[end]</span> finished 3.1s  in 4.6k  out 0.1k  cached 92%</div>
+<p>agent 看到的目录是空的，文件读取报错，运行照常继续。这次实际挡住了哪些路径，见 jsonl 输出里 <code>start</code> 事件的 <code>deny_read</code>，或者加 <code>--dry-run</code> 看 <code>deny read:</code> 一行。</p>
+<p>agent 确实需要读默认列表里的某个路径时，加 <code>--no-default-deny-read</code> 去掉整个默认列表，再用 <code>--deny-read</code> 把其余路径加回来。<code>--deny-read</code> 不能写工作目录或它的上层目录。</p>
+<p>这项限制靠沙箱执行。沙箱没有运行时，只有 claude-code 的读文件与搜索工具仍然受限制，命令和另外两个运行时都能读到这些文件，见<a href="isolation.html#read">读取限制</a>。</p>
+
 <h2 id="env">传入环境变量与密钥</h2>
 <p>agent 默认继承你当前 shell 的环境变量，但会去掉可能改变登录方式的变量，例如 claude-code 的 <code>ANTHROPIC_</code> 开头的变量。要给 agent 额外的变量，用 <code>--env</code> 或 <code>--env-file</code>：</p>
 <pre><code class="language-bash">agentrun pi --env GREETING --env-file dev.env --prompt "..."</code></pre>
@@ -120,7 +133,7 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 agentrun: sandbox is not available: bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor
 <span class="dim">[end]</span> rejected sandbox is not available: bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</div>
 <p>沙箱关闭后，每次运行的输出第一行会提醒你这一点：</p>
-<div class="term"><span class="warn">[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent writes or which hosts it reaches</span></div>
+<div class="term"><span class="warn">[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches</span></div>
 
 <h2 id="ci">在脚本与 CI 里判断成败</h2>
 <p>只看退出码就能区分三类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
@@ -173,6 +186,7 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
     <tr><th></th><th>沙箱开启时（默认）</th></tr>
   </thead>
   <tbody>
+    <tr><td>读文件</td><td>读不到存放密钥与账号的常见路径和另外两个运行时的登录文件，<code>--deny-read</code> 可以再加，见<a href="#deny-read">不让 agent 读某些文件</a></td></tr>
     <tr><td>写文件</td><td>只能写工作目录（<code>--cwd</code>，默认是当前目录）和一个临时目录，运行结束后临时目录会被删除</td></tr>
     <tr><td>联网</td><td>按 <code>--network</code>，默认不能联网</td></tr>
     <tr><td>你的配置</td><td>不读取你自己的运行时设置、插件、规则文件与会话记录，每次运行都从干净的状态开始</td></tr>
@@ -188,7 +202,7 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <p>三种情况下这些限制会变化：</p>
 <ul>
   <li><code>--sandbox relax</code>：沙箱能启动就用，启动不了就不用沙箱照常运行。</li>
-  <li><code>--sandbox off</code>：不用沙箱，也不限制网络。只在容器之类已经隔离的环境里用。</li>
+  <li><code>--sandbox off</code>：不用沙箱，也不限制网络与读取，只有 claude-code 的读文件与搜索工具仍然读不到不可读列表里的路径。只在容器之类已经隔离的环境里用。</li>
   <li><code>--</code> 之后的参数会原样交给运行时，可以覆盖 agentrun 的权限设置。agentrun 不阻止，这时安全由你负责。</li>
 </ul>
 <p>每种组合剩下的风险见<a href="isolation.html">沙箱与网络</a>。</p>

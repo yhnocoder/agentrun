@@ -87,6 +87,7 @@ pub struct Start {
     pub runtime: Runtime,
     pub sandbox: SandboxKind,
     pub network: NetworkInfo,
+    pub deny_read: Vec<String>,
     pub model: Option<String>,
     pub cwd: String,
     pub argv: Vec<String>,
@@ -321,6 +322,7 @@ mod tests {
                 allow: vec!["pypi.org".to_string()],
                 enforced: false,
             },
+            deny_read: vec!["/home/me/.ssh".to_string()],
             model: None,
             cwd: "/work".to_string(),
             argv: vec!["/bin/claude".to_string(), "-p".to_string()],
@@ -328,7 +330,7 @@ mod tests {
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"start","time":"2026-10-04T13:00:00.000Z","runtime":"claude-code","sandbox":"none","network":{"mode":"custom","allow":["pypi.org"],"enforced":false},"model":null,"cwd":"/work","argv":["/bin/claude","-p"],"env":[]}"#
+            r#"{"schema":1,"type":"start","time":"2026-10-04T13:00:00.000Z","runtime":"claude-code","sandbox":"none","network":{"mode":"custom","allow":["pypi.org"],"enforced":false},"deny_read":["/home/me/.ssh"],"model":null,"cwd":"/work","argv":["/bin/claude","-p"],"env":[]}"#
         );
     }
 

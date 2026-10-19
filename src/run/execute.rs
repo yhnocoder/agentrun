@@ -12,7 +12,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::signal::Signals;
-use super::{Caller, Guards, Resources, create_raw, elapsed_ms};
+use super::{Caller, Guards, Resources, create_raw, elapsed_ms, path_texts};
 use crate::cli::Runtime;
 use crate::network::{FilterProxy, Policy};
 use crate::output::{
@@ -218,6 +218,7 @@ fn start_event(invocation: &Invocation, launch: &Launch) -> Event {
             allow: invocation.args.allow_host.clone(),
             enforced: invocation.sandbox.runs(),
         },
+        deny_read: path_texts(&invocation.denied_reads),
         model: invocation.args.model.clone(),
         cwd: invocation.cwd.to_string_lossy().into_owned(),
         argv: launch

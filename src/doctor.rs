@@ -657,6 +657,8 @@ impl Doctor {
             sandbox: Some(SandboxMode::Off),
             network: NetworkMode::None,
             allow_host: Vec::new(),
+            deny_read: Vec::new(),
+            no_default_deny_read: true,
             path: self.args.path.clone(),
             env: self.args.env.clone(),
             env_file: self.args.env_file.clone(),
@@ -731,12 +733,15 @@ impl Doctor {
         proxy: Option<&ProxyEndpoint>,
     ) -> Result<Wrap, String> {
         let state = runtime::sandbox_state(target.runtime, &target.session, &self.cwd)?;
+        let denied_reads =
+            runtime::default_denied_reads(target.runtime, &target.session, &self.cwd);
         match &sandbox.wrapper {
             Wrapper::Bubblewrap { .. } => Ok(Wrap::Bubblewrap(sandbox::wrap(
                 sandbox,
                 &dirs.work,
                 &dirs.tmp,
                 state.as_ref(),
+                &denied_reads,
                 proxy,
                 false,
             )?)),
@@ -745,6 +750,7 @@ impl Doctor {
                 &dirs.work,
                 &dirs.tmp,
                 state.as_ref(),
+                &denied_reads,
                 proxy,
                 false,
             )?)),
@@ -752,7 +758,13 @@ impl Doctor {
                 let tmp = std::fs::canonicalize(&dirs.tmp)
                     .map_err(|error| format!("cannot resolve {}: {error}", dirs.tmp.display()))?;
                 Ok(Wrap::Codex {
-                    prefix: codex::sandbox_command(&tmp, &dirs.work, network, &self.allow_hosts),
+                    prefix: codex::sandbox_command(
+                        &tmp,
+                        &denied_reads,
+                        &dirs.work,
+                        network,
+                        &self.allow_hosts,
+                    ),
                 })
             }
             Wrapper::None => Err("sandbox not running".to_string()),
