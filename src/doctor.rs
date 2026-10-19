@@ -40,10 +40,11 @@ const DRAIN: Duration = Duration::from_secs(1);
 const TEMPDIR_PREFIX: &str = "agentrun-doctor-";
 const PROMPT: &str = "agentrun doctor";
 const ORDER: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
-const SANDBOX_SCRIPT: &str =
-    r#"echo ok > "$1/inside.txt"; echo ok > "$2/outside.txt" 2>/dev/null; echo done"#;
+const SANDBOX_SCRIPT: &str = r#"echo ok > "$1/inside.txt"; echo ok > "$2/outside.txt" 2>/dev/null; cat "$2/unreadable.txt" 2>/dev/null; echo done"#;
 const INSIDE_FILE: &str = "inside.txt";
 const OUTSIDE_FILE: &str = "outside.txt";
+const UNREADABLE_FILE: &str = "unreadable.txt";
+const UNREADABLE_TEXT: &str = "unreadable";
 const CODEX_HOME_DIR: &str = "codex-home";
 const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
 const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
@@ -733,8 +734,9 @@ impl Doctor {
         proxy: Option<&ProxyEndpoint>,
     ) -> Result<Wrap, String> {
         let state = runtime::sandbox_state(target.runtime, &target.session, &self.cwd)?;
-        let denied_reads =
+        let mut denied_reads =
             runtime::default_denied_reads(target.runtime, &target.session, &self.cwd);
+        denied_reads.push(dirs.base.join(UNREADABLE_FILE));
         match &sandbox.wrapper {
             Wrapper::Bubblewrap { .. } => Ok(Wrap::Bubblewrap(sandbox::wrap(
                 sandbox,
@@ -760,7 +762,7 @@ impl Doctor {
                 Ok(Wrap::Codex {
                     prefix: codex::sandbox_command(
                         &tmp,
-                        &denied_reads,
+                        &sandbox::hidden(&denied_reads),
                         &dirs.work,
                         network,
                         &self.allow_hosts,
@@ -779,6 +781,9 @@ impl Doctor {
     ) -> Result<String, String> {
         let runtime = target.runtime;
         let dirs = self.check_dirs(runtime, Check::Sandbox)?;
+        let unreadable = dirs.base.join(UNREADABLE_FILE);
+        std::fs::write(&unreadable, format!("{UNREADABLE_TEXT}\n"))
+            .map_err(|error| format!("cannot create {}: {error}", unreadable.display()))?;
         let wrap = self.wrap(target, sandbox, &dirs, NetworkMode::None, None)?;
         let script = vec![
             "/bin/sh".to_string(),
@@ -809,6 +814,9 @@ impl Doctor {
         }
         if dirs.base.join(OUTSIDE_FILE).exists() {
             return Err("a write outside the allowed directories succeeded".to_string());
+        }
+        if finished.stdout.iter().any(|line| line == UNREADABLE_TEXT) {
+            return Err("a read of a denied path succeeded".to_string());
         }
         let mut detail = format!("{}: wrote inside, blocked outside", wrap.name());
         if runtime == Runtime::Pi {

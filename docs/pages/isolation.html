@@ -130,12 +130,12 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   </thead>
   <tbody>
     <tr><td>主目录里的密钥与账号（<code>DENIED_HOME_ENTRIES</code>）</td><td><code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code></td></tr>
-    <tr><td>另外两个运行时的登录文件</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/.credentials.json</code>（未设时 <code>~/.claude/.credentials.json</code>）、codex 的 <code>$CODEX_HOME/auth.json</code>（未设时 <code>~/.codex/auth.json</code>）、pi 的 <code>$PI_CODING_AGENT_DIR/auth.json</code>（未设时 <code>~/.pi/agent/auth.json</code>）</td></tr>
+    <tr><td>三个运行时的登录文件</td><td>claude-code 的 <code>$CLAUDE_CONFIG_DIR/.credentials.json</code>（未设时 <code>~/.claude/.credentials.json</code>）、codex 的 <code>$CODEX_HOME/auth.json</code>（未设时 <code>~/.codex/auth.json</code>）、pi 的 <code>$PI_CODING_AGENT_DIR/auth.json</code>（未设时 <code>~/.pi/agent/auth.json</code>）。运行 pi 时不含 pi 自己的登录文件</td></tr>
   </tbody>
 </table>
 <ul>
   <li><code>~</code> 与这三个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。</li>
-  <li>运行时自己的登录文件不在默认列表里，因为运行时要读它登录：pi 的整个进程在沙箱里；claude-code 与 codex 的进程在沙箱外，它们的工具与命令在沙箱里。</li>
+  <li>pi 的整个进程在沙箱里，要读写自己的登录文件来登录和刷新令牌，所以运行 pi 时不挡它。claude-code 与 codex 的进程在沙箱外读写自己的登录文件，只有它们的工具与命令受读取限制，所以运行它们时自己的登录文件也挡住。</li>
   <li><code>--deny-read</code> 的相对路径按 agentrun 的当前目录展开成绝对路径，不展开 <code>~</code>。路径等于或包含工作目录时是用法错误（退出码 2），<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: contains the working directory &lt;工作目录&gt;</code>；默认列表里包含工作目录的项直接去掉。理由：工作目录读不到时 agent 无法工作。</li>
   <li>最终的列表按默认列表在前、<code>--deny-read</code> 在后的顺序去重，写进 <code>start</code> 事件的 <code>deny_read</code> 与 <code>--dry-run</code>、<code>--debug</code> 的 <code>deny read:</code> 一行。</li>
 </ul>
@@ -145,7 +145,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   </thead>
   <tbody>
     <tr><td>claude-code</td><td><code>--settings</code> 的 <code>permissions.deny</code> 给每个路径写两条规则 <code>Read(//&lt;路径&gt;)</code> 与 <code>Read(//&lt;路径&gt;/**)</code>，Read、Grep、Glob 读这些路径时被拒绝，Grep 搜索上层目录时跳过它们；<code>sandbox.filesystem.denyRead</code> 列出同样的路径，Bash 命令读不到（Linux 上目录显示为空，文件读取报 Permission denied）。路径是符号链接时，链接与目标都写（claude 2.1.303 云端实测）</td><td><code>--settings</code> 只有 <code>permissions.deny</code>。Read、Grep、Glob 照样被拒绝；Bash 命令不在沙箱里，命令里直接写出这些路径时被 claude-code 拒绝，间接的写法由分类器判断，没有保证（claude 2.1.303 云端实测）</td></tr>
-    <tr><td>codex</td><td>自定义权限配置的 <code>filesystem</code> 表给每个存在的路径加一项 <code>"&lt;真实路径&gt;"="deny"</code></td><td>不限制</td></tr>
+    <tr><td>codex</td><td>自定义权限配置的 <code>filesystem</code> 表给每个存在的路径加一项 <code>"&lt;真实路径&gt;"="deny"</code>。用户登录文件在列表里时，私有 <code>CODEX_HOME</code> 里指向它的符号链接 <code>auth.json</code> 按链接本身的路径再加一项，不依赖 codex 是否解析符号链接</td><td>不限制</td></tr>
     <tr><td>pi</td><td>存在的路径先解析符号链接。Linux：目录用 <code>--tmpfs</code> 加 <code>--remount-ro</code> 换成只读的空目录，其他文件用 <code>--ro-bind /dev/null</code> 覆盖（读取报 Permission denied），写在所有 <code>--bind</code> 之后，所以工作目录与状态目录里的路径也能挡住。macOS：Seatbelt 配置末尾加 <code>(deny file-read* (subpath "&lt;真实路径&gt;") ...)</code></td><td>不限制</td></tr>
   </tbody>
 </table>
@@ -154,7 +154,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   <li>不存在的路径在 bwrap、Seatbelt 与 codex 里跳过：bwrap 不能在只读的根目录上新建挂载点，而沙箱里的 agent 只能在可写目录里新建文件。claude-code 的规则按路径匹配，不存在的路径也写。</li>
   <li>claude-code 同时写权限规则与 <code>denyRead</code>。只写权限规则时，claude-code 会把 Read 的拒绝规则并入沙箱（claude 2.1.303 云端实测），显式写 <code>denyRead</code> 不依赖这项内部行为；Read、Grep、Glob 在 claude 进程里执行，只能靠权限规则。</li>
   <li>Read 被规则拒绝时 claude-code 只返回工具错误，不输出 <code>permission_denied</code>，所以 <code>tool</code> 事件的 <code>denied</code> 为 <code>false</code>；Grep、Glob 被拒绝时为 <code>true</code>。</li>
-  <li>doctor 的沙箱与网络检查带上默认列表，检查的就是实际运行时的挂载与配置。</li>
+  <li>doctor 的沙箱与网络检查带上默认列表，检查的就是实际运行时的挂载与配置。沙箱检查另外把检查目录里的一个文件加进列表，确认沙箱里读不到它。</li>
 </ul>
 
 <h2 id="network">网络</h2>

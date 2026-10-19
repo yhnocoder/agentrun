@@ -180,9 +180,16 @@ impl Adapter for Codex {
                 })?
             };
             argv.extend(config(format!("default_permissions={PROFILE}")));
+            let mut hidden_reads = hidden(&invocation.denied_reads);
+            if invocation.denied_reads.contains(&login) {
+                hidden_reads.push(Hidden {
+                    path: home_path(&tempdir).join(LOGIN_FILE),
+                    dir: false,
+                });
+            }
             argv.extend(sandbox_permissions(
                 &tempdir,
-                &invocation.denied_reads,
+                &hidden_reads,
                 network,
                 &invocation.allow_hosts,
             ));
@@ -342,18 +349,18 @@ pub(crate) fn create_home(home: &Path, login: &Path) -> Result<(), String> {
 
 pub(crate) fn sandbox_permissions(
     tempdir: &Path,
-    denied_reads: &[PathBuf],
+    hidden_reads: &[Hidden],
     network: NetworkMode,
     allow_hosts: &[HostRule],
 ) -> Vec<String> {
-    let mut permissions = config(filesystem_setting(tempdir, &hidden(denied_reads))).to_vec();
+    let mut permissions = config(filesystem_setting(tempdir, hidden_reads)).to_vec();
     permissions.extend(network_settings(network, allow_hosts));
     permissions
 }
 
 pub(crate) fn sandbox_command(
     tempdir: &Path,
-    denied_reads: &[PathBuf],
+    hidden_reads: &[Hidden],
     cwd: &Path,
     network: NetworkMode,
     allow_hosts: &[HostRule],
@@ -361,7 +368,7 @@ pub(crate) fn sandbox_command(
     let mut command = ["sandbox", "-P", PROFILE].map(str::to_string).to_vec();
     command.extend(sandbox_permissions(
         tempdir,
-        denied_reads,
+        hidden_reads,
         network,
         allow_hosts,
     ));
@@ -928,6 +935,34 @@ mod tests {
             .launch(Path::new("/opt/bin/codex"), &unsandboxed)
             .unwrap();
         assert!(!launch.argv.iter().any(|arg| arg.contains("deny")));
+    }
+
+    #[test]
+    fn denying_the_login_file_also_denies_the_private_home_link() {
+        let setup = Setup::new();
+        let invocation = Invocation {
+            denied_reads: vec![setup.login()],
+            ..setup.invocation(true, &[])
+        };
+        let launch = Codex::new()
+            .launch(Path::new("/opt/bin/codex"), &invocation)
+            .unwrap();
+        let login = std::fs::canonicalize(setup.login()).unwrap();
+        let link = home_path(&std::fs::canonicalize(setup.tempdir()).unwrap()).join(LOGIN_FILE);
+        let filesystem = launch
+            .argv
+            .iter()
+            .find(|arg| arg.starts_with("permissions.agentrun.filesystem="))
+            .unwrap();
+        assert!(
+            filesystem.ends_with(&format!(
+                "=\"write\", \"{}\"=\"deny\", \"{}\"=\"deny\"}}",
+                login.display(),
+                link.display()
+            )),
+            "{filesystem}"
+        );
+        assert_eq!(std::fs::read_link(&link).unwrap(), setup.login());
     }
 
     #[test]

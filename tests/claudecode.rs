@@ -474,7 +474,11 @@ fn deny_read_lists_the_defaults_then_the_given_paths() {
     let home = env.home();
     let mut expected: Vec<String> = agentrun::runtime::DENIED_HOME_ENTRIES
         .iter()
-        .chain(&[".codex/auth.json", ".pi/agent/auth.json"])
+        .chain(&[
+            ".claude/.credentials.json",
+            ".codex/auth.json",
+            ".pi/agent/auth.json",
+        ])
         .map(|entry| home.join(entry).to_string_lossy().into_owned())
         .collect();
     expected.push("/nonexistent/secret".to_string());

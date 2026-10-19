@@ -97,6 +97,10 @@ pub(crate) fn login_file(runtime: Runtime, session: &Session, cwd: &Path) -> Opt
     }
 }
 
+fn reads_login_inside_sandbox(runtime: Runtime) -> bool {
+    runtime == Runtime::Pi
+}
+
 pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> Vec<PathBuf> {
     let home = session
         .env
@@ -110,7 +114,7 @@ pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> 
     paths.extend(
         RUNTIMES
             .into_iter()
-            .filter(|other| *other != runtime)
+            .filter(|other| *other != runtime || !reads_login_inside_sandbox(runtime))
             .filter_map(|other| login_file(other, session, cwd)),
     );
     paths.retain(|path| !contains(path, cwd));
@@ -358,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn default_denied_reads_list_home_entries_and_the_other_login_files() {
+    fn default_denied_reads_list_home_entries_and_every_login_file_but_pis_own() {
         let cwd = Path::new("/nonexistent/work");
         let home = [("HOME", "/nonexistent/home")];
         let logins = [
@@ -369,12 +373,12 @@ mod tests {
             (Runtime::Codex, "/nonexistent/home/.codex/auth.json"),
             (Runtime::Pi, "/nonexistent/home/.pi/agent/auth.json"),
         ];
-        for (runtime, own) in logins {
+        for (runtime, _) in logins {
             let mut expected = home_entries("/nonexistent/home");
             expected.extend(
                 logins
                     .iter()
-                    .filter(|(_, login)| *login != own)
+                    .filter(|(other, _)| runtime != Runtime::Pi || *other != Runtime::Pi)
                     .map(|(_, login)| PathBuf::from(login)),
             );
             assert_eq!(
