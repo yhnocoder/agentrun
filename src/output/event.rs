@@ -240,6 +240,7 @@ pub enum EndStatus {
     Failed,
     Interrupted(Signal),
     Timeout,
+    Limit,
     Rejected,
 }
 
@@ -250,6 +251,7 @@ impl EndStatus {
             EndStatus::Failed => "failed",
             EndStatus::Interrupted(_) => "interrupted",
             EndStatus::Timeout => "timeout",
+            EndStatus::Limit => "limit",
             EndStatus::Rejected => "rejected",
         }
     }
@@ -260,6 +262,7 @@ impl EndStatus {
             EndStatus::Failed => 1,
             EndStatus::Interrupted(signal) => signal.exit_code(),
             EndStatus::Timeout => 3,
+            EndStatus::Limit => 4,
             EndStatus::Rejected => 2,
         }
     }
@@ -463,6 +466,7 @@ mod tests {
             (EndStatus::Failed, "failed", 1),
             (EndStatus::Rejected, "rejected", 2),
             (EndStatus::Timeout, "timeout", 3),
+            (EndStatus::Limit, "limit", 4),
             (
                 EndStatus::Interrupted(Signal::Interrupt),
                 "interrupted",

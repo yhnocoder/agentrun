@@ -185,6 +185,7 @@ impl Session {
             code: Some(0),
             signal: None,
             timed_out: false,
+            limit: None,
         };
         let aggregator = std::mem::replace(&mut self.aggregator, Aggregator::new(false));
         let (events, _) = conclude(

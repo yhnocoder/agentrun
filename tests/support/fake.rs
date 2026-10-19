@@ -119,6 +119,9 @@ impl Adapter for FakeAdapter {
                 parent: optional(line, "parent"),
                 text: string(line, "text"),
             },
+            Some("call_start") => Record::CallStart {
+                parent: optional(line, "parent"),
+            },
             Some("usage") => Record::Usage {
                 parent: optional(line, "parent"),
                 model: optional(line, "model"),

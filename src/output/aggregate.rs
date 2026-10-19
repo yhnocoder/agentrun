@@ -37,6 +37,13 @@ pub enum Record {
         parent: Option<String>,
         text: String,
     },
+    CallStart {
+        parent: Option<String>,
+    },
+    CallUsage {
+        parent: Option<String>,
+        counts: TokenCounts,
+    },
     Usage {
         parent: Option<String>,
         model: Option<String>,
@@ -63,6 +70,8 @@ pub struct Aggregator {
     subagent_parents: HashMap<String, Option<String>>,
     running: Vec<RunningSubagent>,
     started_subagents: u64,
+    main_calls: u64,
+    call_tokens: HashMap<Option<String>, u64>,
     usages: Vec<UsageEntry>,
     run_usage: Option<Usage>,
     result: Option<String>,
@@ -101,6 +110,8 @@ impl Aggregator {
             subagent_parents: HashMap::new(),
             running: Vec::new(),
             started_subagents: 0,
+            main_calls: 0,
+            call_tokens: HashMap::new(),
             usages: Vec::new(),
             run_usage: None,
             result: None,
@@ -201,11 +212,20 @@ impl Aggregator {
                         .events
                         .push(Event::now(Body::Text(event::Text { parent, text })));
                 }
+                Record::CallStart { parent } => {
+                    if self.known_parent(parent).is_none() {
+                        self.main_calls += 1;
+                    }
+                }
+                Record::CallUsage { parent, counts } => {
+                    self.call_tokens.insert(parent, counts.total());
+                }
                 Record::Usage {
                     parent,
                     model,
                     counts,
                 } => {
+                    self.call_tokens.remove(&parent);
                     let parent = self.known_parent(parent);
                     self.usages.push(UsageEntry {
                         parent: parent.clone(),
@@ -248,6 +268,15 @@ impl Aggregator {
         };
         let result = self.result.take().or(self.last_main_text.take());
         (events, Summary { usage, result })
+    }
+
+    pub fn main_calls(&self) -> u64 {
+        self.main_calls
+    }
+
+    pub fn tokens(&self) -> u64 {
+        let reported: u64 = self.usages.iter().map(|entry| entry.counts.total()).sum();
+        reported + self.call_tokens.values().sum::<u64>()
     }
 
     fn known_parent(&self, parent: Option<String>) -> Option<String> {
@@ -472,6 +501,37 @@ mod tests {
         let (events, _) = aggregator.finish();
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0].body, Body::SubagentEnd(end) if end.id == "s1"));
+    }
+
+    #[test]
+    fn call_usage_counts_until_the_usage_of_the_same_parent_arrives() {
+        let counts = |output| TokenCounts {
+            input_tokens: Some(10),
+            output_tokens: Some(output),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            cost_usd: None,
+        };
+        let call_usage = |parent: Option<&str>, output| Record::CallUsage {
+            parent: parent.map(str::to_string),
+            counts: counts(output),
+        };
+        let mut aggregator = Aggregator::new(false);
+        let translated = aggregator.push(vec![
+            call_usage(None, 1),
+            call_usage(None, 5),
+            call_usage(Some("s1"), 2),
+        ]);
+        assert!(translated.events.is_empty());
+        assert_eq!(aggregator.tokens(), 27);
+        aggregator.push(vec![Record::Usage {
+            parent: None,
+            model: None,
+            counts: counts(5),
+        }]);
+        assert_eq!(aggregator.tokens(), 27);
+        aggregator.push(vec![call_usage(None, 0)]);
+        assert_eq!(aggregator.tokens(), 37);
     }
 
     #[test]

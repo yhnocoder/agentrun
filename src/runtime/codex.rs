@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::{
-    Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_max_turns,
+    Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_limits,
 };
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::image::write_copies;
@@ -195,7 +195,7 @@ impl Adapter for Codex {
     }
 
     fn check_args(&self, args: &RunArgs) -> Result<(), String> {
-        reject_max_turns(args)?;
+        reject_limits(Runtime::Codex, args)?;
         for given in &args.deny_read {
             let absolute = std::path::absolute(given).unwrap_or_else(|_| given.clone());
             let real = std::fs::canonicalize(&absolute).unwrap_or(absolute);
@@ -1195,15 +1195,21 @@ mod tests {
     }
 
     #[test]
-    fn check_args_rejects_max_turns() {
+    fn check_args_rejects_the_limits() {
         let setup = Setup::new();
-        let invocation = setup.invocation(false, &["--max-turns", "3"]);
+        let check = |extra: &[&str]| Codex::new().check_args(&setup.invocation(false, extra).args);
+        let rejected = |option: &str| {
+            Err(format!(
+                "{option} is not supported by codex: codex reports usage only when the run ends, so agentrun cannot stop it during the run"
+            ))
+        };
+        assert_eq!(check(&["--max-turns", "3"]), rejected("--max-turns"));
+        assert_eq!(check(&["--max-tokens", "100"]), rejected("--max-tokens"));
         assert_eq!(
-            Codex::new().check_args(&invocation.args),
-            Err("--max-turns is only supported by claude-code".to_string())
+            check(&["--max-tokens", "100", "--max-turns", "3"]),
+            rejected("--max-turns")
         );
-        let invocation = setup.invocation(false, &[]);
-        assert_eq!(Codex::new().check_args(&invocation.args), Ok(()));
+        assert_eq!(check(&[]), Ok(()));
     }
 
     #[test]

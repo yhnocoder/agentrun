@@ -104,9 +104,16 @@ pub struct RunArgs {
         long,
         value_name = "N",
         value_parser = clap::value_parser!(u64).range(1..),
-        help = "Maximum number of turns (claude-code only)"
+        help = "Terminate the runtime when the main agent starts model call N+1 (not codex)"
     )]
     pub max_turns: Option<u64>,
+    #[arg(
+        long,
+        value_name = "N",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Terminate the runtime when the tokens of all model calls exceed N (not codex)"
+    )]
+    pub max_tokens: Option<u64>,
     #[arg(
         long,
         value_name = "SECONDS",
