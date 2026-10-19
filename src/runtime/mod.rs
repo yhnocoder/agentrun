@@ -173,20 +173,35 @@ pub(crate) fn denied_reads(
     args: &RunArgs,
     session: &Session,
     cwd: &Path,
+    temp_base: &Path,
 ) -> Result<Vec<PathBuf>, String> {
+    let mut needed = vec![
+        ("working directory", cwd.to_path_buf()),
+        ("session temporary directory", temp_base.to_path_buf()),
+    ];
+    if runtime == Runtime::Pi {
+        needed.extend(pi::user_state_dir(session, cwd).map(|dir| ("pi state directory", dir)));
+    }
     let mut paths = if args.no_default_deny_read {
         Vec::new()
     } else {
         default_denied_reads(runtime, session, cwd)
     };
+    paths.retain(|path| needed.iter().all(|(_, dir)| !contains(path, dir)));
     for given in &args.deny_read {
+        if given.to_string_lossy().starts_with('~') {
+            return Err(format!(
+                "--deny-read {}: ~ is not expanded, give the full path",
+                given.display()
+            ));
+        }
         let path = std::path::absolute(given)
             .map_err(|error| format!("--deny-read {}: {error}", given.display()))?;
-        if contains(&path, cwd) {
+        if let Some((name, dir)) = needed.iter().find(|(_, dir)| contains(&path, dir)) {
             return Err(format!(
-                "--deny-read {}: contains the working directory {}",
+                "--deny-read {}: contains the {name} {}",
                 given.display(),
-                cwd.display()
+                dir.display()
             ));
         }
         paths.push(path);
@@ -200,12 +215,12 @@ pub(crate) fn denied_reads(
     Ok(unique)
 }
 
-fn contains(path: &Path, cwd: &Path) -> bool {
-    if cwd.starts_with(path) {
+fn contains(path: &Path, dir: &Path) -> bool {
+    if dir.starts_with(path) {
         return true;
     }
-    match (std::fs::canonicalize(path), std::fs::canonicalize(cwd)) {
-        (Ok(path), Ok(cwd)) => cwd.starts_with(path),
+    match (std::fs::canonicalize(path), std::fs::canonicalize(dir)) {
+        (Ok(path), Ok(dir)) => dir.starts_with(path),
         _ => false,
     }
 }
@@ -485,6 +500,7 @@ mod tests {
     fn denied_reads_add_the_given_paths_after_the_defaults() {
         let cwd = std::env::current_dir().unwrap();
         let session = env_session(Runtime::Pi, &[("HOME", "/nonexistent/home")]);
+        let temp = Path::new("/nonexistent/tmp");
         let parse = |extra: &[&str]| {
             let mut argv = vec!["agentrun", "pi", "--prompt", "hi"];
             argv.extend(extra);
@@ -496,7 +512,7 @@ mod tests {
             "--deny-read",
             "/nonexistent/home/.ssh",
         ]);
-        let paths = denied_reads(Runtime::Pi, &given, &session, &cwd).unwrap();
+        let paths = denied_reads(Runtime::Pi, &given, &session, &cwd, temp).unwrap();
         assert_eq!(
             paths.len(),
             default_denied_reads(Runtime::Pi, &session, &cwd).len() + 1
@@ -504,17 +520,51 @@ mod tests {
         assert_eq!(paths.last(), Some(&cwd.join("secrets")));
         let only = parse(&["--no-default-deny-read", "--deny-read", "/nonexistent/x"]);
         assert_eq!(
-            denied_reads(Runtime::Pi, &only, &session, &cwd).unwrap(),
+            denied_reads(Runtime::Pi, &only, &session, &cwd, temp).unwrap(),
             [PathBuf::from("/nonexistent/x")]
         );
         let parent = cwd.parent().unwrap().to_str().unwrap().to_string();
         let containing = parse(&["--deny-read", &parent]);
         assert_eq!(
-            denied_reads(Runtime::Pi, &containing, &session, &cwd),
+            denied_reads(Runtime::Pi, &containing, &session, &cwd, temp),
             Err(format!(
                 "--deny-read {parent}: contains the working directory {}",
                 cwd.display()
             ))
+        );
+        let rejected = [
+            (
+                "/nonexistent",
+                "contains the session temporary directory /nonexistent/tmp",
+            ),
+            (
+                "/nonexistent/home/.pi",
+                "contains the pi state directory /nonexistent/home/.pi/agent",
+            ),
+            ("~/.ssh", "~ is not expanded, give the full path"),
+        ];
+        for (given, error) in rejected {
+            assert_eq!(
+                denied_reads(
+                    Runtime::Pi,
+                    &parse(&["--deny-read", given]),
+                    &session,
+                    &cwd,
+                    temp
+                ),
+                Err(format!("--deny-read {given}: {error}"))
+            );
+        }
+        let codex_session = env_session(Runtime::Codex, &[("HOME", "/nonexistent/home")]);
+        assert!(
+            denied_reads(
+                Runtime::Codex,
+                &parse(&["--deny-read", "/nonexistent/home/.pi"]),
+                &codex_session,
+                &cwd,
+                temp
+            )
+            .is_ok()
         );
     }
 

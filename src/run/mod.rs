@@ -321,7 +321,8 @@ fn prepare(
         .map(|path| read_env_file(path))
         .collect::<Result<Vec<_>, _>>()?;
     let session = Session::assemble(runtime, &caller.env, &path_dirs, &env_files, &env_args);
-    let denied_reads = runtime::denied_reads(runtime, &args, &session, &cwd)?;
+    let denied_reads =
+        runtime::denied_reads(runtime, &args, &session, &cwd, &tempdir_base(caller))?;
     let mode = sandbox::resolve_mode(args.sandbox, session.sandbox.as_deref())?;
     let executable = find_executable(runtime.executable(), &session.path, &cwd)
         .ok_or_else(|| format!("{} not found in PATH", runtime.executable()))?;
@@ -395,11 +396,15 @@ fn create_raw(path: &Path) -> Result<File, String> {
         .map_err(|error| format!("cannot create raw file {}: {error}", path.display()))
 }
 
-pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
-    let base = match caller.var("TMPDIR") {
+fn tempdir_base(caller: &Caller) -> PathBuf {
+    match caller.var("TMPDIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from("/tmp"),
-    };
+    }
+}
+
+pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, String> {
+    let base = tempdir_base(caller);
     tempfile::Builder::new()
         .prefix(prefix)
         .permissions(std::fs::Permissions::from_mode(0o700))
