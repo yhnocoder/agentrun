@@ -357,6 +357,7 @@ fn first_non_empty<'a>(lines: impl Iterator<Item = &'a str>) -> Option<&'a str> 
 struct Run<'a> {
     argv: &'a [String],
     env: &'a [(OsString, OsString)],
+    stdin: &'a [u8],
     session: &'a Session,
 }
 
@@ -418,13 +419,23 @@ impl Doctor {
             .envs(&run.session.env)
             .envs(run.env.iter().map(|(key, value)| (key, value)))
             .process_group(0)
-            .stdin(Stdio::null())
+            .stdin(if run.stdin.is_empty() {
+                Stdio::null()
+            } else {
+                Stdio::piped()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("cannot start {name}: {error}"))?;
         let pid = child.id() as i32;
         self.caller.signals.checking(Some(pid));
+        if let Some(mut child_stdin) = child.stdin.take() {
+            let bytes = run.stdin.to_vec();
+            thread::spawn(move || {
+                let _ = child_stdin.write_all(&bytes);
+            });
+        }
         let stdout = child.stdout.take().expect("stdout is piped");
         let (line_sender, lines) = mpsc::channel();
         thread::spawn(move || {
@@ -552,6 +563,7 @@ impl Doctor {
                 Run {
                     argv: &argv,
                     env: &env,
+                    stdin: &[],
                     session: &target.session,
                 },
                 |_| false,
@@ -585,6 +597,7 @@ impl Doctor {
             Run {
                 argv: &argv,
                 env: &[],
+                stdin: &[],
                 session: &target.session,
             },
             |_| false,
@@ -622,6 +635,7 @@ impl Doctor {
             Run {
                 argv: &argv,
                 env: &self.codex_env(),
+                stdin: &[],
                 session: &target.session,
             },
             |_| false,
@@ -679,6 +693,7 @@ impl Doctor {
             Run {
                 argv: &launch.argv,
                 env: &launch.env,
+                stdin: &launch.stdin,
                 session: &target.session,
             },
             |line| assistant_start(line).is_some(),
@@ -843,6 +858,7 @@ impl Doctor {
             Run {
                 argv: &wrap.argv(executable, &script),
                 env: &wrap.env(self),
+                stdin: &[],
                 session: &target.session,
             },
             |_| false,
@@ -870,6 +886,7 @@ impl Doctor {
                         Run {
                             argv: &wrap.argv(executable, &version),
                             env: &wrap.env(self),
+                            stdin: &[],
                             session: &target.session,
                         },
                         |_| false,
@@ -997,6 +1014,7 @@ impl Doctor {
                 Run {
                     argv: &wrap.argv(executable, &argv),
                     env: &env,
+                    stdin: &[],
                     session: &target.session,
                 },
                 |_| false,
