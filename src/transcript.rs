@@ -4,6 +4,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use crate::cli::Runtime;
+use crate::runtime::dsh;
 
 const FILE_SUFFIX: &str = ".jsonl";
 const UUID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
@@ -42,7 +43,11 @@ pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String>
     if !is_session_id(id) {
         return Err(format!("--resume {id:?} is not a session id"));
     }
-    find_file(store, id)
+    let found = match runtime {
+        Runtime::Dsh => dsh::saved_session(store, id),
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Pi => find_file(store, id),
+    };
+    found
         .map(|file| Saved {
             id: id.to_string(),
             file,
@@ -132,6 +137,19 @@ pub fn copy_into(file: &Path, dir: &Path) -> Result<PathBuf, String> {
         .map(|()| target)
 }
 
+pub fn copy_dir_into(source: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| format!("{} has no file name", source.display()))?;
+    let target = dir.join(name);
+    create_store(dir)
+        .and_then(|()| {
+            copy_tree(source, &target)
+                .map_err(|error| format!("cannot copy {}: {error}", source.display()))
+        })
+        .map(|()| target)
+}
+
 pub fn save(transcript: &Transcript, store: &Path) -> Result<(), String> {
     for entry in &transcript.entries {
         let Some(name) = entry.file_name() else {
@@ -169,8 +187,12 @@ fn move_entry(source: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
-    if !std::fs::symlink_metadata(source)?.is_dir() {
+    let kind = std::fs::symlink_metadata(source)?.file_type();
+    if kind.is_file() {
         return std::fs::copy(source, target).map(|_| ());
+    }
+    if !kind.is_dir() {
+        return Ok(());
     }
     DirBuilder::new().mode(0o700).create(target)?;
     for entry in std::fs::read_dir(source)? {
@@ -329,6 +351,31 @@ mod tests {
         copy_tree(&file, &root.path().join("g.jsonl")).unwrap();
         remove_tree(&file).unwrap();
         assert!(!file.exists() && root.path().join("g.jsonl").is_file());
+    }
+
+    #[test]
+    fn copy_tree_skips_symbolic_links() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = root.path().join("secret");
+        touch(&secret.join("key"));
+        let source = root.path().join("session");
+        touch(&source.join("log.jsonl"));
+        std::os::unix::fs::symlink(secret.join("key"), source.join("file-link")).unwrap();
+        std::os::unix::fs::symlink(&secret, source.join("dir-link")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("missing"), source.join("dangling")).unwrap();
+        let copy = root.path().join("copy");
+        copy_tree(&source, &copy).unwrap();
+        assert!(copy.join("log.jsonl").is_file());
+        for name in ["file-link", "dir-link", "dangling"] {
+            assert!(
+                std::fs::symlink_metadata(copy.join(name)).is_err(),
+                "{name}"
+            );
+        }
+        let linked = root.path().join("linked");
+        std::os::unix::fs::symlink(&source, &linked).unwrap();
+        copy_tree(&linked, &root.path().join("copy2")).unwrap();
+        assert!(!root.path().join("copy2").exists());
     }
 
     #[test]

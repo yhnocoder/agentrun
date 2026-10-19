@@ -1,0 +1,1 @@
+{"cwd": "/tmp/agentrun-probe-c85f75d4/cred-error-dsh", "exit_code": 1, "stderr": "dsh: AUTH: Authentication Fails, Your api key: ****alid is invalid (request_id: 3dde78c7-e9a1-4903-a1d2-e16197b216ab)\n"}

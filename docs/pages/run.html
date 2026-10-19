@@ -34,21 +34,22 @@
     <tr><td><code>src/cli.rs</code></td><td><code>Cli</code>、<code>Parsed</code>、<code>RunArgs</code>、<code>DoctorArgs</code>、<code>ConnectArgs</code>、<code>Runtime</code>、<code>SandboxMode</code>、<code>NetworkMode</code>、<code>Format</code>、<code>prescan_format</code>、<code>default_format</code>、<code>usage_error_detail</code></td><td>命令行界面</td></tr>
     <tr><td><code>src/run/mod.rs</code></td><td><code>Caller</code>、<code>run</code>、<code>create_tempdir</code>、<code>shell_quote</code></td><td>一次运行的顺序、启动前检查、额外传递参数</td></tr>
     <tr><td><code>src/run/execute.rs</code></td><td><code>execute</code></td><td>一次运行的顺序、轮数与 token 上限、退出码</td></tr>
-    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>、<code>transcript</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_limits</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>Version</code>（<code>find</code>）、<code>min_version</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>proxy_needed</code>、<code>starts_inside_wrapper</code>、<code>sandbox_state</code></td><td>三个运行时各节的共同接口</td></tr>
+    <tr><td><code>src/runtime/mod.rs</code></td><td><code>Adapter</code> trait（<code>runtime</code>、<code>check_args</code>、<code>launch</code>、<code>echoes_prompt</code>、<code>translate</code>、<code>after_exit</code>、<code>failure</code>、<code>transcript</code>）、<code>Invocation</code>（<code>new</code>）、<code>Launch</code>、<code>Failure</code>、<code>PrivateDir</code>、<code>builtin</code>、<code>reject_limits</code>、<code>DETAIL_MAX_CHARS</code>、<code>detail_head</code>、<code>detail_tail</code>、<code>Version</code>（<code>find</code>）、<code>min_version</code>、<code>model_service_host</code>、<code>service_hosts</code>、<code>proxy_needed</code>、<code>starts_inside_wrapper</code>、<code>sandbox_state</code></td><td>各运行时一节的共同接口</td></tr>
     <tr><td><code>src/runtime/claudecode.rs</code></td><td><code>ClaudeCode</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOST</code></td><td>claude-code</td></tr>
     <tr><td><code>src/runtime/pi.rs</code></td><td><code>Pi</code>、<code>MIN_VERSION</code>、<code>Model</code>、<code>parse_model</code>、<code>model_service</code>、<code>session_state</code>、<code>default_model</code>、<code>assistant_model</code></td><td>pi</td></tr>
     <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
-    <tr><td><code>src/transcript.rs</code></td><td><code>Saved</code>、<code>Transcript</code>、<code>store</code>、<code>create_store</code>、<code>locate</code>、<code>find_file</code>、<code>find_file_within</code>、<code>copy_into</code>、<code>save</code></td><td>保存与继续会话</td></tr>
+    <tr><td><code>src/runtime/dsh.rs</code></td><td><code>Dsh</code>、<code>MIN_VERSION</code>、<code>KEY_VARIABLE</code>、<code>REMOVED_PREFIX</code>、<code>service_host</code>、<code>saved_session</code>、<code>login_outcome</code></td><td>dsh</td></tr>
+    <tr><td><code>src/transcript.rs</code></td><td><code>Saved</code>、<code>Transcript</code>、<code>store</code>、<code>create_store</code>、<code>locate</code>、<code>find_file</code>、<code>find_file_within</code>、<code>copy_into</code>、<code>copy_dir_into</code>、<code>save</code></td><td>保存与继续会话</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code>、<code>selected</code>、<code>COMMAND_TIMEOUT</code>、<code>USAGE_EXIT_CODE</code></td><td>doctor 检查</td></tr>
     <tr><td><code>src/image.rs</code></td><td><code>Image</code>、<code>ImageKind</code>、<code>read_images</code>、<code>write_copies</code>、<code>base64</code></td><td>图片</td></tr>
-    <tr><td><code>src/json.rs</code></td><td><code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
+    <tr><td><code>src/json.rs</code></td><td><code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>各运行时的输出映射</td></tr>
   </tbody>
 </table>
-<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只对某个运行时有要求的参数，例如 pi 的 <code>--model</code> 格式与 codex 不支持的 <code>--max-turns</code>、<code>--max-tokens</code> 与它挡不住的 <code>--deny-read</code> 路径。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>）。运行框架按 <code>wrapped</code> 是否为 bubblewrap 决定第一个信号发给谁（见<a href="session.html#signals">进程、信号与超时</a>），过滤代理放行的模型服务主机取自 <code>runtime::service_hosts</code>，与 doctor 用同一个函数，<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。<code>transcript</code> 在运行时退出后返回这次运行留下的会话记录：会话 id 与要移进 <code>--session-dir</code> 的文件和目录；没有给出 <code>--session-dir</code> 或运行时没有留下记录时返回 <code>None</code>，见<a href="#sessions">保存与继续会话</a>。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对三个运行时相同；运行时之间的差别写在适配器里，以及 <code>src/runtime/mod.rs</code> 里与 doctor 共用、按 <code>Runtime</code> 分支的函数（<code>min_version</code>、<code>service_hosts</code>、<code>proxy_needed</code>、<code>sandbox_state</code>、<code>default_denied_reads</code> 等），另有 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>credential::write_session_credential</code> 三个按 <code>Runtime</code> 分支的函数，运行框架只把 <code>Runtime</code> 传给它们。</p>
+<p>每个运行时一个 <code>Adapter</code> 实现。<code>check_args</code> 在启动前检查只对某个运行时有要求的参数，例如 pi 的 <code>--model</code> 格式与 codex 不支持的 <code>--max-turns</code>、<code>--max-tokens</code> 与它挡不住的 <code>--deny-read</code> 路径。<code>launch</code> 返回 <code>Launch</code>（argv、标准输入内容、环境变量，以及记录 agentrun 用哪种沙箱包裹了命令的 <code>wrapped</code> 与适配器创建的私有目录 <code>private_dirs</code>）。运行框架按 <code>wrapped</code> 是否为 bubblewrap 决定第一个信号发给谁（见<a href="session.html#signals">进程、信号与超时</a>），过滤代理放行的模型服务主机取自 <code>runtime::service_hosts</code>，与 doctor 用同一个函数。<code>translate</code> 把运行时的一行原始输出转成零个或多个 <code>Record</code>，<code>failure</code> 在运行时退出后按本页各节的「失败判定」返回 <code>Failure</code>：<code>Message</code> 给出 <code>detail</code>，<code>Unexplained</code> 表示没有说明，由运行框架先看包裹命令是否启动失败，再取标准错误。适配器给出的说明为空字符串时按 <code>Unexplained</code> 处理。<code>transcript</code> 在运行时退出后返回这次运行留下的会话记录：会话 id 与要移进 <code>--session-dir</code> 的文件和目录；没有给出 <code>--session-dir</code> 或运行时没有留下记录时返回 <code>None</code>，见<a href="#sessions">保存与继续会话</a>。运行框架 <code>src/run/</code> 不认识任何运行时的字段，理由：运行框架的流程对每个运行时相同；运行时之间的差别写在适配器里，以及 <code>src/runtime/mod.rs</code> 里与 doctor 共用、按 <code>Runtime</code> 分支的函数（<code>min_version</code>、<code>service_hosts</code>、<code>proxy_needed</code>、<code>sandbox_state</code>、<code>default_denied_reads</code> 等），另有 <code>Session::assemble</code>、<code>sandbox::check</code>、<code>credential::write_session_credential</code> 三个按 <code>Runtime</code> 分支的函数，运行框架只把 <code>Runtime</code> 传给它们。</p>
 <p>按运行时分支一律用列出全部运行时的 <code>match</code>，不用 <code>==</code>、<code>!=</code> 或带 <code>_</code> 的分支；要遍历所有运行时时用 <code>Runtime::value_variants()</code>，不另写运行时列表。理由：新增一个运行时时，编译器会列出每个要补上的地方。</p>
 
 <h2>命令行界面</h2>
-<p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>。三个运行时子命令接受同一组选项。</p>
+<p>核心子命令有 <code>agentrun claude-code</code>、<code>agentrun codex</code>、<code>agentrun pi</code>、<code>agentrun dsh</code>。四个运行时子命令接受同一组选项。</p>
 <pre><code class="language-bash">agentrun claude-code --prompt "给 parse 模块补测试并修复失败"
 agentrun pi --model deepseek/deepseek-flash --network custom --allow-host pypi.org --prompt-file task.md
 agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></pre>
@@ -60,10 +61,10 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--cwd DIR</code></td><td>会话的工作目录，必须存在。沙箱运行时，它与会话临时目录是 agent 仅有的可写目录</td><td>当前目录</td></tr>
     <tr><td><code>--prompt TEXT</code></td><td>提示词</td><td>无</td></tr>
     <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词。与 <code>--prompt</code> 同时给出是用法错误</td><td>无</td></tr>
-    <tr><td><code>--image FILE</code></td><td>与提示词一起交给模型的图片，可重复，见<a href="#images">图片</a></td><td>无</td></tr>
+    <tr><td><code>--image FILE</code></td><td>与提示词一起交给模型的图片，可重复，见<a href="#images">图片</a>。dsh 不支持，给出时是用法错误</td><td>无</td></tr>
     <tr><td>标准输入</td><td>前两项都没给时从标准输入读提示词。标准输入是终端时不等待，直接报用法错误；提示词为空也是用法错误</td><td></td></tr>
-    <tr><td><code>--model ID</code></td><td>模型，原样传给运行时。pi 必须写成 <code>服务商/模型</code>，并检查 pi 实际使用的模型是否一致，见<a href="#pi">pi 一节</a></td><td>不传，用运行时自己的默认配置</td></tr>
-    <tr><td><code>--effort LEVEL</code></td><td>推理强度，传给运行时对应的参数：claude-code 的 <code>--effort</code>、codex 的 <code>model_reasoning_effort</code>、pi 的 <code>--thinking</code>。不检查取值</td><td>不传</td></tr>
+    <tr><td><code>--model ID</code></td><td>模型，原样传给运行时。pi 必须写成 <code>服务商/模型</code>，并检查 pi 实际使用的模型是否一致，见<a href="#pi">pi 一节</a>；dsh 写进补丁文件，见<a href="#dsh">dsh 一节</a></td><td>不传，用运行时自己的默认配置</td></tr>
+    <tr><td><code>--effort LEVEL</code></td><td>推理强度，传给运行时对应的参数：claude-code 的 <code>--effort</code>、codex 的 <code>model_reasoning_effort</code>、pi 的 <code>--thinking</code>、dsh 补丁里的 <code>reasoningEffort</code>。不检查取值</td><td>不传</td></tr>
     <tr><td><code>--max-turns N</code></td><td>主 agent 最多调用模型 N 次，N 为正整数。主 agent 开始第 N+1 次调用时终止整个进程组，结果是 <code>limit</code>，见<a href="#limits">轮数与 token 上限</a>。codex 给出时是用法错误</td><td>不限</td></tr>
     <tr><td><code>--max-tokens N</code></td><td>全部模型调用（含 subagent）的 token 数之和超过 N 时终止整个进程组，结果是 <code>limit</code>，N 为正整数，见<a href="#limits">轮数与 token 上限</a>。codex 给出时是用法错误</td><td>不限</td></tr>
     <tr><td><code>--timeout SECONDS</code></td><td>从运行时启动开始计时，到时终止整个进程组，SECONDS 为正整数，见<a href="session.html#signals">进程、信号与超时</a></td><td>不限</td></tr>
@@ -75,16 +76,16 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--path DIR</code></td><td>放在会话 PATH 最前面的目录，可重复，必须存在</td><td>无</td></tr>
     <tr><td><code>--env KEY[=VALUE]</code></td><td>给会话设置一个环境变量，可重复。只写 KEY 时取调用方环境里的同名变量，见<a href="session.html#env">会话环境</a></td><td>无</td></tr>
     <tr><td><code>--env-file FILE</code></td><td>从文件读取环境变量，可重复，按给出的顺序加载</td><td>无</td></tr>
-    <tr><td><code>--no-subagents</code></td><td>不允许 agent 启动 subagent。pi 没有 subagent，给出时不起作用</td><td>允许</td></tr>
+    <tr><td><code>--no-subagents</code></td><td>不允许 agent 启动 subagent 与 workflow。pi 没有 subagent，给出时不起作用</td><td>允许</td></tr>
     <tr><td><code>--session-dir DIR</code></td><td>把这次运行的会话记录保存到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end</code> 事件的 <code>session_id</code> 给出会话 id，见<a href="#sessions">保存与继续会话</a></td><td>不保存</td></tr>
     <tr><td><code>--resume ID</code></td><td>继续 <code>--session-dir</code> 里保存的会话 ID。只给 <code>--resume</code> 不给 <code>--session-dir</code> 是用法错误</td><td>新会话</td></tr>
     <tr><td><code>--format rich|text|jsonl</code></td><td>标准输出的格式，见<a href="events.html">事件与输出</a></td><td>标准输出是终端时 <code>rich</code>，否则 <code>jsonl</code></td></tr>
     <tr><td><code>--raw FILE</code></td><td>把运行时的原始标准输出逐行写入这个文件，包括无法解析的行</td><td>不写</td></tr>
-    <tr><td><code>--debug</code></td><td>在标准错误输出实际执行的命令、会话 PATH、被删除与被设置的环境变量名、凭据写入情况、沙箱检查结果、临时目录的路径与 codex 私有目录的路径（<code>codex home: </code>）；保留本次运行的临时目录与 codex 私有目录；没有给 <code>--raw</code> 时，原始输出写入临时目录里的 <code>raw.jsonl</code></td><td>不开</td></tr>
+    <tr><td><code>--debug</code></td><td>在标准错误输出实际执行的命令、会话 PATH、被删除与被设置的环境变量名、凭据写入情况、沙箱检查结果、临时目录的路径与 codex 私有目录的路径（<code>codex home: </code>）；保留本次运行的临时目录与 codex 私有目录（dsh 的私有 <code>DSH_HOME</code> 在临时目录里，一起保留）；没有给 <code>--raw</code> 时，原始输出写入临时目录里的 <code>raw.jsonl</code></td><td>不开</td></tr>
     <tr><td><code>--dry-run</code></td><td>完成命令行解析与启动前检查，把将执行的命令、会话 PATH 与变量名打印到标准输出后以 0 退出。不创建临时目录，不写凭据，不输出事件</td><td>不开</td></tr>
   </tbody>
 </table>
-<p>任何输出都只写变量名，不写变量的值，PATH 除外。三个运行时都从标准输入读提示词，所以提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里，也不出现在 <code>--dry-run</code> 与 <code>--debug</code> 打印的命令里。</p>
+<p>任何输出都只写变量名，不写变量的值，PATH 除外。四个运行时都从标准输入读提示词，所以提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里，也不出现在 <code>--dry-run</code> 与 <code>--debug</code> 打印的命令里。</p>
 <p>agentrun 自己写出的文字都用英文：<code>detail</code>、标准错误里的说明、text 与 rich 格式里的固定词、<code>[note]</code> 提示与 doctor 的输出。运行时与模型给出的内容（提示词、模型的文字、运行时的错误信息）原样输出。理由：命令行解析使用现成的库，它的错误信息是英文，全部输出用同一种语言。</p>
 <p>启动前检查失败时，写到标准错误的一行是 <code>agentrun: </code> 加 <code>detail</code>。<code>--dry-run</code> 写到标准输出、<code>--debug</code> 写到标准错误，每项一行，格式是 <code>项目名: 值</code>，<code>--debug</code> 的每行前面另加 <code>[debug] </code>。命令的每个参数按 shell 规则加引号。</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --sandbox off --env GH_TOKEN --dry-run --prompt "修复测试"
@@ -111,8 +112,8 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
   <li>文件超过 20 MiB（20971520 字节），<code>detail</code> 为 <code>image &lt;路径&gt; is larger than the limit of 20971520 bytes</code>。读取最多读到上限加 1 字节，按实际读到的长度判断。</li>
   <li>文件不是 PNG、JPEG、GIF 或 WebP，<code>detail</code> 为 <code>image &lt;路径&gt; is not a png, jpeg, gif or webp file (animated png and jpeg-ls are not supported)</code>。类型按文件内容判断，不看扩展名，规则按 pi 1.2.0 识别图片的规则写：PNG 的第一个块必须是长度 13 的 IHDR，IDAT 之前出现 acTL 块（动画 PNG）时不接受；JPEG 第 4 个字节是 0xF7（JPEG-LS）时不接受。pi 只在文件的前 4100 字节里找 acTL，agentrun 检查整个文件，所以 acTL 在 4100 字节之后的动画 PNG 被 agentrun 拒绝，pi 却会接受。理由：pi 不认作图片的文件会被当成文本读进提示词，不报错，模型看不到图片。</li>
 </ul>
-<p>运行时拿到的是 agentrun 读出的内容，不读调用方给的路径。claude-code 的图片直接写进标准输入；pi 与 codex 的图片先写成会话临时目录里的 <code>image-N.扩展名</code>（N 从 1 开始，扩展名按类型取 <code>png</code>、<code>jpg</code>、<code>gif</code>、<code>webp</code>，权限 0600），再把这个路径传给运行时。理由：沙箱打开时 agent 一定能读会话临时目录，调用方的图片可能在别的目录里。<code>--dry-run</code> 不写这些文件，命令里的路径写成 <code>&lt;tempdir&gt;/image-1.png</code>。各运行时的传法见 <a href="#claude-code">claude-code</a>、<a href="#pi">pi</a>、<a href="#codex">codex</a> 三节。</p>
-<p>三个运行时都没有更严的文件大小限制：claude-code 与 pi 把过大的图片缩小后交给模型（实测 48 MB、4000×4000 像素的 PNG），codex 读本地图片时不检查大小、超过 2048 像素时缩小（codex 源码 <code>codex-rs/utils/image</code>）。20 MiB 是 agentrun 自己的上限，理由：图片在启动前整个读进内存，claude-code 的图片还要按 base64 写进标准输入的一行 JSON，体积再增加三分之一。</p>
+<p>运行时拿到的是 agentrun 读出的内容，不读调用方给的路径。claude-code 的图片直接写进标准输入；pi 与 codex 的图片先写成会话临时目录里的 <code>image-N.扩展名</code>（N 从 1 开始，扩展名按类型取 <code>png</code>、<code>jpg</code>、<code>gif</code>、<code>webp</code>，权限 0600），再把这个路径传给运行时。理由：沙箱打开时 agent 一定能读会话临时目录，调用方的图片可能在别的目录里。<code>--dry-run</code> 不写这些文件，命令里的路径写成 <code>&lt;tempdir&gt;/image-1.png</code>。各运行时的传法见 <a href="#claude-code">claude-code</a>、<a href="#pi">pi</a>、<a href="#codex">codex</a> 三节。dsh 的 headless 模式只接受文字，给出 <code>--image</code> 时启动前按用法错误拒绝，<code>detail</code> 为 <code>--image is not supported by dsh: its headless mode takes text only</code>。</p>
+<p>三个支持图片的运行时都没有更严的文件大小限制：claude-code 与 pi 把过大的图片缩小后交给模型（实测 48 MB、4000×4000 像素的 PNG），codex 读本地图片时不检查大小、超过 2048 像素时缩小（codex 源码 <code>codex-rs/utils/image</code>）。20 MiB 是 agentrun 自己的上限，理由：图片在启动前整个读进内存，claude-code 的图片还要按 base64 写进标准输入的一行 JSON，体积再增加三分之一。</p>
 <p><code>prompt</code> 事件的 <code>images</code> 按顺序列出调用方写的路径，不转成绝对路径，不写图片内容，见<a href="events.html">事件与输出</a>。</p>
 
 <h3>一次运行的顺序</h3>
@@ -130,25 +131,25 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
   <li>凭据写入失败。</li>
   <li><code>--session-dir</code> 的目录创建失败，或 <code>--resume</code> 给出的会话在 <code>--session-dir</code> 里找不到。</li>
   <li><code>--sandbox on</code> 时沙箱不可用，或 <code>--network</code> 要求的限制无法执行，见<a href="isolation.html">沙箱与网络</a>。</li>
-  <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>。</li>
-  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的状态目录创建失败或 Seatbelt 配置文件写不出、codex 的登录文件不存在或私有目录创建失败。</li>
+  <li>过滤代理启动失败；pi 的服务商不在模型服务主机表里且用 <code>--network none</code>；dsh 的 <code>DEEPSEEK_BASE_URL</code> 读不出主机且用 <code>--network none</code>。</li>
+  <li>会话临时目录创建失败；适配器准备启动参数失败，包括 pi 的状态目录创建失败或 Seatbelt 配置文件写不出、codex 的登录文件不存在或私有目录创建失败、dsh 的会话环境里没有 <code>DEEPSEEK_API_KEY</code> 或私有目录与补丁文件写不出。</li>
 </ul>
 <p>过滤代理启动失败先于 codex 登录文件与私有目录的检查：两者同时成立时，<code>detail</code> 是过滤代理那一条。</p>
 <p>命令行解析失败时还不知道 <code>--format</code> 的值，所以先单独扫描一遍参数找 <code>--format</code>，找不到或值不合法时按默认格式输出这个 <code>end</code>。</p>
 <p><code>run::run</code> 解析命令行后，把运行时子命令交给运行框架，把 <code>doctor</code> 与 <code>doctor-connect</code> 分别交给 <code>doctor::run</code> 与 <code>doctor::connect</code>。运行时子命令被拒绝时的 <code>end</code> 只由 <code>run::run</code> 输出。</p>
 
 <h3 id="limits">轮数与 token 上限</h3>
-<p><code>--max-turns</code> 与 <code>--max-tokens</code> 由 agentrun 自己计数，不传给运行时，claude-code 与 pi 接受同样的选项。理由：运行时自带的上限只有 claude-code 有，由 agentrun 计数时同一条命令可以在两个运行时之间换。</p>
+<p><code>--max-turns</code> 与 <code>--max-tokens</code> 由 agentrun 自己计数，不传给运行时，claude-code、pi 与 dsh 接受同样的选项。理由：运行时自带的上限只有 claude-code 有，由 agentrun 计数时同一条命令可以在这几个运行时之间换。</p>
 <ul>
-  <li>一轮是主 agent 的一次模型调用。适配器在一次调用开始时输出 <code>Record::CallStart</code>：claude-code 是某个 <code>parent_tool_use_id</code> 下出现新的 <code>message.id</code>，pi 是 assistant 的 <code>message_start</code>。<code>Aggregator</code> 只数 parent 为 null 的调用，parent 指向没见过的 subagent 时按主 agent 计，与其他事件的 parent 规则相同。主 agent 开始第 N+1 次调用时终止。claude-code 可能在这次调用的输出还没结束时就开始执行它请求的工具，所以这些工具可能已经开始执行；沙箱外的 Bash 命令用 setsid 启动，不在进程组里，由运行时退出后的进程树清理结束。理由：与 claude-code 自带的 <code>--max-turns</code> 计数相同；不按 <code>usage</code> 事件计数，因为 claude-code 的 <code>usage</code> 要等下一次调用开始才输出，按它计数时 claude-code 比 pi 多一轮。</li>
-  <li>token 数是全部 <code>usage</code> 事件（含 subagent）的 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和，null 按 0 计。还没有输出 <code>usage</code> 事件的调用，按适配器输出的 <code>Record::CallUsage</code> 计入：claude-code 的 <code>usage</code> 要等下一次调用开始才输出，而每条 assistant 消息都带着这次调用到当时为止的用量，适配器每读到一条就输出一次，同一个 parent 的 <code>usage</code> 到达时取代它。运行框架每处理完一行原始输出检查一次，和超过 N 时终止，运行时退出后读到的剩余输出也照常检查；<code>end.usage</code> 里没有对应 <code>usage</code> 事件的那笔 haiku 调用（见<a href="events.html">事件与输出</a>的用量一节）不计入。</li>
-  <li>终止的方式与 <code>--timeout</code> 相同：向进程组发 SIGTERM，5 秒后 SIGKILL，见<a href="session.html#signals">进程、信号与超时</a>。超过上限时，运行时满足 <code>finished</code> 的条件，结果是 <code>finished</code>（例如最后一次调用使和超过 N，但运行时已经给出结果并以 0 退出）；不满足时 <code>end.status</code> 为 <code>limit</code>，退出码 4。是否发过 SIGTERM 不影响判定，理由：运行时可能在退出码已经定为 0、进程还没有结束时收到信号，agentrun 无法区分这种情况与还在运行的运行时，按是否发过信号判定时结果会随时机变化。这个判定依赖运行时收到 SIGTERM 时以非 0 退出：claude-code（&gt;= 2.1.303）与 pi（&gt;= 1.0.2）收到 SIGTERM 时都以 143 退出，Linux 与 macOS 上包裹与不包裹相同，所以被 agentrun 停止的运行一定是 <code>limit</code>。运行时被 SIGTERM 终止时结果是 <code>limit</code>，即使它当时已经输出了完整的回答，这时 <code>end.result</code> 照常取已经收到的内容。收到 SIGTERM 时可能以 0 退出的运行时要拒绝这两个选项：codex 在 Linux 上收到 SIGTERM 时以 0 退出，这是 codex 不接受这两个选项的理由之一。<code>detail</code> 写出是哪个上限、上限值与实际值，例如 <code>--max-turns 3 reached: the main agent started turn 4</code>、<code>--max-tokens 50000 exceeded: 51234 tokens</code>。两个上限在同一行原始输出上同时超过时，<code>detail</code> 写 <code>--max-turns</code>。</li>
+  <li>一轮是主 agent 的一次模型调用。适配器在一次调用开始时输出 <code>Record::CallStart</code>：claude-code 是某个 <code>parent_tool_use_id</code> 下出现新的 <code>message.id</code>，pi 是 assistant 的 <code>message_start</code>，dsh 是 <code>phase</code> 为 <code>step_start</code> 的 <code>status</code>。<code>Aggregator</code> 只数 parent 为 null 的调用，parent 指向没见过的 subagent 时按主 agent 计，与其他事件的 parent 规则相同。主 agent 开始第 N+1 次调用时终止。claude-code 可能在这次调用的输出还没结束时就开始执行它请求的工具，所以这些工具可能已经开始执行；沙箱外的 Bash 命令用 setsid 启动，不在进程组里，由运行时退出后的进程树清理结束。理由：与 claude-code 自带的 <code>--max-turns</code> 计数相同；不按 <code>usage</code> 事件计数，因为 claude-code 的 <code>usage</code> 要等下一次调用开始才输出，按它计数时 claude-code 比 pi 多一轮。</li>
+  <li>token 数是全部 <code>usage</code> 事件（含 subagent）的 <code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_tokens</code>、<code>cache_write_tokens</code> 之和，null 按 0 计。还没有输出 <code>usage</code> 事件的调用，按适配器输出的 <code>Record::CallUsage</code> 计入：claude-code 的 <code>usage</code> 要等下一次调用开始才输出，而每条 assistant 消息都带着这次调用到当时为止的用量，适配器每读到一条就输出一次，同一个 parent 的 <code>usage</code> 到达时取代它。运行框架每处理完一行原始输出检查一次，和超过 N 时终止，运行时退出后读到的剩余输出也照常检查；<code>end.usage</code> 里没有对应 <code>usage</code> 事件的那笔 haiku 调用（见<a href="events.html">事件与输出</a>的用量一节）不计入。dsh 不输出 subagent 的事件，输出里只有主会话的用量，所以 dsh 的 <code>--max-tokens</code> 只计主 agent 的 token，需要严格限制 dsh 的 token 数时同时给出 <code>--no-subagents</code>。dsh 的 <code>end.usage</code> 是 <code>usage</code> 事件之和，与上限计数的范围相同，同样不含 subagent。pi 与 dsh 只在一次调用结束时报告这次调用的用量，最后一次调用的用量全部计入，所以一次很长的调用会让最终的 token 数明显超过 N（dsh 实测：上限 8000，结束时 11059）。</li>
+  <li>终止的方式与 <code>--timeout</code> 相同：向进程组发 SIGTERM，5 秒后 SIGKILL，见<a href="session.html#signals">进程、信号与超时</a>。超过上限时，运行时满足 <code>finished</code> 的条件，结果是 <code>finished</code>（例如最后一次调用使和超过 N，但运行时已经给出结果并以 0 退出）；不满足时 <code>end.status</code> 为 <code>limit</code>，退出码 4。是否发过 SIGTERM 不影响判定，理由：运行时可能在退出码已经定为 0、进程还没有结束时收到信号，agentrun 无法区分这种情况与还在运行的运行时，按是否发过信号判定时结果会随时机变化。这个判定依赖一个条件：运行时在完成之前被 SIGTERM 停止时，适配器不能把这次运行判为 <code>finished</code>，靠非 0 的退出码或缺少完成事件都可以。claude-code（&gt;= 2.1.303）与 pi（&gt;= 1.0.2）收到 SIGTERM 时都以 143 退出，Linux 与 macOS 上包裹与不包裹相同。dsh 收到 SIGTERM 时以 0 退出。在一轮中间被停止时它不再输出 <code>turn_end</code>，按 <a href="#dsh">dsh 一节</a>失败判定的第 4 条不满足 <code>finished</code>；在一轮刚结束时被停止时，它照常输出 <code>completed</code> 的 <code>turn_end</code>，随后输出 <code>error</code> 事件 <code>session …: flush on a closed handle</code>，按第 1 条同样不满足 <code>finished</code>（0.2.1-rc.2 实测，前一种 3 次、后一种 9 次，结果都是 <code>limit</code>）。适配器只看事件，dsh 在收到 SIGTERM 前已经输出 <code>turn_end</code> 并且之后没有 <code>error</code> 事件时，结果是 <code>finished</code>。所以被 agentrun 停止的运行一定是 <code>limit</code>，即使运行时当时已经输出了完整的回答，这时 <code>end.result</code> 照常取已经收到的内容。不满足这个条件的运行时要拒绝这两个选项：codex 在 Linux 上收到 SIGTERM 时以 0 退出，这是 codex 不接受这两个选项的理由之一。<code>detail</code> 写出是哪个上限、上限值与实际值，例如 <code>--max-turns 3 reached: the main agent started turn 4</code>、<code>--max-tokens 50000 exceeded: 51234 tokens</code>。两个上限在同一行原始输出上同时超过时，<code>detail</code> 写 <code>--max-turns</code>。</li>
   <li>超时、上限与信号中先触发的一个决定怎样终止，之后的上限不再生效；上限触发后的宽限期内收到信号，结果是 <code>interrupted</code>。适配器要求终止运行时（例如 pi 的模型不一致）的那一行不检查上限。</li>
   <li>codex 给出任一选项都是用法错误（<code>rejected</code>，退出码 2），由 <code>reject_limits</code> 检查。codex 只在运行结束时输出一次用量（<code>turn.completed</code>），也没有调用开始的事件（codex 0.159.2 实测），agentrun 无法在运行中停止它。理由：停不住 agent 的上限会让调用方以为有保护，明确拒绝不会。</li>
 </ul>
 
 <h2 id="sessions">保存与继续会话</h2>
-<p>给出 <code>--session-dir DIR</code> 时，agentrun 在运行时退出后把这次运行的会话记录移到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end.session_id</code> 是会话 id。下一次运行给出同一个 <code>--session-dir</code> 与 <code>--resume &lt;会话 id&gt;</code>，运行时接着这段会话继续：会话 id 不变，新内容追加到同一份记录。不给 <code>--session-dir</code> 时三个运行时都不保存会话。<code>--resume</code> 只从 <code>DIR</code> 读，不读用户自己的会话记录；codex 与 pi 运行期间把记录写在私有目录或会话临时目录里，claude-code 的新会话运行期间写在用户的配置目录里，见下表与<a href="isolation.html#config">配置与账号</a>。</p>
+<p>给出 <code>--session-dir DIR</code> 时，agentrun 在运行时退出后把这次运行的会话记录移到 <code>DIR/&lt;运行时名&gt;/</code>，<code>end.session_id</code> 是会话 id。下一次运行给出同一个 <code>--session-dir</code> 与 <code>--resume &lt;会话 id&gt;</code>，运行时接着这段会话继续：会话 id 不变，新内容追加到同一份记录。不给 <code>--session-dir</code> 时四个运行时都不保存会话。<code>--resume</code> 只从 <code>DIR</code> 读，不读用户自己的会话记录；codex、pi 与 dsh 运行期间把记录写在私有目录或会话临时目录里，claude-code 的新会话运行期间写在用户的配置目录里，见下表与<a href="isolation.html#config">配置与账号</a>。</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --session-dir ~/agent-sessions --format text --prompt "Remember the word PELICAN. Reply only OK."
 [main] prompt Remember the word PELICAN. Reply only OK.
 [main] text OK
@@ -159,10 +160,10 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 [end] finished 2.0s  in 2.2k  out 5  cached 92%  $0.0001  session 01a152a2-6878-70d1-8e7f-3877dfb11836</div>
 <ul>
   <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。目录在所有启动前检查通过之后才创建，<code>--dry-run</code> 与被拒绝的运行不创建目录。<code>DIR</code> 要放在工作目录与会话临时目录之外：沙箱里的 agent 能写这两处，<code>DIR</code> 在里面时 agent 能改写已保存的会话。</li>
-  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 必须是完整的会话 id，三个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
+  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件；dsh 的记录是一个目录，找名为 <code>session-ID</code> 的目录。ID 必须是完整的会话 id，四个运行时的会话 id 都是 UUID（<code>8-4-4-4-12</code> 位十六进制），不是这个形式时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>--resume "&lt;ID&gt;" is not a session id</code>。理由：只要求文件名以 ID 结尾时，UUID 的最后一段也能匹配，<code>end.session_id</code> 与传给 codex 的 id 就不是真实的会话 id。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
   <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。源与目标不在同一个文件系统时先复制再删除源。</li>
-  <li>继续时 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）。<code>--model</code> 等选项每次照常传给运行时。</li>
-  <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex 与 pi 后结束的那次覆盖先结束的那次。</li>
+  <li>继续时 claude-code、codex 与 pi 的 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）；dsh 的 <code>--cwd</code> 必须与第一次相同，见下表。<code>--model</code> 等选项每次照常传给运行时。</li>
+  <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex、pi 与 dsh 后结束的那次覆盖先结束的那次。</li>
 </ul>
 <table>
   <thead>
@@ -172,28 +173,30 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
     <tr><td>claude-code</td><td>不加 <code>--no-session-persistence</code>，仍传新生成的 <code>--session-id</code>。claude-code 把记录写在 <code>&lt;配置目录&gt;/projects/&lt;由 cwd 转换的目录名&gt;/&lt;id&gt;.jsonl</code>，subagent 的记录在同级的 <code>&lt;id&gt;/</code>；配置目录是会话环境里的 <code>CLAUDE_CONFIG_DIR</code>，未设时为 <code>~/.claude</code>。运行结束后 agentrun 在 <code>projects/</code> 的各个子目录里按文件名找 <code>&lt;id&gt;.jsonl</code>（只读目录列表，不读文件内容），把它与 <code>&lt;id&gt;/</code> 移到 <code>DIR/claude-code/</code>，<code>&lt;由 cwd 转换的目录名&gt;</code> 变空时删除。目录里还有别的内容时保留。会话环境里既没有 <code>CLAUDE_CONFIG_DIR</code> 也没有 <code>HOME</code> 时仍加 <code>--no-session-persistence</code>，不保存，<code>session_id</code> 为 null</td><td>用 <code>--resume &lt;DIR/claude-code/&lt;id&gt;.jsonl&gt;</code> 代替 <code>--session-id</code>。claude-code 直接在这个文件末尾追加，subagent 的记录写在它旁边的 <code>&lt;id&gt;/</code>，不写配置目录（2.1.288 与 2.1.303 实测，2.1.303 在 macOS 上用钥匙串登录同样如此）</td></tr>
     <tr><td>codex</td><td>记录在私有目录里的 <code>sessions/YYYY/MM/DD/rollout-&lt;时间&gt;-&lt;id&gt;.jsonl</code>，id 取 <code>thread.started</code> 的 <code>thread_id</code>。运行结束后移到 <code>DIR/codex/</code>。subagent 的记录不保存</td><td>启动前把保存的文件复制进私有目录的 <code>sessions/</code>，argv 在最后的 <code>-</code> 之前加 <code>resume &lt;id&gt;</code>。codex 在 <code>sessions/</code> 下按 id 找到文件并在末尾追加。运行结束后 agentrun 在 <code>sessions/</code> 下取文件名含这个 id、修改时间最新的文件，移回 <code>DIR/codex/</code> 覆盖原文件（0.159.2 与 0.163.0 用模拟的模型服务实测，0.160.1 在 macOS 上用真实模型实测）</td></tr>
     <tr><td>pi</td><td><code>--no-session</code> 换成 <code>--session-dir &lt;会话临时目录&gt;/pi-session</code>，id 取输出里 <code>session</code> 行的 <code>id</code>。运行结束后把记录移到 <code>DIR/pi/</code></td><td>启动前把保存的文件复制进 <code>&lt;会话临时目录&gt;/pi-session/</code>，传 <code>--session &lt;复制后的路径&gt;</code>，运行结束后移回 <code>DIR/pi/</code> 覆盖原文件。不用 pi 的 <code>--session-id</code>：它只在与第一次相同的 cwd 下找得到会话，换一个 cwd 会新建一个 id 相同的会话（1.2.0 实测）</td></tr>
+    <tr><td>dsh</td><td>dsh 把记录写在私有 <code>DSH_HOME</code> 的 <code>sessions/&lt;由 cwd 转换的目录名&gt;/session-&lt;id&gt;/</code>，目录里是 <code>session.v4.jsonl.zstd</code> 与锁文件；id 取 <code>session</code> 事件的 <code>sessionId</code> 去掉 <code>session-</code> 前缀。运行结束后 agentrun 在 <code>sessions/</code> 的各个子目录里找 <code>session-&lt;id&gt;/</code>，把整个目录移到 <code>DIR/dsh/</code></td><td>启动前把 <code>DIR/dsh/session-&lt;id&gt;/</code> 复制到 <code>DSH_HOME/sessions/&lt;由 cwd 转换的目录名&gt;/</code> 下，在 <code>--json</code> 之后传 <code>--session-id session-&lt;id&gt;</code>，运行结束后移回 <code>DIR/dsh/</code> 覆盖原目录。<code>--cwd</code> 必须与第一次的真实路径相同：dsh 既按目录名找会话，又比较记录开头保存的 cwd，不同时报会话记录损坏，这次运行为 <code>failed</code>（0.2.1-rc.2 实测）。目录名由 cwd 的真实路径按 dsh 的规则计算（<code>project_key</code>，移植自 dsh 的 <code>dsh-session-persistence-jsonl</code>）</td></tr>
   </tbody>
 </table>
 <ul>
   <li>claude-code 的新会话写在用户的配置目录里，运行结束后才移走。理由：claude-code 不能把新会话直接写到别的位置（<code>--resume</code> 指向空文件、不存在的文件或只有元数据行没有对话的文件时都报 <code>No conversation found</code>，2.1.303 实测）；改 <code>CLAUDE_CONFIG_DIR</code> 会改变 claude-code 读登录信息的位置：Linux 上登录文件在配置目录里，macOS 上钥匙串里的登录条目名随配置目录改变（未实测）。代价是运行期间这份记录出现在用户自己的 <code>claude --resume</code> 列表里，agentrun 被 SIGKILL 时它留在那里。</li>
-  <li>pi 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。前提是 <code>DIR</code> 在工作目录与会话临时目录之外。理由：pi 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
+  <li>pi 与 dsh 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。前提是 <code>DIR</code> 在工作目录与会话临时目录之外。理由：pi 与 dsh 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
+  <li>复制会话目录时只复制普通文件与目录，跳过符号链接和其他类型的条目；claude-code 的 <code>&lt;id&gt;/</code> 是符号链接时不保存它；dsh 的 <code>session-&lt;id&gt;/</code> 与它所在的 <code>&lt;由 cwd 转换的目录名&gt;/</code> 是符号链接时不保存，<code>DIR/dsh/session-&lt;id&gt;</code> 是符号链接时 <code>--resume</code> 报找不到会话。理由：dsh 的记录目录在沙箱里可写，agent 能在里面放指向沙箱外文件的链接，agentrun 在沙箱外复制时如果跟随链接，就会把 agent 读不到的文件复制进会话记录，下一次运行时 agent 就能读到。</li>
 </ul>
 
 <h2 id="doctor_check">doctor 检查</h2>
 <pre><code class="language-bash">agentrun doctor [运行时...] [--model ID] [--sandbox MODE] [--network MODE] [--allow-host HOST]... [--path DIR]... [--env KEY[=VALUE]]... [--env-file FILE]... [--json] [--debug]</code></pre>
-<p>按当前环境检查运行时能否使用。不写运行时时检查全部三个，顺序固定为 claude-code、codex、pi。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
+<p>按当前环境检查运行时能否使用。不写运行时时检查全部四个，顺序固定为 claude-code、codex、pi、dsh。各选项的含义与运行时子命令相同，保证检查的条件与实际运行一致；<code>--path DIR</code> 把目录加到会话 PATH 的前面，可以重复，目录不存在时按用法错误处理。</p>
 <table>
   <thead>
     <tr><th>检查项</th><th>通过条件</th></tr>
   </thead>
   <tbody>
     <tr><td>可执行文件（<code>executable</code>）</td><td>在会话 PATH 里找到，并且版本不低于<a href="#runtime-versions">运行时版本</a>一节的最低版本。找到后运行 <code>&lt;运行时&gt; --version</code>（codex 用私有 <code>CODEX_HOME</code>），先在标准输出、再在标准错误里找第一个 <code>X.Y.Z</code> 形式的版本号，<code>v</code> 前缀与 <code>-</code> 之后的预发布后缀不参与比较。说明里写出路径与版本，例如 <code>/opt/node22/bin/claude 2.1.303</code>；低于最低版本时为 <code>fail</code>，说明写成 <code>&lt;路径&gt; 2.1.287, requires &gt;= 2.1.288</code>。命令启动失败、超时或退出码不为 0 时为 <code>fail</code>，退出码不为 0 时说明写成 <code>&lt;路径&gt;: --version exited with code 1: &lt;一行输出&gt;</code>，这行输出依次取标准错误里第一个形如 <code>TypeError:</code> 的错误行、标准错误的第一行、标准输出的第一行，都没有时只写 <code>exited with code 1</code>，被信号终止时写 <code>terminated by a signal</code>；不在输出里找版本号：npm 安装的运行时是 node 脚本，node 启动失败时标准错误的最后一行是 node 自己的版本，例如 <code>Node.js v22.22.0</code>。退出码为 0 但找不到版本号时为 <code>ok</code>，说明写成 <code>&lt;路径&gt;, version not recognized: &lt;输出的第一行&gt;</code>，因为解析不出版本不能说明运行时不能用。版本过低时其余三项照常检查</td></tr>
-    <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 运行 <code>claude auth status</code>，读它输出的 JSON 里的 <code>loggedIn</code>；设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时说明写这个变量名，否则写 <code>authMethod</code>。codex 先检查登录文件存在，再用私有 <code>CODEX_HOME</code> 运行 <code>codex login status</code>，退出码 0 为通过。pi 用 <code>--mode json</code> 启动一次，提示词与运行时一样写入标准输入，读到 assistant 的 <code>message_start</code> 事件就终止它，不等模型回复；事件里的 <code>provider</code> 与 <code>model</code> 是 pi 实际选中的服务商与模型，给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败。pi 对不存在的模型名只在 stderr 上警告并照用，这个检查把该警告判为失败</td></tr>
-    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、目录内的文件写出、目录外写不进去，并且读不到目录外一个加进不可读列表的文件（失败说明为 <code>a read of a denied path succeeded</code>）。claude-code 的沙箱由它自己在进程内启动，无法单独调用，所以用 agentrun 给 pi 用的包裹代替：两者在 Linux 上都用 bwrap 与 socat，在 macOS 上都用 Seatbelt，检查的是同一组程序能否在当前环境启动。pi 用同一个包裹，并额外在包裹下运行一次 <code>pi --version</code>，确认 pi 与它依赖的 node 能在沙箱里启动，说明里加 <code>pi started</code>。codex 用 <code>codex sandbox</code> 执行同一条命令，文件系统与网络配置同实际运行。检查结束后删除该目录，给了 <code>--debug</code> 时保留并打印路径，保留前删除目录里指向登录文件的链接。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
-    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查，且沙箱检查没有运行时为 <code>skip</code>。启动过滤代理，在该运行时实际使用的沙箱里对一个允许的主机发 CONNECT 请求确认能连上，再对一个不允许的主机确认被拒绝。<code>custom</code> 时允许的主机是第一条 <code>--allow-host</code>（通配规则取 <code>www.</code> 加域名），不允许的主机是 <code>doctor-check.invalid:443</code>，要求拒绝原因为 <code>not_allowed</code>。<code>full</code> 时允许的主机是该运行时的模型服务主机（claude-code 为 <code>api.anthropic.com</code>，codex 为 <code>chatgpt.com</code>，pi 为 <code>--model</code> 的服务商，没给时为 pi 设置里的 <code>defaultProvider</code>，与实际运行时相同，取它在模型服务主机表里的主机，表里没有时用 <code>api.anthropic.com</code>），不允许的主机是 <code>169.254.169.254:80</code>，要求拒绝原因为 <code>private_address</code>。两次连接都由 agentrun 自己完成：在沙箱里运行 <code>agentrun doctor-connect HOST PORT</code>，它按环境里的代理变量经过滤代理连接，退出码 0 表示连上。codex 的网络由它自己的代理控制：<code>full</code> 时不启动过滤代理，不拦截私有地址，只检查允许的一半；<code>custom</code> 时 codex 的代理先按放行列表判断，放行的请求转给过滤代理；不允许的主机由 codex 的代理直接拒绝，过滤代理看不到这个请求，这时要求 codex 的代理回复 403 且带响应头 <code>x-proxy-error: blocked-by-allowlist</code>，过滤代理看到了请求时与另外两个运行时一样要求记录 <code>not_allowed</code>。macOS 上 codex 的 <code>custom</code> 检查失败且主机解析到 <code>198.18.0.0/15</code> 时，说明里指出这是 fake-ip，需要关掉本机代理软件的 fake-ip 模式</td></tr>
+    <tr><td>登录（<code>login</code>）</td><td>运行时能用当前环境登录。先按<a href="session.html#credentials">凭据</a>一节写入环境变量给出的凭据。claude-code 运行 <code>claude auth status</code>，读它输出的 JSON 里的 <code>loggedIn</code>；设了 <code>CLAUDE_CODE_OAUTH_TOKEN</code> 时说明写这个变量名，否则写 <code>authMethod</code>。codex 先检查登录文件存在，再用私有 <code>CODEX_HOME</code> 运行 <code>codex login status</code>，退出码 0 为通过。pi 用 <code>--mode json</code> 启动一次，提示词与运行时一样写入标准输入，读到 assistant 的 <code>message_start</code> 事件就终止它，不等模型回复；事件里的 <code>provider</code> 与 <code>model</code> 是 pi 实际选中的服务商与模型，给了 <code>--model</code> 时与它比较，否则与 pi 设置里的默认模型比较，不一致时失败。pi 对不存在的模型名只在 stderr 上警告并照用，这个检查把该警告判为失败。dsh 先检查会话环境里有 <code>DEEPSEEK_API_KEY</code>，没有时不启动 dsh，说明与运行时子命令的启动前检查相同；然后用与实际运行相同的参数、私有 <code>DSH_HOME</code> 与补丁启动一次，<code>--effort</code> 固定为 <code>off</code>，提示词写入标准输入，读到第一个带 <code>usage</code> 的 <code>step_end</code> 就终止它并通过，说明写 <code>DEEPSEEK_API_KEY</code>，给了 <code>--model</code> 时加上括号里的模型名；先读到 <code>kind</code> 为 <code>error</code> 的 <code>turn_end</code> 或 <code>error</code> 事件时失败，说明是 <code>code: message</code>，例如 <code>AUTH: ...</code>、<code>INVALID_REQUEST: ...</code>。dsh 在模型回复完一步之前没有成功的信号，所以这项检查要等一次模型请求（实测约 3 秒）。dsh 的 <code>TMPDIR</code>、<code>TMP</code>、<code>TEMP</code> 指向 doctor 临时目录里的 <code>dsh-login/</code>，理由：dsh 被终止时来不及删除它在临时目录里建的 <code>dsh-subprocess-*</code> 目录，这些目录随 doctor 的临时目录一起删除</td></tr>
+    <tr><td>沙箱（<code>sandbox</code>）</td><td>在一个临时目录里，用每个运行时实际使用的沙箱执行一条写文件的命令，确认命令执行了、目录内的文件写出、目录外写不进去，并且读不到目录外一个加进不可读列表的文件（失败说明为 <code>a read of a denied path succeeded</code>）。claude-code 的沙箱由它自己在进程内启动，无法单独调用，所以用 agentrun 给 pi 用的包裹代替：两者在 Linux 上都用 bwrap 与 socat，在 macOS 上都用 Seatbelt，检查的是同一组程序能否在当前环境启动。pi 与 dsh 用同一个包裹，并额外在包裹下运行一次 <code>pi --version</code> 或 <code>dsh --version</code>，确认运行时与它依赖的 node 能在沙箱里启动，说明里加 <code>pi started</code> 或 <code>dsh started</code>。codex 用 <code>codex sandbox</code> 执行同一条命令，文件系统与网络配置同实际运行。检查结束后删除该目录，给了 <code>--debug</code> 时保留并打印路径，保留前删除目录里指向登录文件的链接。<code>--sandbox relax</code> 下沙箱不可用时这一项为 <code>skip</code>，<code>off</code> 时不检查</td></tr>
+    <tr><td>网络（<code>network</code>）</td><td>只在 <code>--network full|custom</code> 时检查，且沙箱检查没有运行时为 <code>skip</code>。启动过滤代理，在该运行时实际使用的沙箱里对一个允许的主机发 CONNECT 请求确认能连上，再对一个不允许的主机确认被拒绝。<code>custom</code> 时允许的主机是第一条 <code>--allow-host</code>（通配规则取 <code>www.</code> 加域名），不允许的主机是 <code>doctor-check.invalid:443</code>，要求拒绝原因为 <code>not_allowed</code>。<code>full</code> 时允许的主机是该运行时的模型服务主机（claude-code 为 <code>api.anthropic.com</code>，codex 为 <code>chatgpt.com</code>，pi 为 <code>--model</code> 的服务商，没给时为 pi 设置里的 <code>defaultProvider</code>，与实际运行时相同，取它在模型服务主机表里的主机，表里没有时用 <code>api.anthropic.com</code>；dsh 为 <code>DEEPSEEK_BASE_URL</code> 的主机，没设时为 <code>api.deepseek.com</code>），不允许的主机是 <code>169.254.169.254:80</code>，要求拒绝原因为 <code>private_address</code>。两次连接都由 agentrun 自己完成：在沙箱里运行 <code>agentrun doctor-connect HOST PORT</code>，它按环境里的代理变量经过滤代理连接，退出码 0 表示连上。codex 的网络由它自己的代理控制：<code>full</code> 时不启动过滤代理，不拦截私有地址，只检查允许的一半；<code>custom</code> 时 codex 的代理先按放行列表判断，放行的请求转给过滤代理；不允许的主机由 codex 的代理直接拒绝，过滤代理看不到这个请求，这时要求 codex 的代理回复 403 且带响应头 <code>x-proxy-error: blocked-by-allowlist</code>，过滤代理看到了请求时与其他运行时一样要求记录 <code>not_allowed</code>。macOS 上 codex 的 <code>custom</code> 检查失败且主机解析到 <code>198.18.0.0/15</code> 时，说明里指出这是 fake-ip，需要关掉本机代理软件的 fake-ip 模式</td></tr>
   </tbody>
 </table>
-<p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒，超时按 <code>fail</code> 记并写明；<code>doctor-connect</code> 连接代理或目标最多等 10 秒。可执行文件没找到时，登录为 <code>skip</code>；沙箱与网络对 claude-code 与 pi 仍然检查，因为它们用的是 agentrun 自己的包裹与 <code>doctor-connect</code>，pi 的沙箱检查这时不启动 pi，说明里加 <code>pi not started (executable not found)</code>；对 codex 两项都为 <code>fail</code>，说明为 <code>executable not found</code>，因为它的沙箱与代理就是 codex 本身。默认输出每项一行，四列对齐；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>，被信号中断时输出已完成的项。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
+<p>每项结果为 <code>ok</code>、<code>fail</code> 或 <code>skip</code>。每个外部命令最多等 30 秒，超时按 <code>fail</code> 记并写明；<code>doctor-connect</code> 连接代理或目标最多等 10 秒。可执行文件没找到时，登录为 <code>skip</code>；沙箱与网络对 claude-code、pi 与 dsh 仍然检查，因为它们用的是 agentrun 自己的包裹与 <code>doctor-connect</code>，pi 与 dsh 的沙箱检查这时不启动运行时，说明里加 <code>pi not started (executable not found)</code> 或 <code>dsh not started (executable not found)</code>；对 codex 两项都为 <code>fail</code>，说明为 <code>executable not found</code>，因为它的沙箱与代理就是 codex 本身。默认输出每项一行，四列对齐；<code>--json</code> 输出一个数组，每项是 <code>{runtime, check, status, detail}</code>，被信号中断时输出已完成的项。沙箱检查失败时，说明里写明可能的原因与修正方法。</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code pi
 [ok]   claude-code  executable  /opt/node22/bin/claude 2.1.303
 [ok]   claude-code  login       CLAUDE_CODE_OAUTH_TOKEN
@@ -221,7 +224,12 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
 [ok]   pi           login       deepseek/deepseek-flash (from pi settings)
 [ok]   pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 [ok]   pi           network     api.github.com:443 reachable, doctor-check.invalid:443 refused (not_allowed)</div>
-<p>前两条命令在没有用户命名空间权限的 docker 容器里运行，第三条在 Cloud Managed 容器里运行。</p>
+<p>前两条命令在没有用户命名空间权限的 docker 容器里运行，第三条在 Cloud Managed 容器里运行。下面是 dsh 在 Cloud Managed 容器里的结果，dsh 的路径改成了短路径：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor dsh --network full
+[ok]   dsh          executable  /usr/local/bin/dsh 0.2.1
+[ok]   dsh          login       DEEPSEEK_API_KEY
+[ok]   dsh          sandbox     bubblewrap: wrote inside, blocked outside, dsh started
+[ok]   dsh          network     api.deepseek.com:443 reachable, 169.254.169.254:80 refused (private_address)</div>
 <h2 id="exit-codes">退出码</h2>
 <table>
   <thead>
@@ -246,6 +254,7 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
   <li>claude-code: >= 2.1.288</li>
   <li>pi: >= 1.0.1，npm 包 <code>@earendil-works/pi-coding-agent</code></li>
   <li>codex: >= 0.159.2，权限配置与 <code>--ignore-user-config</code> 需要这个版本</li>
+  <li>dsh: >= 0.2.1-rc.2，npm 包 <code>@deepseek-ai/dsh</code>。npm 的默认标签 <code>latest</code> 指向更早的 0.2.0-rc.2，要写明版本安装。dsh 要求 Node <code>^22.19.0 || &gt;=24.0.0</code></li>
 </ul>
 
 <h2 id="claude-code">claude-code</h2>
@@ -504,6 +513,105 @@ deny read: /home/me/.ssh, /home/me/.aws, ..., /home/me/.claude/.credentials.json
     <tr><td>沙箱启动失败（codex 0.160.0，本机 Linux 未放行 AppArmor 与 docker 默认权限）</td><td>0</td><td>以 <code>turn.completed</code> 结束，没有 <code>error</code> 与 <code>turn.failed</code>；失败的 <code>command_execution</code> 的 <code>aggregated_output</code> 是 <code>bwrap: </code> 开头的报错</td></tr>
   </tbody>
 </table>
+
+<h2 id="dsh">dsh</h2>
+<h3>参数</h3>
+<pre><code class="language-bash">&lt;dsh 的绝对路径&gt; headless --patch &lt;临时目录&gt;/dsh-patch.yml --json
+  [--session-id session-&lt;会话 id&gt;]
+  &lt;-- 之后的调用方参数&gt; -</code></pre>
+<ul>
+  <li><code>headless</code> 是 dsh 的非交互 profile，<code>--json</code> 让它每行输出一个事件，最后的 <code>-</code> 表示从标准输入读任务；提示词原文写入标准输入后关闭。<code>--patch</code> 是 dsh 启动器的选项，必须写在 <code>--json</code> 之前，写在后面时 dsh 报 <code>unknown option '--patch'</code>。提示词不放在命令行里，理由：以 <code>-</code> 开头的位置参数被 dsh 当成选项，dsh 也不接受 <code>--</code>（0.2.1-rc.2 实测）。调用方参数写在 <code>--json</code> 之后、<code>-</code> 之前，只写 headless 的选项。</li>
+  <li>环境里 <code>DSH_HOME</code> 指向会话临时目录里的 <code>dsh-home/</code>，<code>DSH_AGENTS_HOME</code> 指向空目录 <code>dsh-agents/</code>，两个目录在启动前创建，权限 0700；另设 <code>DSH_PERMISSION_MODE=danger-full-access</code> 与 <code>DSH_TELEMETRY_DISABLED=1</code>。这四个变量在 <code>--env</code> 之后设置，调用方不能用 <code>--env</code> 改回。调用方环境里以 <code>DSH_</code> 开头的变量启动前删除，见<a href="session.html#env">会话环境</a>；私有目录关掉了哪些配置来源，见<a href="isolation.html#config">配置与账号</a>。</li>
+  <li><code>DSH_PERMISSION_MODE=danger-full-access</code> 关掉 dsh 自带的沙箱与审批，写限制只由 agentrun 的包裹执行；沙箱没有运行时同样这样设置，与 codex 在沙箱没有运行时用 <code>:danger-full-access</code> 一致（用户定）。理由：dsh 自带的沙箱只限制写文件，不限制网络；默认的 <code>workspace-write</code> 下 bash 命令的 <code>/tmp</code> 在命令结束后消失，需要审批的操作在 headless 里没有人回答，直接失败；macOS 上 dsh 在 agentrun 的 Seatbelt 里用 <code>workspace-write</code> 时每条 bash 命令都报 <code>no sandbox backend is usable on this host</code>（0.2.1-rc.2 在云端与 macOS 实测）。</li>
+  <li>会话环境里必须有非空的 <code>DEEPSEEK_API_KEY</code>，没有时启动前拒绝，<code>--dry-run</code> 也检查，<code>detail</code> 为 <code>DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=&lt;key&gt;</code>。理由：会话环境没有这个变量时，dsh 读工作目录里 <code>.env</code> 的 key，agent 能写工作目录，下一次运行的账号就由 agent 决定；私有 <code>DSH_HOME</code> 里没有用户的 <code>~/.dsh/.env</code>（用户定）。<code>DEEPSEEK_BASE_URL</code> 照常进入会话，dsh 用它访问兼容的模型服务。</li>
+  <li>补丁文件 <code>dsh-patch.yml</code> 写在会话临时目录里，权限 0600，内容是一个 JSON 数组，dsh 按 YAML 读它。每一项按 <code>id</code> 修改 dsh 的一个配置条目。始终关闭的七个条目：
+<table>
+  <thead>
+    <tr><th>条目</th><th>关闭的内容</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>agent-instructions</code></td><td>读 <code>AGENTS.md</code>、<code>CLAUDE.md</code> 等指令文件</td></tr>
+    <tr><td><code>skill-filesystem</code></td><td>读用户与项目的技能目录</td></tr>
+    <tr><td><code>session-log-deepseek</code></td><td>每次模型请求在请求体里附带会话事件（<code>dsh_session_log</code>）</td></tr>
+    <tr><td><code>plugin-package-inventory-deepseek</code></td><td>请求体里附带已安装插件的清单</td></tr>
+    <tr><td><code>session-telemetry-otel</code></td><td>OTel 遥测导出</td></tr>
+    <tr><td><code>session-title-llm</code></td><td>额外请求一次模型生成会话标题。这次请求的用量不出现在输出里</td></tr>
+    <tr><td><code>tool-web</code></td><td><code>web_search</code> 与 <code>web_fetch</code> 两个工具（用户定）。理由：<code>web_search</code> 由模型服务执行，请求只到 <code>api.deepseek.com</code>，过滤代理无法按主机限制它，<code>--network none</code> 也拦不住</td></tr>
+  </tbody>
+</table>
+  给了 <code>--no-subagents</code> 时另外关闭 <code>tool-subagent</code>、<code>tool-subagent-fork</code>、<code>tool-workflow</code>、<code>tool-subagent-control</code>、<code>tool-subagent-list-agents</code>，模型的工具列表里随之没有 subagent、workflow 与给 subagent 发消息的工具（实测）。给了 <code>--model ID</code> 时加 <code>{"id":"agent-default-model","config":{"provider":"deepseek-official","model":"ID"}}</code>，模型名不检查，不存在的模型在第一次请求时报 <code>INVALID_REQUEST</code>；没给时用 dsh 的默认模型。给了 <code>--effort LEVEL</code> 时加 <code>{"id":"llm-deepseek","config":{"reasoningEffort":"LEVEL"}}</code>，dsh 接受 <code>off</code>、<code>low</code>、<code>high</code>、<code>max</code>，其他值在联网前报 <code>UNSUPPORTED_REASONING_EFFORT</code>。</li>
+  <li>补丁按 <code>id</code> 匹配条目，dsh 把某个条目改名或删除后，这一项既不报错也不生效。升级 dsh 后用 <code>dsh headless --patch &lt;补丁文件&gt; --dump-config</code> 核对合成后的配置，它不发请求。</li>
+  <li><code>--max-turns</code> 与 <code>--image</code> 是用法错误，<code>--image</code> 的 <code>detail</code> 见<a href="#images">图片</a>。</li>
+  <li>沙箱打开时，整条命令前面加上包裹命令，与 pi 相同，只是没有 pi 状态目录的三组参数：Linux 是 <code>bwrap</code> 加 <code>socat</code>，macOS 是 <code>sandbox-exec</code> 与会话临时目录里的 <code>seatbelt.sb</code>。<code>dsh-home/</code> 与 <code>dsh-agents/</code> 在会话临时目录里，所以 dsh 能写它们。被 <code>bwrap</code> 包裹时第一个信号直接发给 dsh，与 pi 相同，见<a href="session.html#signals">进程、信号与超时</a>。</li>
+</ul>
+<div class="term"><span class="prompt">$</span> agentrun dsh --dry-run --prompt "修复测试"
+command: /usr/bin/bwrap --ro-bind / / --bind /home/me/hello /home/me/hello --bind '&lt;tempdir&gt;' '&lt;tempdir&gt;' --dev /dev --proc /proc --die-with-parent --unshare-net -- /bin/sh -c '"$0" "TCP-LISTEN:$1,bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:$2" 2&gt;/dev/null &amp; shift 2; exec "$@"' /usr/bin/socat '&lt;proxy port&gt;' '&lt;tempdir&gt;/proxy.sock' /usr/local/bin/dsh headless --patch '&lt;tempdir&gt;/dsh-patch.yml' --json -
+PATH: /usr/local/bin:/usr/bin:/bin
+set: (none)
+removed: (none)
+agentrun variables: (none)</div>
+<p>这段输出取自 Cloud Managed 容器，工作目录、dsh 的路径与 PATH 改成了短路径。agentrun 设置的四个 <code>DSH_</code> 变量不出现在 <code>set:</code> 一行与 <code>start</code> 事件的 <code>env</code> 字段里。</p>
+
+<h3>输出映射</h3>
+<p><code>--json</code> 每行一个事件。字符串字段超过 8 KiB 时被 dsh 截断，<code>final</code> 不截断。</p>
+<table>
+  <thead>
+    <tr><th>原始事件</th><th>转成</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>没有对应的原始事件</td><td><code>prompt</code>：dsh 不回显提示词，agentrun 在 <code>start</code> 之后用自己传入的提示词输出</td></tr>
+    <tr><td><code>session</code></td><td>不输出；<code>sessionId</code> 去掉 <code>session-</code> 前缀是会话 id，见<a href="#sessions">保存与继续会话</a></td></tr>
+    <tr><td><code>tool_call</code></td><td><code>tool_start</code>：<code>id</code> 为 <code>callId</code>，<code>name</code> 为 <code>tool</code>，<code>parent</code> 为 null，summary 由 <code>input</code> 计算</td></tr>
+    <tr><td><code>tool_result</code></td><td><code>tool</code>：<code>id</code> 为 <code>callId</code>，<code>denied</code> 为 false；<code>status</code> 为 <code>error</code> 时 <code>error</code> 为 true，为 <code>completed</code> 时为 false，其他值为 null</td></tr>
+    <tr><td><code>text</code></td><td><code>text</code>，空字符串不输出。dsh 输出的是一段完整的文字，不是增量</td></tr>
+    <tr><td><code>status</code>，<code>phase</code> 为 <code>step_end</code> 且带 <code>usage</code></td><td><code>usage</code>：<code>inputTokens</code>、<code>outputTokens</code>、<code>cacheReadTokens</code>、<code>cacheWriteTokens</code> 对应四个字段（<code>inputTokens</code> 不含缓存命中，实测）。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null；dsh 不报告费用，<code>cost_usd</code> 为 null。模型请求失败的那一步没有 <code>usage</code>，不输出</td></tr>
+    <tr><td><code>status</code>，<code>phase</code> 为 <code>turn_end</code></td><td>不输出；<code>reason</code> 用于失败判定</td></tr>
+    <tr><td><code>final</code></td><td><code>end.result</code>。失败与中断时 <code>final</code> 是空字符串，这时不作为结果</td></tr>
+    <tr><td><code>error</code></td><td>不输出；用于失败判定</td></tr>
+    <tr><td><code>status</code>，<code>phase</code> 为 <code>step_start</code></td><td>不输出；作为主 agent 一次模型调用的开始，用于 <code>--max-turns</code>，见<a href="#limits">轮数与 token 上限</a></td></tr>
+    <tr><td>其他（<code>thinking</code>，<code>phase</code> 为 <code>turn_start</code> 的 <code>status</code>）</td><td>只写入 <code>--raw</code></td></tr>
+  </tbody>
+</table>
+<p>summary：<code>bash</code> 写 <code>command</code> 的第一行；<code>read</code>、<code>write</code>、<code>edit</code>、<code>read_image</code> 写 <code>file_path</code>，在 <code>--cwd</code> 之内时写相对路径；<code>glob</code>、<code>grep</code> 写 <code>pattern</code>；其他只写工具名。</p>
+<p>dsh 只输出主会话的事件。subagent 里的工具调用不出现，主会话启动 subagent 的调用照常输出 <code>tool_start</code> 与 <code>tool</code>，所以 dsh 不输出 <code>subagent_start</code> 与 <code>subagent_end</code>，<code>parent</code> 全部为 null。</p>
+<div class="term"><span class="prompt">$</span> agentrun dsh --format text --prompt "给 greet.py 写一个测试并运行"
+[main] prompt 给 greet.py 写一个测试并运行
+[main] text I'll look at the file first, then write and run a test.
+[main] tool bash: ls -la /home/me/hello
+[main] tool glob: **/greet*.py
+[main] tool read: greet.py
+[main] tool bash: cd /home/me/hello &amp;&amp; python3 --version &amp;&amp; python3 -c "import pytest; print(pytest.__version__)"
+[main] text pytest isn't installed, so I'll write the test with the standard-library `unittest` module.
+[main] tool write: test_greet.py
+[main] tool bash: cd /home/me/hello &amp;&amp; python3 -m unittest -v
+[main] text 完成。
+[end] finished 12.9s  in 35.4k  out 0.8k  cached 96%</div>
+<p>这段输出取自 Cloud Managed 容器，工作目录改成了短路径。dsh 不报告费用，<code>[end]</code> 行没有金额。</p>
+
+<h3>失败判定</h3>
+<p>以下任一成立即为 <code>failed</code>，<code>detail</code> 按顺序取第一项的信息：</p>
+<ol>
+  <li>有 <code>error</code> 事件：取它的 <code>message</code> 前 500 个字符。dsh 启动阶段的错误只有这个事件，例如未知选项与空任务。</li>
+  <li><code>turn_end</code> 的 <code>reason.kind</code> 为 <code>error</code>：取 <code>reason.error</code> 的 <code>code: message</code> 前 500 个字符，没有 <code>message</code> 时只写 <code>code</code>。<code>kind</code> 是 <code>completed</code> 以外的其他值（<code>max-tokens</code>、<code>aborted</code>、<code>interrupted</code>）时写 <code>turn_end reason: 值</code>。</li>
+  <li>退出码非 0：与 pi 相同，先看包裹命令是否启动失败，再取标准错误的最后 500 个字符。</li>
+  <li>退出码 0 但没有 <code>turn_end</code>：<code>dsh produced no turn_end</code>。</li>
+</ol>
+<table>
+  <thead>
+    <tr><th>实测情况（dsh 0.2.1-rc.2，Cloud Managed 容器）</th><th>退出码</th><th>输出</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>正常完成</td><td>0</td><td><code>turn_end</code> 的 <code>kind</code> 为 <code>completed</code>，<code>final</code> 是最后的回答</td></tr>
+    <tr><td>无效 key</td><td>1</td><td><code>turn_end</code> 的 <code>kind</code> 为 <code>error</code>，<code>code</code> 为 <code>AUTH</code>，<code>status</code> 401；标准错误 <code>dsh: AUTH: ...</code>；<code>final</code> 为空</td></tr>
+    <tr><td>模型不存在</td><td>1</td><td>同上，<code>code</code> 为 <code>INVALID_REQUEST</code>，<code>status</code> 400，<code>message</code> 列出可用的模型</td></tr>
+    <tr><td>连不上模型服务</td><td>1</td><td>同上，<code>code</code> 为 <code>TRANSPORT</code></td></tr>
+    <tr><td>未知选项、空任务</td><td>1</td><td>只有 <code>error</code> 事件</td></tr>
+    <tr><td>工作目录的 <code>.env</code> 里有 dsh 拒绝读取的变量名（<code>DSH_</code> 开头、<code>DEEPSEEK_BASE_URL</code>、代理变量、<code>PATH</code> 等）</td><td>1</td><td>没有事件，标准错误是 node 的异常栈</td></tr>
+    <tr><td>SIGINT（包裹与不包裹相同）</td><td>130</td><td>没有 <code>turn_end</code>，<code>final</code> 为空</td></tr>
+    <tr><td>SIGTERM（包裹与不包裹相同）</td><td>0</td><td>同上</td></tr>
+  </tbody>
+</table>
+<p>SIGTERM 后退出码为 0，所以中断只按 agentrun 自己收到的信号判定，见<a href="session.html#signals">进程、信号与超时</a>；超过上限被停止的运行因为没有 <code>turn_end</code>，按上面的第 4 条不满足 <code>finished</code>，结果是 <code>limit</code>，见<a href="#limits">轮数与 token 上限</a>。dsh 在新的进程组里启动命令，这些命令由 agentrun 的进程树清理结束（云端实测 SIGINT 与 SIGTERM 后没有留下进程）。本机 Linux 上用户的 systemd 可用时，dsh 改用 <code>systemd-run --user --scope</code> 启动命令（dsh 源码），这种情况没有实测。</p>
 </main>
 </body>
 </html>

@@ -1,0 +1,2 @@
+{"schema":1,"type":"prompt","text":"Reply with the single word OK.","images":[]}
+{"schema":1,"type":"end","status":"failed","exit_code":1,"detail":"INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed no-such-model-probe. (request_id: 05e23924-6b2d-4238-865e-55818dff450a)","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}},"result":null,"session_id":null}

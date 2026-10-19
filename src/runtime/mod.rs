@@ -1,5 +1,6 @@
 pub mod claudecode;
 pub mod codex;
+pub mod dsh;
 pub mod pi;
 
 use std::ffi::{OsStr, OsString};
@@ -18,6 +19,7 @@ use crate::session::Session;
 use crate::transcript::{Saved, Transcript};
 use claudecode::ClaudeCode;
 use codex::Codex;
+use dsh::Dsh;
 use pi::Pi;
 
 pub const DETAIL_MAX_CHARS: usize = 500;
@@ -49,6 +51,7 @@ pub fn builtin(runtime: Runtime) -> Box<dyn Adapter> {
         Runtime::ClaudeCode => Box::new(ClaudeCode::new()),
         Runtime::Pi => Box::new(Pi::new()),
         Runtime::Codex => Box::new(Codex::new()),
+        Runtime::Dsh => Box::new(Dsh::new()),
     }
 }
 
@@ -92,6 +95,7 @@ pub(crate) fn min_version(runtime: Runtime) -> Version {
         Runtime::ClaudeCode => claudecode::MIN_VERSION,
         Runtime::Codex => codex::MIN_VERSION,
         Runtime::Pi => pi::MIN_VERSION,
+        Runtime::Dsh => dsh::MIN_VERSION,
     }
 }
 
@@ -107,6 +111,7 @@ pub(crate) fn model_service_host(
         Runtime::Pi => pi::model_service(model, pi::user_state_dir(session, cwd).as_deref())
             .host
             .map(str::to_string),
+        Runtime::Dsh => dsh::service_host(session),
     }
 }
 
@@ -119,7 +124,7 @@ pub(crate) fn service_hosts(
     match runtime {
         Runtime::ClaudeCode => Vec::new(),
         Runtime::Codex => codex::SERVICE_HOSTS.map(str::to_string).to_vec(),
-        Runtime::Pi => model_service_host(runtime, model, session, cwd)
+        Runtime::Pi | Runtime::Dsh => model_service_host(runtime, model, session, cwd)
             .into_iter()
             .collect(),
     }
@@ -128,7 +133,7 @@ pub(crate) fn service_hosts(
 pub(crate) fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool) -> bool {
     sandboxed
         && match runtime {
-            Runtime::Pi => true,
+            Runtime::Pi | Runtime::Dsh => true,
             Runtime::ClaudeCode => mode != NetworkMode::None,
             Runtime::Codex => mode == NetworkMode::Custom,
         }
@@ -136,7 +141,7 @@ pub(crate) fn proxy_needed(runtime: Runtime, mode: NetworkMode, sandboxed: bool)
 
 pub(crate) fn starts_inside_wrapper(runtime: Runtime) -> bool {
     match runtime {
-        Runtime::Pi => true,
+        Runtime::Pi | Runtime::Dsh => true,
         Runtime::ClaudeCode | Runtime::Codex => false,
     }
 }
@@ -144,7 +149,7 @@ pub(crate) fn starts_inside_wrapper(runtime: Runtime) -> bool {
 fn state_dir(runtime: Runtime, session: &Session, cwd: &Path) -> Option<PathBuf> {
     match runtime {
         Runtime::Pi => pi::user_state_dir(session, cwd),
-        Runtime::ClaudeCode | Runtime::Codex => None,
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Dsh => None,
     }
 }
 
@@ -164,6 +169,7 @@ pub(crate) fn login_file(runtime: Runtime, session: &Session, cwd: &Path) -> Opt
         Runtime::ClaudeCode => claudecode::login_file(session, cwd),
         Runtime::Codex => codex::user_home(session, cwd).map(|home| home.join(codex::LOGIN_FILE)),
         Runtime::Pi => pi::user_state_dir(session, cwd).map(|dir| dir.join(pi::LOGIN_FILE)),
+        Runtime::Dsh => dsh::user_home(session, cwd).map(|home| home.join(dsh::ENV_FILE)),
     }
 }
 
@@ -172,13 +178,14 @@ fn history_paths(runtime: Runtime, session: &Session, cwd: &Path) -> Vec<PathBuf
         Runtime::ClaudeCode => claudecode::history_paths(session, cwd),
         Runtime::Codex => codex::history_paths(session, cwd),
         Runtime::Pi => Vec::new(),
+        Runtime::Dsh => dsh::history_paths(session, cwd),
     }
 }
 
 fn reads_login_inside_sandbox(runtime: Runtime) -> bool {
     match runtime {
         Runtime::Pi => true,
-        Runtime::ClaudeCode | Runtime::Codex => false,
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Dsh => false,
     }
 }
 
@@ -440,6 +447,29 @@ mod tests {
             service_hosts(Runtime::Pi, None, &pi, cwd),
             ["openrouter.ai"]
         );
+
+        let dsh = |base_url: Option<&str>| {
+            let env: Vec<(OsString, OsString)> = base_url
+                .map(|url| (OsString::from("DEEPSEEK_BASE_URL"), OsString::from(url)))
+                .into_iter()
+                .collect();
+            Session::assemble(Runtime::Dsh, &env, &[], &[], &[])
+        };
+        let cases = [
+            (None, Some("api.deepseek.com")),
+            (
+                Some("https://user@Gateway.example:8443/v1"),
+                Some("gateway.example"),
+            ),
+            (Some("gateway"), None),
+        ];
+        for (base_url, host) in cases {
+            assert_eq!(
+                service_hosts(Runtime::Dsh, None, &dsh(base_url), cwd),
+                host.map(str::to_string).into_iter().collect::<Vec<_>>(),
+                "{base_url:?}"
+            );
+        }
     }
 
     #[test]
@@ -502,6 +532,7 @@ mod tests {
             ),
             (Runtime::Codex, "/nonexistent/home/.codex/auth.json"),
             (Runtime::Pi, "/nonexistent/home/.pi/agent/auth.json"),
+            (Runtime::Dsh, "/nonexistent/home/.dsh/.env"),
         ];
         for (runtime, _) in logins {
             let mut expected = home_entries("/nonexistent/home");
@@ -516,6 +547,7 @@ mod tests {
                     "/nonexistent/home/.claude/projects",
                     "/nonexistent/home/.codex/sessions",
                     "/nonexistent/home/.codex/history.jsonl",
+                    "/nonexistent/home/.dsh/sessions",
                 ]
                 .map(PathBuf::from),
             );
@@ -531,6 +563,7 @@ mod tests {
                 ("HOME", "/nonexistent/home"),
                 ("CLAUDE_CONFIG_DIR", "/nonexistent/claude"),
                 ("CODEX_HOME", "relative/codex"),
+                ("DSH_HOME", "/nonexistent/dsh"),
             ],
         );
         let paths = default_denied_reads(Runtime::Pi, &moved, cwd);
@@ -539,15 +572,30 @@ mod tests {
             [
                 PathBuf::from("/nonexistent/claude/.credentials.json"),
                 PathBuf::from("/nonexistent/work/relative/codex/auth.json"),
+                PathBuf::from("/nonexistent/dsh/.env"),
                 PathBuf::from("/nonexistent/claude/projects"),
                 PathBuf::from("/nonexistent/work/relative/codex/sessions"),
                 PathBuf::from("/nonexistent/work/relative/codex/history.jsonl"),
+                PathBuf::from("/nonexistent/dsh/sessions"),
             ]
         );
         assert_eq!(
             default_denied_reads(Runtime::Codex, &env_session(Runtime::Codex, &[]), cwd),
             Vec::<PathBuf>::new()
         );
+        let dsh = env_session(
+            Runtime::Dsh,
+            &[
+                ("HOME", "/nonexistent/home"),
+                ("DSH_HOME", "/nonexistent/dsh"),
+            ],
+        );
+        assert!(!dsh.env.contains_key(OsStr::new("DSH_HOME")));
+        let paths = default_denied_reads(Runtime::Dsh, &dsh, cwd);
+        for path in ["/nonexistent/dsh/.env", "/nonexistent/dsh/sessions"] {
+            assert!(paths.contains(&PathBuf::from(path)), "{path}");
+        }
+        assert!(!paths.contains(&PathBuf::from("/nonexistent/home/.dsh/.env")));
     }
 
     #[test]
@@ -660,7 +708,12 @@ mod tests {
     fn min_versions_match_the_documented_tables() {
         let run_page = include_str!("../../docs/pages/run.html");
         let quickstart = include_str!("../../docs/pages/quickstart.html");
-        for runtime in [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi] {
+        for runtime in [
+            Runtime::ClaudeCode,
+            Runtime::Codex,
+            Runtime::Pi,
+            Runtime::Dsh,
+        ] {
             let run_item = format!("<li>{}: >= ", runtime.name());
             let documented = run_page
                 .lines()
