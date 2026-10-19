@@ -22,6 +22,9 @@ const WEB_FETCH_TOOL: &str = "WebFetch";
 const WEB_SEARCH_TOOL: &str = "WebSearch";
 const SOCAT_LISTEN_VARIABLE: &str = "SOCAT_DEFAULT_LISTEN_IP";
 const SOCAT_LISTEN_IPV4: &str = "4";
+const AUTO_MEMORY_VARIABLE: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+const AUTO_MEMORY_DISABLED: &str = "1";
+const AUTO_MEMORY_SUBDIR: &str = "claude-memory";
 const SUBAGENT_TOOL: &str = "Task";
 const SUBAGENT_TOOL_NAMES: [&str; 2] = ["Agent", "Task"];
 const HANDBACK_TOOL: &str = "SubagentHandback";
@@ -81,7 +84,9 @@ struct PromptMessage<'a> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Settings<'a> {
+    auto_memory_directory: &'a str,
     sandbox: SandboxSettings<'a>,
 }
 
@@ -309,6 +314,7 @@ impl Adapter for ClaudeCode {
         let sandboxed = invocation.sandbox.runs();
         let cwd = invocation.cwd.to_string_lossy();
         let tempdir = invocation.tempdir.to_string_lossy();
+        let memory_dir = invocation.tempdir.join(AUTO_MEMORY_SUBDIR);
         let mut tools: Vec<&str> = TOOLS.to_vec();
         let mut allowed: Vec<String> = if sandboxed {
             let mut rules: Vec<String> = ALLOWED_WITH_SANDBOX
@@ -382,6 +388,7 @@ impl Adapter for ClaudeCode {
             argv.push(sandbox_settings(
                 &cwd,
                 &tempdir,
+                &memory_dir.to_string_lossy(),
                 invocation.proxy.as_ref().map(proxy_port),
             ));
         }
@@ -398,14 +405,16 @@ impl Adapter for ClaudeCode {
             argv.push(max_turns.to_string());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
-        let env = if sandboxed {
-            vec![(
+        let mut env = vec![(
+            OsString::from(AUTO_MEMORY_VARIABLE),
+            OsString::from(AUTO_MEMORY_DISABLED),
+        )];
+        if sandboxed {
+            env.push((
                 OsString::from(SOCAT_LISTEN_VARIABLE),
                 OsString::from(SOCAT_LISTEN_IPV4),
-            )]
-        } else {
-            Vec::new()
-        };
+            ));
+        }
         Ok(Launch {
             argv,
             stdin: prompt_line(&invocation.prompt),
@@ -512,8 +521,14 @@ fn proxy_port(proxy: &ProxyEndpoint) -> Value {
     }
 }
 
-fn sandbox_settings(cwd: &str, tempdir: &str, proxy_port: Option<Value>) -> String {
+fn sandbox_settings(
+    cwd: &str,
+    tempdir: &str,
+    memory_dir: &str,
+    proxy_port: Option<Value>,
+) -> String {
     serde_json::to_string(&Settings {
+        auto_memory_directory: memory_dir,
         sandbox: SandboxSettings {
             enabled: true,
             fail_if_unavailable: true,
@@ -695,7 +710,7 @@ mod tests {
             "--allowedTools".to_string(),
             "Read,Glob,Grep,Edit(//work/repo/**),Write(//work/repo/**),Edit(//tmp/agentrun-abc/**),Write(//tmp/agentrun-abc/**),Task".to_string(),
             "--settings".to_string(),
-            r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{"allowWrite":["/work/repo","/tmp/agentrun-abc"]},"network":{"allowedDomains":[]}}}"#.to_string(),
+            r#"{"autoMemoryDirectory":"/tmp/agentrun-abc/claude-memory","sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{"allowWrite":["/work/repo","/tmp/agentrun-abc"]},"network":{"allowedDomains":[]}}}"#.to_string(),
         ]);
         assert_eq!(argv_without_session_id(&launch), expected);
     }
@@ -738,6 +753,7 @@ mod tests {
     }
 
     const SOCAT_IPV4: (&str, &str) = ("SOCAT_DEFAULT_LISTEN_IP", "4");
+    const NO_AUTO_MEMORY: (&str, &str) = ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
 
     fn has_env(launch: &Launch, pair: (&str, &str)) -> bool {
         launch
@@ -777,7 +793,13 @@ mod tests {
             "Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch"
         );
         assert!(!has_env(&open, SOCAT_IPV4));
-        assert!(open.env.is_empty());
+        assert_eq!(
+            open.env,
+            vec![(
+                OsString::from("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+                OsString::from("1")
+            )]
+        );
     }
 
     #[test]
@@ -820,10 +842,28 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            vec![(
-                OsString::from("SOCAT_DEFAULT_LISTEN_IP"),
-                OsString::from("4")
-            )]
+            vec![
+                (
+                    OsString::from("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+                    OsString::from("1")
+                ),
+                (
+                    OsString::from("SOCAT_DEFAULT_LISTEN_IP"),
+                    OsString::from("4")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_memory_is_off_and_its_directory_is_in_the_session_tempdir() {
+        assert!(has_env(&launch(true, &[]), NO_AUTO_MEMORY));
+        assert!(has_env(&launch(false, &[]), NO_AUTO_MEMORY));
+        let argv = argv_without_session_id(&launch(true, &[]));
+        let settings: Value = serde_json::from_str(argv.last().unwrap()).unwrap();
+        assert_eq!(
+            settings["autoMemoryDirectory"],
+            "/tmp/agentrun-abc/claude-memory"
         );
     }
 

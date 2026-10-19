@@ -26,6 +26,7 @@ impl TextFormatter {
         match &event.body {
             Body::Start(start) => self.note(start.sandbox).into_iter().collect(),
             Body::Prompt(prompt) => vec![format!("[main] prompt {}", first_line(&prompt.text))],
+            Body::ToolStart(_) => Vec::new(),
             Body::Tool(tool) => {
                 let denied = if tool.denied { " (denied)" } else { "" };
                 vec![format!(
@@ -167,7 +168,7 @@ mod tests {
     use crate::cli::{NetworkMode, Runtime};
     use crate::output::event::{
         End, Network, NetworkInfo, NetworkReason, Prompt, Start, SubagentEnd, SubagentStart,
-        SubagentStatus, Text, Tool, UsageReport,
+        SubagentStatus, Text, Tool, ToolStart, UsageReport,
     };
     use crate::output::usage::Usage;
 
@@ -258,6 +259,15 @@ mod tests {
                 text: "done\nsecond".to_string()
             }))),
             vec!["[main] text done"]
+        );
+        assert!(
+            text.lines(&event(Body::ToolStart(ToolStart {
+                id: "t1".to_string(),
+                parent: None,
+                name: "Bash".to_string(),
+                summary: "Bash: cat ~/.ssh/id_rsa".to_string(),
+            })))
+            .is_empty()
         );
         assert_eq!(
             text.lines(&event(Body::Tool(Tool {
