@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -27,7 +28,7 @@ use crate::sandbox::wrapper_failure;
 use crate::transcript;
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
-pub(crate) const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
 pub struct Exit {
@@ -244,12 +245,17 @@ fn spawn_runtime(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for key in TEMP_ENV_VARS {
-        command.env(key, tempdir);
-    }
+    command.envs(temp_environment(tempdir));
     command
         .spawn()
         .map_err(|error| format!("failed to start {program}: {error}"))
+}
+
+pub(crate) fn temp_environment(dir: &Path) -> Vec<(OsString, OsString)> {
+    TEMP_ENV_VARS
+        .iter()
+        .map(|key| (OsString::from(key), dir.as_os_str().to_owned()))
+        .collect()
 }
 
 fn start_event(invocation: &Invocation, launch: &Launch) -> Event {
