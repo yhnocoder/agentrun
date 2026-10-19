@@ -324,7 +324,12 @@ fn spawn_pumps(
     });
     let stdout = child.stdout.take().expect("stdout is piped");
     let stdout_sender = sender.clone();
-    thread::spawn(move || read_lines(stdout, &stdout_sender));
+    thread::spawn(move || {
+        read_lines(stdout, |line| {
+            stdout_sender.send(Message::Line(line)).is_ok()
+        });
+        let _ = stdout_sender.send(Message::StdoutEnd);
+    });
     if refresh {
         let refresh_sender = sender.clone();
         thread::spawn(move || {
@@ -527,7 +532,7 @@ fn supervise(receiver: &Receiver<Message>, relay: &mut Relay) -> Option<i32> {
     }
 }
 
-fn read_lines(stdout: impl Read, sender: &Sender<Message>) {
+pub(crate) fn read_lines(stdout: impl Read, mut each: impl FnMut(Vec<u8>) -> bool) {
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
     loop {
@@ -538,14 +543,10 @@ fn read_lines(stdout: impl Read, sender: &Sender<Message>) {
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
-        if sender
-            .send(Message::Line(std::mem::take(&mut line)))
-            .is_err()
-        {
-            return;
+        if !each(std::mem::take(&mut line)) {
+            break;
         }
     }
-    let _ = sender.send(Message::StdoutEnd);
 }
 
 fn wait_child(mut child: Child, signals: &Signals, sender: &Sender<Message>) {

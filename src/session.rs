@@ -143,7 +143,48 @@ fn is_variable_name(key: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-pub(crate) fn parse_env_args(
+pub(crate) struct SessionInputs {
+    path_dirs: Vec<PathBuf>,
+    env_files: Vec<Vec<(String, String)>>,
+    env_args: Vec<(String, OsString)>,
+}
+
+impl SessionInputs {
+    pub(crate) fn read(
+        env: &[String],
+        path: &[PathBuf],
+        env_file: &[PathBuf],
+        caller_env: &[(OsString, OsString)],
+    ) -> Result<SessionInputs, String> {
+        let env_args = parse_env_args(env, caller_env)?;
+        let path_dirs = resolve_path_dirs(path)?;
+        let env_files = env_file
+            .iter()
+            .map(|path| read_env_file(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(SessionInputs {
+            path_dirs,
+            env_files,
+            env_args,
+        })
+    }
+
+    pub(crate) fn assemble(
+        &self,
+        runtime: Runtime,
+        caller_env: &[(OsString, OsString)],
+    ) -> Session {
+        Session::assemble(
+            runtime,
+            caller_env,
+            &self.path_dirs,
+            &self.env_files,
+            &self.env_args,
+        )
+    }
+}
+
+fn parse_env_args(
     args: &[String],
     caller_env: &[(OsString, OsString)],
 ) -> Result<Vec<(String, OsString)>, String> {
@@ -170,7 +211,7 @@ pub(crate) fn parse_env_args(
         .collect()
 }
 
-pub(crate) fn resolve_path_dirs(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+fn resolve_path_dirs(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     dirs.iter()
         .map(|dir| {
             std::path::absolute(dir)
@@ -181,7 +222,7 @@ pub(crate) fn resolve_path_dirs(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String
         .collect()
 }
 
-pub(crate) fn read_env_file(path: &Path) -> Result<Vec<(String, String)>, String> {
+fn read_env_file(path: &Path) -> Result<Vec<(String, String)>, String> {
     let bytes =
         std::fs::read(path).map_err(|error| format!("--env-file {}: {error}", path.display()))?;
     let content = String::from_utf8(bytes)

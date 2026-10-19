@@ -95,7 +95,7 @@ impl Runtime {
     }
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Default)]
 pub struct RunArgs {
     #[arg(
         long,
@@ -352,9 +352,10 @@ pub enum SandboxMode {
     Off,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
+    #[default]
     #[value(help = "No network for commands; the runtime still reaches its model service")]
     None,
     #[value(help = "Any public host, and web search")]

@@ -494,7 +494,7 @@ mod tests {
     use crate::network::ProxyEndpoint;
     use crate::output::SandboxKind;
     use crate::sandbox::{Sandbox, Wrapper};
-    use crate::session::{Session, parse_env_args};
+    use crate::session::SessionInputs;
     use crate::transcript::Saved;
 
     const SAVED_ID: &str = "bd2ebf55-0917-4915-8793-20a5fc640cb9";
@@ -529,8 +529,9 @@ mod tests {
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value)))
                 .collect();
-            let env_args = parse_env_args(&args.env, &caller_env).unwrap();
-            let session = Session::assemble(runtime, &caller_env, &[], &[], &env_args);
+            let session = SessionInputs::read(&args.env, &[], &[], &caller_env)
+                .unwrap()
+                .assemble(runtime, &caller_env);
             let wrapper = if sandboxed {
                 Wrapper::Bubblewrap {
                     bwrap: PathBuf::from("/usr/bin/bwrap"),
