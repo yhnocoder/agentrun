@@ -434,6 +434,7 @@ mod tests {
             output_tokens: Some(output),
             cache_read_tokens: Some(read),
             cache_write_tokens: Some(write),
+            cost_usd: None,
         }
     }
 
@@ -714,6 +715,7 @@ mod tests {
                     output_tokens: None,
                     cache_read_tokens: Some(42000),
                     cache_write_tokens: None,
+                    cost_usd: None,
                 },
             ),
             started,

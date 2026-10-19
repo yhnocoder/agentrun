@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::event::{Body, EndStatus, Event, SandboxKind};
-use super::usage::TokenCounts;
+use super::usage::{TokenCounts, cost};
 use crate::cli::SandboxMode;
 use crate::json::first_line;
 
@@ -95,6 +95,10 @@ impl TextFormatter {
                 }
                 let mut line = format!("[end] {} {}", end.status.name(), seconds(end.duration_ms));
                 line.push_str(&usage_items(&end.usage.totals));
+                if let Some(usd) = end.usage.totals.cost_usd {
+                    line.push_str("  ");
+                    line.push_str(&cost(usd));
+                }
                 if !end.detail.is_empty() {
                     line.push_str("  ");
                     line.push_str(&single_line(&end.detail));
@@ -201,6 +205,7 @@ mod tests {
             output_tokens: output,
             cache_read_tokens: read,
             cache_write_tokens: write,
+            cost_usd: None,
         }
     }
 
@@ -374,6 +379,28 @@ mod tests {
                 counts(None, Some(3), None, Some(4))
             )),
             vec!["[end] failed 31.3s  in 4  out 3  boom"]
+        );
+        assert_eq!(
+            text.lines(&end(
+                EndStatus::Finished,
+                "",
+                TokenCounts {
+                    cost_usd: Some(0.04369),
+                    ..counts(Some(18234), Some(912), Some(42000), Some(5100))
+                }
+            )),
+            vec!["[end] finished 31.3s  in 65.3k  out 0.9k  cached 64%  $0.0437"]
+        );
+        assert_eq!(
+            text.lines(&end(
+                EndStatus::Failed,
+                "boom",
+                TokenCounts {
+                    cost_usd: Some(0.0),
+                    ..TokenCounts::default()
+                }
+            )),
+            vec!["[end] failed 31.3s  $0.0000  boom"]
         );
         assert_eq!(
             text.lines(&end(EndStatus::Failed, "", TokenCounts::default())),

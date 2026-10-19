@@ -57,10 +57,9 @@ agentrun claude-code &lt; task.md</code></pre>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --network custom --allow-host pypi.org --format text --prompt "依次运行 curl -sI https://pypi.org/simple/ 与 curl -sI https://example.com ，然后用一行回复：pypi=状态码 example=状态码"
 <span class="dim">[main]</span> prompt 依次运行 curl -sI https://pypi.org/simple/ 与 curl -sI https://example.com ，然后用一行回复：pypi=状态码 example=状态码
 <span class="dim">[main]</span> <span class="warn">net denied example.com:443 (not_allowed)</span>
-<span class="dim">[main]</span> tool bash: curl -sI https://pypi.org/simple/ | head -1; curl -sI https://example.com | head -1
-<span class="dim">[main]</span> tool bash: echo "--- pypi ---"; curl -sI https://pypi.org/simple/ ; echo "--- example ---"; curl -sI https://example.com
+<span class="dim">[main]</span> tool bash: curl -sI https://pypi.org/simple/ | head -5; echo "---"; curl -sI https://example.com | head -5
 <span class="dim">[main]</span> text pypi=200 example=403
-<span class="dim">[end]</span> finished 6.8s  in 7.9k  out 0.4k  cached 86%</div>
+<span class="dim">[end]</span> finished 5.1s  in 4.7k  out 0.1k  cached 59%  $0.0008</div>
 <p>被拒绝的连接显示为 <code>net denied</code> 一行，括号里是原因。解析到内网地址的主机默认也会被拒绝，需要访问时把主机名原样写进 <code>--allow-host</code>。agentrun 不支持 IPv6。规则的细节见<a href="isolation.html#network">网络</a>。</p>
 
 <h2 id="env">传入环境变量与密钥</h2>
@@ -84,7 +83,8 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <span class="dim">[main]</span> prompt 运行 sleep 30，然后回复 done
 <span class="dim">[main]</span> tool Bash: sleep 30
 <span class="dim">[main]</span> tool Bash: sleep 30
-<span class="dim">[end]</span> timeout 5.5s  in 31.7k  out 24  cached 69%
+<span class="dim">[main]</span> text `sleep 30` 已在后台运行,结束时我会收到通知。等它跑完再回复 done。
+<span class="dim">[end]</span> timeout 6.9s  in 52.6k  out 0.3k  cached 88%  $0.0281
 <span class="prompt">$</span> echo $?
 3</div>
 <p>按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
@@ -128,6 +128,11 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <p>两种情况不会让结果变成失败：agent 的某次工具调用被拒绝，以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
 jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code></pre>
+<p>要记录每次运行的花费，从 <code>end</code> 事件读 <code>usage.cost_usd</code>，单位是美元：</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --format jsonl --prompt "回复 OK" &gt; run.jsonl
+<span class="prompt">$</span> jq -c 'select(.type == "end") | {status, cost_usd: .usage.cost_usd}' run.jsonl
+{"status":"finished","cost_usd":0.000072288}</div>
+<p>codex 不报告费用，<code>cost_usd</code> 为 null；claude-code 没完成一轮就被中断时也为 null。金额由运行时按单价表计算，用订阅登录时它不是实际扣费。按模型拆分的金额与各运行时的差别见<a href="events.html#cost">费用</a>。</p>
 
 <h2 id="parallel">同时运行多个 agent</h2>
 <p>需要几个 agent 同时处理不同的任务时，在后台启动多个 agentrun，每个用自己的 <code>--cwd</code>，输出写到各自的文件，再用 <code>wait</code> 等它们都结束：</p>
@@ -137,12 +142,12 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <span class="prompt">$</span> cat api.log web.log
 <span class="dim">[main]</span> prompt 创建 hello.txt，内容为 api
 <span class="dim">[main]</span> tool Write: hello.txt
-<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`，内容为 `api`，末尾带一个换行符。
-<span class="dim">[end]</span> finished 5.6s  in 27.8k  out 0.1k  cached 82%
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`,内容为 `api`,末尾带一个换行符。
+<span class="dim">[end]</span> finished 6.6s  in 34.1k  out 0.1k  cached 86%  $0.0189
 <span class="dim">[main]</span> prompt 创建 hello.txt，内容为 web
 <span class="dim">[main]</span> tool Write: hello.txt
-<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`，内容为 `web`（末尾带一个换行）。
-<span class="dim">[end]</span> finished 5.0s  in 27.8k  out 0.1k  cached 82%</div>
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`,内容为 `web`,末尾带一个换行。
+<span class="dim">[end]</span> finished 6.3s  in 34.1k  out 0.1k  cached 86%  $0.0188</div>
 <p>每个运行有自己的临时目录、网络代理和 <code>network</code> 事件，结束或被中断时只停止自己启动的进程，所以每个日志可以单独按<a href="#ci">上一节</a>的方法判断成败。运行时可以不同，例如一个用 claude-code、一个用 pi。</p>
 <p>同时运行时注意三点：</p>
 <ul>
@@ -183,8 +188,8 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "用 Write 工具把 hello 写到 /tmp/outside.txt"
 <span class="dim">[main]</span> prompt 用 Write 工具把 hello 写到 /tmp/outside.txt
 <span class="dim">[main]</span> tool Write: /tmp/outside.txt <span class="warn">(denied)</span>
-<span class="dim">[main]</span> text 没写成。Write 工具往 `/tmp/outside.txt` 写入时被拒绝了。当前是 don't ask 模式，这个路径在工作目录 `/tmp/demo` 之外，没有放行规则。
-<span class="dim">[end]</span> finished 7.7s  in 32.7k  out 0.3k  cached 85%</div>
+<span class="dim">[main]</span> text 我没能写入 `/tmp/outside.txt`。Write 工具的调用被拒绝了,原因是当前会话处于 "don't ask" 模式,不允许写工作目录之外的路径。
+<span class="dim">[end]</span> finished 8.9s  in 35.3k  out 0.4k  cached 83%  $0.0263</div>
 <p>三种情况下这些限制会变化：</p>
 <ul>
   <li><code>--sandbox relax</code>：沙箱能启动就用，启动不了就不用沙箱照常运行。</li>

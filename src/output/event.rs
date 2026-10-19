@@ -373,6 +373,7 @@ mod tests {
             output_tokens: Some(2),
             cache_read_tokens: Some(3),
             cache_write_tokens: None,
+            cost_usd: Some(0.25),
         };
         let event = at(Body::Usage(UsageReport {
             parent: None,
@@ -382,7 +383,7 @@ mod tests {
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"usage","time":"2026-10-04T13:00:00.000Z","parent":null,"model":"m","input_tokens":1,"output_tokens":2,"cache_read_tokens":3,"cache_write_tokens":null,"context_tokens":null}"#
+            r#"{"schema":1,"type":"usage","time":"2026-10-04T13:00:00.000Z","parent":null,"model":"m","input_tokens":1,"output_tokens":2,"cache_read_tokens":3,"cache_write_tokens":null,"cost_usd":0.25,"context_tokens":null}"#
         );
     }
 
@@ -408,7 +409,7 @@ mod tests {
         }));
         assert_eq!(
             end.to_json(),
-            r#"{"schema":1,"type":"subagent_end","time":"2026-10-04T13:00:00.000Z","id":"t1","status":"failed","duration_ms":5,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}}}"#
+            r#"{"schema":1,"type":"subagent_end","time":"2026-10-04T13:00:00.000Z","id":"t1","status":"failed","duration_ms":5,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}}}"#
         );
     }
 
@@ -466,7 +467,7 @@ mod tests {
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"end","time":"2026-10-04T13:00:00.000Z","status":"rejected","exit_code":null,"detail":"bad","duration_ms":3,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}"#
+            r#"{"schema":1,"type":"end","time":"2026-10-04T13:00:00.000Z","status":"rejected","exit_code":null,"detail":"bad","duration_ms":3,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}},"result":null}"#
         );
     }
 }
