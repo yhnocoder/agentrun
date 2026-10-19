@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 use crate::cli::{
     Cli, ConnectArgs, DoctorArgs, Format, MISSING_COMMAND, Parsed, RunArgs, Runtime,
-    default_format, prescan_format, usage_error_detail,
+    default_format, option_after_prompt, prescan_format, usage_error_detail,
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
@@ -176,6 +176,9 @@ fn parse_command(caller: &Caller) -> Command {
         caller.signals.finishing();
         caller.print_error_line(Cli::command().render_help().to_string().trim_end());
         return Command::Exit(EndStatus::Rejected.exit_code());
+    }
+    if let Some(detail) = option_after_prompt(&caller.args) {
+        return Command::UsageError(detail);
     }
     let cli = match Cli::try_parse_from(&caller.args) {
         Ok(cli) => cli,
@@ -379,7 +382,7 @@ fn resolve_cwd(cwd: Option<&Path>) -> Result<PathBuf, String> {
             cwd.display()
         ));
     }
-    std::path::absolute(&cwd).map_err(|error| format!("--cwd {}: {error}", cwd.display()))
+    std::fs::canonicalize(&cwd).map_err(|error| format!("--cwd {}: {error}", cwd.display()))
 }
 
 fn resolve_session_dir(
