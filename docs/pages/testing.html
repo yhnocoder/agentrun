@@ -103,7 +103,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
 <p>新增或更新样本前检查 <code>raw.jsonl</code> 与 <code>meta.json</code> 里没有令牌、API key 与用户目录的路径，仓库是公开的。</p>
 
 <h2 id="accept">验收脚本</h2>
-<p><code>scripts/accept/accept.sh</code> 用真实的运行时与登录把 agentrun 跑一遍，按退出码、事件流与工作目录里的文件判定每个场景，输出一张总表。它是「Validate」步骤的工具，不在 <code>scripts/test.sh</code> 里运行，理由：需要三个运行时的账号，并且要消耗模型调用。</p>
+<p><code>scripts/accept/accept.sh</code> 用真实的运行时与登录把 agentrun 跑一遍，按退出码、事件流与工作目录里的文件判定每个场景，输出一张总表。它覆盖 claude-code、codex 与 pi，不覆盖 dsh。它是「Validate」步骤的工具，不在 <code>scripts/test.sh</code> 里运行，理由：需要这三个运行时的账号，并且要消耗模型调用。</p>
 <pre><code class="language-bash">scripts/accept/accept.sh [--agentrun PATH] [--runtimes claude-code,pi,codex] [--sandbox on|relax|off]
                          [--label NAME] [--out DIR] [--only NAME,...] [--parallel N]
                          [--claude-model ID] [--pi-model ID]</code></pre>
@@ -194,7 +194,7 @@ shellcheck scripts/accept/accept.sh scripts/accept/lib/*.sh   # 没装 shellchec
   </tbody>
 </table>
 <p>Linux runner 上关闭 AppArmor 对用户命名空间的限制，理由：Ubuntu 24.04 默认禁止非特权进程创建用户命名空间，<code>bwrap</code> 启动失败，需要沙箱的测试都会跳过。<code>cargo publish --dry-run</code> 在 PR 上构建 crates.io 的包，理由：<code>Cargo.toml</code> 的 <code>include</code> 只列构建需要的文件，漏掉文件时 crates.io 上的包会构建失败。</p>
-<p>CI 不运行真实的 claude-code、codex 与 pi，也不调用模型，<code>scripts/test.sh</code> 只用假运行时与回放样本。工具链用 <code>rustup</code> 直接安装，不用第三方的工具链 action，也不加缓存。</p>
+<p>CI 不运行真实的 claude-code、codex、pi 与 dsh，也不调用模型，<code>scripts/test.sh</code> 只用假运行时与回放样本。工具链用 <code>rustup</code> 直接安装，不用第三方的工具链 action，也不加缓存。</p>
 
 <h2 id="release">发布</h2>
 <p><code>.github/workflows/release.yml</code> 在三种情况下运行：推送 <code>v*</code> tag；PR 改动 <code>release.yml</code>、<code>about.toml</code>、<code>about.hbs</code>、<code>Cargo.toml</code> 或 <code>Cargo.lock</code>；在 Actions 页面手动运行。它有三个任务。</p>

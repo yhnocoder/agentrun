@@ -164,6 +164,7 @@ agentrun variables: (none)</div>
 <ul>
   <li>claude-code 的新会话写在用户的配置目录里，运行结束后才移走。理由：claude-code 不能把新会话直接写到别的位置（<code>--resume</code> 指向空文件、不存在的文件或只有元数据行没有对话的文件时都报 <code>No conversation found</code>，2.1.303 实测）；改 <code>CLAUDE_CONFIG_DIR</code> 会改变 claude-code 读登录信息的位置：Linux 上登录文件在配置目录里，macOS 上钥匙串里的登录条目名随配置目录改变（未实测）。代价是运行期间这份记录出现在用户自己的 <code>claude --resume</code> 列表里，agentrun 被 SIGKILL 时它留在那里。</li>
   <li>pi 与 dsh 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。前提是 <code>DIR</code> 在工作目录与会话临时目录之外。理由：pi 与 dsh 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
+  <li>复制会话目录时只复制普通文件与目录，跳过符号链接和其他类型的条目；dsh 的 <code>session-&lt;id&gt;/</code> 与它所在的 <code>&lt;由 cwd 转换的目录名&gt;/</code> 是符号链接时不保存，<code>DIR/dsh/session-&lt;id&gt;</code> 是符号链接时 <code>--resume</code> 报找不到会话。理由：dsh 的记录目录在沙箱里可写，agent 能在里面放指向沙箱外文件的链接，agentrun 在沙箱外复制时如果跟随链接，就会把 agent 读不到的文件复制进会话记录，下一次运行时 agent 就能读到。</li>
 </ul>
 
 <h2 id="doctor_check">doctor 检查</h2>

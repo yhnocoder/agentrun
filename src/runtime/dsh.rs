@@ -302,8 +302,9 @@ impl Adapter for Dsh {
         let dir = std::fs::read_dir(self.home.join(SESSIONS_SUBDIR))
             .ok()?
             .flatten()
+            .filter(|project| project.file_type().is_ok_and(|kind| kind.is_dir()))
             .map(|project| project.path().join(&name))
-            .find(|dir| dir.is_dir())?;
+            .find(|dir| is_real_dir(dir))?;
         Some(Transcript {
             id,
             entries: vec![dir],
@@ -314,7 +315,11 @@ impl Adapter for Dsh {
 
 pub(crate) fn saved_session(store: &Path, id: &str) -> Option<PathBuf> {
     let dir = store.join(format!("{SESSION_PREFIX}{id}"));
-    dir.is_dir().then_some(dir)
+    is_real_dir(&dir).then_some(dir)
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
 fn check_key(session: &Session) -> Result<(), String> {
@@ -1117,5 +1122,28 @@ mod tests {
             saved_session(store, "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"),
             None
         );
+        let linked = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
+        std::os::unix::fs::symlink(&dir, store.join(format!("session-{linked}"))).unwrap();
+        assert_eq!(saved_session(store, linked), None);
+    }
+
+    #[test]
+    fn transcript_ignores_symbolic_links_in_the_sessions_directory() {
+        let setup = Setup::new();
+        let (mut saving, _) = launch(&setup, &["--session-dir", "store"]);
+        saving.translate(&json!({"type": "session", "sessionId": format!("session-{SAVED_ID}")}));
+        let sessions = setup.tempdir().join(HOME_SUBDIR).join(SESSIONS_SUBDIR);
+        let outside = setup.root.path().join("outside");
+        std::fs::create_dir_all(outside.join(format!("session-{SAVED_ID}"))).unwrap();
+        std::fs::create_dir_all(sessions.join("--linked-session--")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.join(format!("session-{SAVED_ID}")),
+            sessions
+                .join("--linked-session--")
+                .join(format!("session-{SAVED_ID}")),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, sessions.join("--linked-project--")).unwrap();
+        assert_eq!(saving.transcript(), None);
     }
 }

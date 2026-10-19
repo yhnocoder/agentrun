@@ -187,8 +187,12 @@ fn move_entry(source: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
-    if !std::fs::symlink_metadata(source)?.is_dir() {
+    let kind = std::fs::symlink_metadata(source)?.file_type();
+    if kind.is_file() {
         return std::fs::copy(source, target).map(|_| ());
+    }
+    if !kind.is_dir() {
+        return Ok(());
     }
     DirBuilder::new().mode(0o700).create(target)?;
     for entry in std::fs::read_dir(source)? {
@@ -347,6 +351,31 @@ mod tests {
         copy_tree(&file, &root.path().join("g.jsonl")).unwrap();
         remove_tree(&file).unwrap();
         assert!(!file.exists() && root.path().join("g.jsonl").is_file());
+    }
+
+    #[test]
+    fn copy_tree_skips_symbolic_links() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = root.path().join("secret");
+        touch(&secret.join("key"));
+        let source = root.path().join("session");
+        touch(&source.join("log.jsonl"));
+        std::os::unix::fs::symlink(secret.join("key"), source.join("file-link")).unwrap();
+        std::os::unix::fs::symlink(&secret, source.join("dir-link")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("missing"), source.join("dangling")).unwrap();
+        let copy = root.path().join("copy");
+        copy_tree(&source, &copy).unwrap();
+        assert!(copy.join("log.jsonl").is_file());
+        for name in ["file-link", "dir-link", "dangling"] {
+            assert!(
+                std::fs::symlink_metadata(copy.join(name)).is_err(),
+                "{name}"
+            );
+        }
+        let linked = root.path().join("linked");
+        std::os::unix::fs::symlink(&source, &linked).unwrap();
+        copy_tree(&linked, &root.path().join("copy2")).unwrap();
+        assert!(!root.path().join("copy2").exists());
     }
 
     #[test]
