@@ -155,7 +155,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <ul>
   <li>不存在的路径在 bwrap、Seatbelt 与 codex 里跳过：bwrap 不能在只读的根目录上新建挂载点，而沙箱里的 agent 只能在可写目录里新建文件。claude-code 的规则按路径匹配，不存在的路径也写。</li>
   <li>claude-code 同时写权限规则与 <code>denyRead</code>。只写权限规则时，claude-code 会把 Read 的拒绝规则并入沙箱（claude 2.1.303 云端实测），显式写 <code>denyRead</code> 不依赖这项内部行为；Read、Grep、Glob 在 claude 进程里执行，只能靠权限规则。</li>
-  <li>Read 被规则拒绝时 claude-code 只返回工具错误，不输出 <code>permission_denied</code>，所以 <code>tool</code> 事件的 <code>denied</code> 为 <code>false</code>；Grep、Glob 被拒绝时为 <code>true</code>。</li>
+  <li>Read 被规则拒绝时 claude-code 不输出 <code>permission_denied</code>，只返回工具错误 <code>File is in a directory that is denied by your permission settings.</code>；适配器按这段文字把它标为 <code>denied</code>，与 Grep、Glob 一致，见<a href="run.html#claude-code">claude-code 的输出映射</a>。</li>
   <li>doctor 的沙箱与网络检查带上默认列表，检查的就是实际运行时的挂载与配置。沙箱检查另外把检查目录里的一个文件加进列表，确认沙箱里读不到它。</li>
 </ul>
 

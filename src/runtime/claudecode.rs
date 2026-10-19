@@ -36,6 +36,7 @@ const SYNTHETIC_MODEL: &str = "<synthetic>";
 const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
 const RANDOM_SOURCE: &str = "/dev/urandom";
+const SETTINGS_DENIAL: &str = "denied by your permission settings";
 
 #[derive(Default)]
 pub struct ClaudeCode {
@@ -244,7 +245,7 @@ impl ClaudeCode {
                 records.extend(self.flush_usages());
                 records.push(Record::SubagentEnd { id, status });
             } else {
-                let denied = self.denied.contains(&id);
+                let denied = self.denied.contains(&id) || denied_by_settings(block);
                 records.push(Record::ToolEnd { id, denied });
             }
         }
@@ -490,6 +491,11 @@ pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
         .map(|dir| dir.join(HISTORY_DIR))
         .into_iter()
         .collect()
+}
+
+fn denied_by_settings(block: &Value) -> bool {
+    block["is_error"] == Value::Bool(true)
+        && joined_text(&block["content"]).contains(SETTINGS_DENIAL)
 }
 
 fn denied_paths(denied_reads: &[PathBuf]) -> Vec<String> {
@@ -1231,6 +1237,15 @@ mod tests {
             vec![Record::ToolEnd {
                 id: "t2".to_string(),
                 denied: false
+            }]
+        );
+        let read_denied = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3", "is_error": true,
+            "content": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"}]}});
+        assert_eq!(
+            adapter.translate(&read_denied),
+            vec![Record::ToolEnd {
+                id: "t3".to_string(),
+                denied: true
             }]
         );
         let handback = assistant(
