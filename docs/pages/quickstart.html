@@ -130,6 +130,7 @@ rejected: claude not found in PATH</div>
     <tr><td>1</td><td>agent 没有完成，例如模型调用失败</td><td>看 <code>detail</code>，按需重试</td></tr>
     <tr><td>2</td><td>启动前就失败，环境或命令有问题</td><td>先改环境或命令，原样重试不会成功</td></tr>
     <tr><td>3</td><td>超过 <code>--timeout</code></td><td>放宽时限或拆小任务</td></tr>
+    <tr><td>4</td><td>超过 <code>--max-turns</code> 或 <code>--max-tokens</code></td><td>放宽上限或拆小任务</td></tr>
     <tr><td>130、143</td><td>agentrun 被 Ctrl-C 或 SIGTERM 中断</td><td>agent 已经停止，<code>result</code> 是中断前收到的内容</td></tr>
   </tbody>
 </table>

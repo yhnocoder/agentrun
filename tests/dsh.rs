@@ -240,11 +240,11 @@ fn dry_run_prints_the_command_and_the_removed_dsh_variables() {
 }
 
 #[test]
-fn missing_key_images_and_max_turns_are_rejected_before_dsh_starts() {
+fn missing_key_and_images_are_rejected_before_dsh_starts() {
     let env = Env::with("dsh", "#!/bin/sh\ntouch \"$PWD/started\"\n");
     let image = env.work().join("a.png");
     std::fs::write(&image, b"\x89PNG").unwrap();
-    let cases: [(&[&str], bool, &str); 3] = [
+    let cases: [(&[&str], bool, &str); 2] = [
         (
             &["--prompt", "hi"],
             false,
@@ -254,11 +254,6 @@ fn missing_key_images_and_max_turns_are_rejected_before_dsh_starts() {
             &["--image", image.to_str().unwrap(), "--prompt", "hi"],
             true,
             "--image is not supported by dsh: its headless mode takes text only",
-        ),
-        (
-            &["--max-turns", "3", "--prompt", "hi"],
-            true,
-            "--max-turns is only supported by claude-code",
         ),
     ];
     for (args, key, detail) in cases {
@@ -295,6 +290,42 @@ fn turn_end_error_is_the_failure_detail() {
     assert_eq!(end["exit_code"], 1);
     assert_eq!(end["detail"], "MISSING_CREDENTIAL: missing key");
     assert_eq!(end["result"], Value::Null);
+}
+
+const LIMITED_DSH: &str = r#"#!/bin/sh
+trap 'exit 0' TERM
+cat > /dev/null
+echo '{"type":"session","sessionId":"session-1","cwd":"/w"}'
+echo '{"type":"status","phase":"turn_start","turn":1}'
+echo '{"type":"status","phase":"step_start","turn":1,"step":1}'
+echo '{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":1,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"totalTokens":10}}'
+echo '{"type":"status","phase":"step_start","turn":1,"step":2}'
+sleep 30 &
+wait
+"#;
+
+#[test]
+fn limits_stop_dsh_and_the_result_is_limit() {
+    let env = Env::with("dsh", LIMITED_DSH);
+    let cases: [(&[&str], &str); 2] = [
+        (
+            &["--max-turns", "1"],
+            "--max-turns 1 reached: the main agent started turn 2",
+        ),
+        (&["--max-tokens", "9"], "--max-tokens 9 exceeded: 10 tokens"),
+    ];
+    for (limit, detail) in cases {
+        let output = run(
+            &env,
+            &[&["--sandbox", "off", "--prompt", "hi"], limit].concat(),
+        );
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let end = support::events(&output).pop().unwrap();
+        assert_eq!(end["status"], "limit");
+        assert_eq!(end["exit_code"], 0);
+        assert_eq!(end["detail"], detail);
+    }
+    assert!(env.leftovers().is_empty());
 }
 
 const SESSION_DSH: &str = r#"#!/bin/sh

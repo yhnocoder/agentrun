@@ -703,7 +703,7 @@ interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; 
     <tr><td>SIGINT</td><td>130</td><td>流停在当前位置，没有收尾事件。样本中一次停在 <code>tool_execution_start</code> 之后，一次停在 <code>turn_start</code> 之后。标准错误为空</td></tr>
   </tbody>
 </table>
-<p>判定规则：退出码非 0 一定失败；退出码为 0 时，找到最后一个 role 为 <code>assistant</code> 的 <code>message_end</code>，<code>stopReason</code> 为 <code>stop</code> 或 <code>length</code> 算成功，<code>error</code> 或 <code>aborted</code> 算失败；没有 <code>agent_settled</code> 时按被中断处理。<code>docs/cli-integration.md</code> 说明 JSON 模式下失败或中止的 assistant 响应本身不产生非 0 退出码，只有进程抛出异常时才非 0；print 模式（<code>-p</code> 不加 <code>--mode json</code>）则相反，<code>error</code> 或 <code>aborted</code> 会产生非 0 退出码。SIGTERM 未实测。</p>
+<p>判定规则：退出码非 0 一定失败；退出码为 0 时，找到最后一个 role 为 <code>assistant</code> 的 <code>message_end</code>，<code>stopReason</code> 为 <code>stop</code> 或 <code>length</code> 算成功，<code>error</code> 或 <code>aborted</code> 算失败；没有 <code>agent_settled</code> 时按被中断处理。<code>docs/cli-integration.md</code> 说明 JSON 模式下失败或中止的 assistant 响应本身不产生非 0 退出码，只有进程抛出异常时才非 0；print 模式（<code>-p</code> 不加 <code>--mode json</code>）则相反，<code>error</code> 或 <code>aborted</code> 会产生非 0 退出码。收到 SIGTERM 时 pi 以 143 退出，最后一个 assistant 的 <code>message_start</code> 之后没有 <code>message_end</code> 与 <code>agent_end</code>；pi 1.2.0 在 Linux 上用 bwrap 包裹与不包裹相同，pi 1.0.2 在 macOS 上用 Seatbelt 包裹与不包裹相同。</p>
 <pre><code class="language-json">{
   "type": "message_end",
   "message": {
@@ -728,7 +728,7 @@ interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; 
 
 <h2>样本范围</h2>
 <ul>
-  <li>本文的 1.0.1 样本只覆盖 deepseek provider 与 <code>read</code>、<code>bash</code>、<code>write</code> 三个工具的执行；<code>edit</code>、<code>grep</code>、<code>find</code>、<code>ls</code> 的 <code>result.details</code> 形状、其他 provider 的 <code>api</code> 与签名字段、tool 结果里的图片内容块、<code>length</code>、<code>aborted</code>、<code>deferred</code> 三种 <code>stopReason</code>、压缩与扩展相关事件、SIGTERM 的行为均未实测。</li>
+  <li>本文的 1.0.1 样本只覆盖 deepseek provider 与 <code>read</code>、<code>bash</code>、<code>write</code> 三个工具的执行；<code>edit</code>、<code>grep</code>、<code>find</code>、<code>ls</code> 的 <code>result.details</code> 形状、其他 provider 的 <code>api</code> 与签名字段、tool 结果里的图片内容块、<code>length</code>、<code>aborted</code>、<code>deferred</code> 三种 <code>stopReason</code>、压缩与扩展相关事件均未实测。</li>
   <li>pi 在 <code>--mode json</code> 下的输出同时也是 RPC 模式的事件格式（RPC 没有 <code>session</code> 头，另有 <code>bash_execution_update</code> 与 <code>extension_error</code>），以及 SDK 的 <code>AgentSessionEvent</code> 去掉累计快照后的形状。TypeScript 类型 <code>JsonAgentSessionEvent</code> 由 <code>@earendil-works/pi-coding-agent</code> 导出。</li>
 </ul>
 </main>

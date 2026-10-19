@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, reject_max_turns};
+use super::{Adapter, Failure, Invocation, Launch, Version, detail_head};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, optional_string, string};
 use crate::network::proxy_environment;
@@ -102,6 +102,7 @@ impl Dsh {
 
     fn status(&mut self, line: &Value) -> Vec<Record> {
         match line["phase"].as_str() {
+            Some("step_start") => vec![Record::CallStart { parent: None }],
             Some("step_end") if line["usage"].is_object() => vec![Record::Usage {
                 parent: None,
                 model: self.model.clone(),
@@ -122,7 +123,6 @@ impl Adapter for Dsh {
     }
 
     fn check_args(&self, args: &RunArgs) -> Result<(), String> {
-        reject_max_turns(args)?;
         if !args.image.is_empty() {
             return Err(NO_IMAGES.to_string());
         }
@@ -679,12 +679,11 @@ mod tests {
     }
 
     #[test]
-    fn check_args_rejects_max_turns_and_images() {
+    fn check_args_accepts_limits_and_rejects_images() {
         let (_, args) = parse_run(&["agentrun", "dsh", "--max-turns", "2"]);
-        assert_eq!(
-            Dsh::new().check_args(&args),
-            Err("--max-turns is only supported by claude-code".to_string())
-        );
+        assert_eq!(Dsh::new().check_args(&args), Ok(()));
+        let (_, args) = parse_run(&["agentrun", "dsh", "--max-tokens", "1000"]);
+        assert_eq!(Dsh::new().check_args(&args), Ok(()));
         let (_, args) = parse_run(&["agentrun", "dsh", "--image", "a.png"]);
         assert_eq!(Dsh::new().check_args(&args), Err(NO_IMAGES.to_string()));
         let (_, args) = parse_run(&["agentrun", "dsh", "--no-subagents"]);
@@ -861,6 +860,13 @@ mod tests {
                 }]
             );
         }
+        assert_eq!(
+            translate(
+                &mut adapter,
+                json!({"type": "status", "phase": "step_start", "turn": 1, "step": 1})
+            ),
+            vec![Record::CallStart { parent: None }]
+        );
         assert_eq!(
             translate(
                 &mut adapter,
