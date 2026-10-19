@@ -45,7 +45,6 @@ impl Adapter for FakeAdapter {
         }
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(invocation.args.runtime_args.iter().cloned());
-        argv.push(invocation.prompt.clone());
         let wrapped = sandbox::wrap(
             &invocation.sandbox,
             &invocation.cwd,
@@ -176,5 +175,6 @@ fn counts(line: &Value) -> TokenCounts {
         output_tokens: line["output_tokens"].as_u64(),
         cache_read_tokens: line["cache_read_tokens"].as_u64(),
         cache_write_tokens: line["cache_write_tokens"].as_u64(),
+        cost_usd: line["cost_usd"].as_f64(),
     }
 }

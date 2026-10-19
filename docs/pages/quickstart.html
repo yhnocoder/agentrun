@@ -80,17 +80,17 @@ printf 'def greet(name):\n    return "hello " + name\n' &gt; greet.py</code></pr
 <p>让 claude-code 给它写测试：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 greet.py 写一个测试并运行"
 <span class="dim">[main]</span> prompt 给 greet.py 写一个测试并运行
+<span class="dim">[main]</span> tool Glob: **/greet*.py
 <span class="dim">[main]</span> tool Read: greet.py
-<span class="dim">[main]</span> tool Glob: **/*test*.py
 <span class="dim">[main]</span> tool Write: test_greet.py
 <span class="dim">[main]</span> tool Bash: python3 -m unittest -v test_greet
-<span class="dim">[main]</span> text 我写了 `/tmp/hello/test_greet.py`，用的是 `unittest`，运行后 3 个测试全部通过。
-<span class="dim">[end]</span> finished 9.9s  in 67.4k  out 0.7k  cached 82%</div>
+<span class="dim">[main]</span> text 我给 `greet.py` 写了测试,放在 `test_greet.py` 里,运行后 2 个测试全部通过。
+<span class="dim">[end]</span> finished 13.4s  in 69.9k  out 0.7k  cached 91%  $0.0330</div>
 <p>怎么读这段输出：</p>
 <ul>
   <li>每行开头的 <code>[main]</code> 表示这一行来自主 agent。agent 启动 subagent 时，subagent 的行以它自己的标签开头，例如 <code>[explore#1]</code>。</li>
   <li><code>tool</code> 行是一次完成的工具调用，<code>text</code> 行是 agent 说的话。</li>
-  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出，以及输入中命中缓存的比例。</li>
+  <li>最后的 <code>[end]</code> 行是结果：<code>finished</code> 表示正常完成，后面是耗时、送进模型的输入、模型的输出、输入中命中缓存的比例，最后是运行时报告的费用，单位美元。运行时不报告费用时（例如 codex）不显示费用。</li>
 </ul>
 <p>这次运行发生在沙箱里：agent 只能写 <code>hello</code> 目录和一个临时目录，它运行的命令不能联网，它也读不到你自己的运行时配置、插件和会话记录。</p>
 <p>不加 <code>--format text</code> 时，终端里显示的是动态界面：上方滚动显示同样的行，下方显示正在运行的 subagent 和主 agent 的状态。</p>

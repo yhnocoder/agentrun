@@ -57,6 +57,7 @@ fn format_time(time: SystemTime) -> String {
 pub enum Body {
     Start(Start),
     Prompt(Prompt),
+    ToolStart(ToolStart),
     Tool(Tool),
     Text(Text),
     Usage(UsageReport),
@@ -71,6 +72,7 @@ impl Body {
         match self {
             Body::Start(_) => "start",
             Body::Prompt(_) => "prompt",
+            Body::ToolStart(_) => "tool_start",
             Body::Tool(_) => "tool",
             Body::Text(_) => "text",
             Body::Usage(_) => "usage",
@@ -113,6 +115,14 @@ pub struct NetworkInfo {
 pub struct Prompt {
     pub text: String,
     pub images: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ToolStart {
+    pub id: String,
+    pub parent: Option<String>,
+    pub name: String,
+    pub summary: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -355,6 +365,16 @@ mod tests {
 
     #[test]
     fn tool_fields_in_order() {
+        let start = at(Body::ToolStart(ToolStart {
+            id: "t1".to_string(),
+            parent: Some("s1".to_string()),
+            name: "Bash".to_string(),
+            summary: "Bash: ls".to_string(),
+        }));
+        assert_eq!(
+            start.to_json(),
+            r#"{"schema":1,"type":"tool_start","time":"2026-10-04T13:00:00.000Z","id":"t1","parent":"s1","name":"Bash","summary":"Bash: ls"}"#
+        );
         let event = at(Body::Tool(Tool {
             id: "t1".to_string(),
             parent: None,
@@ -375,6 +395,7 @@ mod tests {
             output_tokens: Some(2),
             cache_read_tokens: Some(3),
             cache_write_tokens: None,
+            cost_usd: Some(0.25),
         };
         let event = at(Body::Usage(UsageReport {
             parent: None,
@@ -384,7 +405,7 @@ mod tests {
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"usage","time":"2026-10-04T13:00:00.000Z","parent":null,"model":"m","input_tokens":1,"output_tokens":2,"cache_read_tokens":3,"cache_write_tokens":null,"context_tokens":null}"#
+            r#"{"schema":1,"type":"usage","time":"2026-10-04T13:00:00.000Z","parent":null,"model":"m","input_tokens":1,"output_tokens":2,"cache_read_tokens":3,"cache_write_tokens":null,"cost_usd":0.25,"context_tokens":null}"#
         );
     }
 
@@ -410,7 +431,7 @@ mod tests {
         }));
         assert_eq!(
             end.to_json(),
-            r#"{"schema":1,"type":"subagent_end","time":"2026-10-04T13:00:00.000Z","id":"t1","status":"failed","duration_ms":5,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}}}"#
+            r#"{"schema":1,"type":"subagent_end","time":"2026-10-04T13:00:00.000Z","id":"t1","status":"failed","duration_ms":5,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}}}"#
         );
     }
 
@@ -468,7 +489,7 @@ mod tests {
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"end","time":"2026-10-04T13:00:00.000Z","status":"rejected","exit_code":null,"detail":"bad","duration_ms":3,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}"#
+            r#"{"schema":1,"type":"end","time":"2026-10-04T13:00:00.000Z","status":"rejected","exit_code":null,"detail":"bad","duration_ms":3,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}},"result":null}"#
         );
     }
 }

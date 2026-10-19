@@ -92,7 +92,7 @@ cat <<'LINES'
 {"type":"assistant","message":{"id":"msg_1","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo hi\necho there"}}],"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}},"parent_tool_use_id":null}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"hi"}]},"parent_tool_use_id":null}
 {"type":"assistant","message":{"id":"msg_2","model":"claude-sonnet-5-5","content":[{"type":"text","text":"hi there"}],"usage":{"input_tokens":5,"output_tokens":6,"cache_read_input_tokens":7,"cache_creation_input_tokens":8}},"parent_tool_use_id":null}
-{"type":"result","subtype":"success","is_error":false,"result":"hi there","modelUsage":{"claude-sonnet-5-5":{"inputTokens":6,"outputTokens":8,"cacheReadInputTokens":10,"cacheCreationInputTokens":12}}}
+{"type":"result","subtype":"success","is_error":false,"result":"hi there","total_cost_usd":0.0125,"modelUsage":{"claude-sonnet-5-5":{"inputTokens":6,"outputTokens":8,"cacheReadInputTokens":10,"cacheCreationInputTokens":12,"costUSD":0.0125}}}
 LINES
 "#;
 
@@ -153,15 +153,16 @@ fn fake_claude_run_without_sandbox() {
         events[1..],
         [
             json!({"schema": 1, "type": "prompt", "text": "say hi", "images": []}),
+            json!({"schema": 1, "type": "tool_start", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi"}),
             json!({"schema": 1, "type": "tool", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi", "denied": false}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "claude-sonnet-5-5", "input_tokens": 1, "output_tokens": 2,
-                "cache_read_tokens": 3, "cache_write_tokens": 4, "context_tokens": 8}),
+                "cache_read_tokens": 3, "cache_write_tokens": 4, "cost_usd": null, "context_tokens": 8}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "hi there"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "claude-sonnet-5-5", "input_tokens": 5, "output_tokens": 6,
-                "cache_read_tokens": 7, "cache_write_tokens": 8, "context_tokens": 20}),
+                "cache_read_tokens": 7, "cache_write_tokens": 8, "cost_usd": null, "context_tokens": 20}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12,
-                    "by_model": {"claude-sonnet-5-5": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12}}},
+                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.0125,
+                    "by_model": {"claude-sonnet-5-5": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.0125}}},
                 "result": "hi there"}),
         ]
     );
@@ -261,7 +262,7 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
     );
     assert!(
         command.contains(&format!(
-            r#"--settings '{{"sandbox":{{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{{"allowWrite":["{work}","<tempdir>"]}},"network":{{"allowedDomains":[]}}}}}}'"#
+            r#"--settings '{{"autoMemoryDirectory":"<tempdir>/claude-memory","sandbox":{{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{{"allowWrite":["{work}","<tempdir>"]}},"network":{{"allowedDomains":[]}}}}}}'"#
         )),
         "{command}"
     );
@@ -286,7 +287,7 @@ fi
 cat <<LINES
 {"type":"system","subtype":"init","tools":["Bash"],"permissionMode":"dontAsk"}
 {"type":"user","isReplay":true,"message":{"role":"user","content":"fetch"},"parent_tool_use_id":null}
-{"type":"assistant","message":{"id":"msg_1","model":"claude-sonnet-5-5","content":[{"type":"text","text":"code=$code socat=${SOCAT_DEFAULT_LISTEN_IP-unset} proxy=${HTTPS_PROXY-unset}"}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"parent_tool_use_id":null}
+{"type":"assistant","message":{"id":"msg_1","model":"claude-sonnet-5-5","content":[{"type":"text","text":"code=$code socat=${SOCAT_DEFAULT_LISTEN_IP-unset} memory=${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset} proxy=${HTTPS_PROXY-unset}"}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},"parent_tool_use_id":null}
 {"type":"result","subtype":"success","is_error":false,"result":"done","modelUsage":{}}
 LINES
 "#;
@@ -335,7 +336,10 @@ fn sandboxed_claude_with_full_network_gets_the_proxy_ports() {
         "{}",
         option_value(&start["argv"], "--allowedTools")
     );
-    assert_eq!(support::text_of(&full, 0), "code=403 socat=4 proxy=unset");
+    assert_eq!(
+        support::text_of(&full, 0),
+        "code=403 socat=4 memory=1 proxy=unset"
+    );
     assert_eq!(
         support::network_events(&full),
         [
@@ -389,7 +393,10 @@ fn sandboxed_claude_with_custom_network_reaches_the_listed_host() {
         "{}",
         option_value(&start["argv"], "--allowedTools")
     );
-    assert_eq!(support::text_of(&custom, 0), "code=200 socat=4 proxy=unset");
+    assert_eq!(
+        support::text_of(&custom, 0),
+        "code=200 socat=4 memory=1 proxy=unset"
+    );
     assert_eq!(
         support::network_events(&custom),
         [
@@ -424,7 +431,7 @@ fn sandboxed_claude_with_network_none_gets_no_proxy() {
     );
     assert_eq!(
         support::text_of(&none, 0),
-        "code=noproxy socat=4 proxy=unset"
+        "code=noproxy socat=4 memory=1 proxy=unset"
     );
     assert!(support::network_events(&none).is_empty());
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
@@ -435,7 +442,16 @@ fn unsandboxed_claude_with_full_network_gets_no_settings() {
     let env = Env::with("claude", CURL_CLAUDE);
     let output = run(
         &env,
-        &["--sandbox", "off", "--network", "full", "--prompt", "fetch"],
+        &[
+            "--sandbox",
+            "off",
+            "--network",
+            "full",
+            "--env",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY=0",
+            "--prompt",
+            "fetch",
+        ],
         "",
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -457,7 +473,7 @@ fn unsandboxed_claude_with_full_network_gets_no_settings() {
     );
     assert_eq!(
         support::text_of(&open, 0),
-        "code=noproxy socat=unset proxy=unset"
+        "code=noproxy socat=unset memory=1 proxy=unset"
     );
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }

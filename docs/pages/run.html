@@ -77,11 +77,11 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--dry-run</code></td><td>完成命令行解析与启动前检查，把将执行的命令、会话 PATH 与变量名打印到标准输出后以 0 退出。不创建临时目录，不写凭据，不输出事件</td><td>不开</td></tr>
   </tbody>
 </table>
-<p>任何输出都只写变量名，不写变量的值，PATH 除外。提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里；<code>--dry-run</code> 与 <code>--debug</code> 把它写成 <code>&lt;prompt N bytes&gt;</code>。</p>
+<p>任何输出都只写变量名，不写变量的值，PATH 除外。三个运行时都从标准输入读提示词，所以提示词不出现在 <code>start</code> 事件的 <code>argv</code> 里，也不出现在 <code>--dry-run</code> 与 <code>--debug</code> 打印的命令里。</p>
 <p>agentrun 自己写出的文字都用英文：<code>detail</code>、标准错误里的说明、text 与 rich 格式里的固定词、<code>[note]</code> 提示与 doctor 的输出。运行时与模型给出的内容（提示词、模型的文字、运行时的错误信息）原样输出。理由：命令行解析使用现成的库，它的错误信息是英文，全部输出用同一种语言。</p>
 <p>启动前检查失败时，写到标准错误的一行是 <code>agentrun: </code> 加 <code>detail</code>。<code>--dry-run</code> 写到标准输出、<code>--debug</code> 写到标准错误，每项一行，格式是 <code>项目名: 值</code>，<code>--debug</code> 的每行前面另加 <code>[debug] </code>。命令的每个参数按 shell 规则加引号。</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --sandbox off --env GH_TOKEN --dry-run --prompt "修复测试"
-command: /usr/local/bin/pi -p --mode json --no-session ... -- '&lt;prompt 12 bytes&gt;'
+command: /usr/local/bin/pi -p --mode json --no-session ... --tools read,bash,edit,write,grep,find,ls
 PATH: /usr/local/bin:/usr/bin:/bin
 set: GH_TOKEN
 removed: (none)
@@ -211,6 +211,7 @@ agentrun variables: (none)</div>
   &lt;-- 之后的调用方参数&gt;</code></pre>
 <ul>
   <li><code>--setting-sources ""</code> 不加载用户、项目与本地设置，工作目录里的 <code>CLAUDE.md</code> 不进入模型上下文（实测）。因此沙箱设置只来自 <code>--settings</code>。</li>
+  <li>会话环境设置 <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>，关闭 auto-memory。理由：<code>--setting-sources ""</code> 不关闭它，claude-code 仍把用户的 <code>~/.claude/projects/&lt;项目&gt;/memory/MEMORY.md</code> 放进模型上下文；设置这个变量后，请求里不再有这个文件的内容与 memory 的说明（claude 2.1.288 与 2.1.303 云端实测）。这个变量在 <code>--env</code> 之后设置，调用方不能用 <code>--env</code> 改回。</li>
   <li><code>--strict-mcp-config</code> 不加载任何 MCP 服务器。</li>
   <li><code>--session-id</code> 每次新生成，与 <code>--no-session-persistence</code> 一起用。理由：在 Claude Code 会话里运行 agentrun 时，<code>claude -p</code> 子进程会继承父会话的 id，把记录写进父会话，只加 <code>--no-session-persistence</code> 不能避免。</li>
   <li><code>--tools</code> 限定可用的内置工具，去掉网页工具与技能等。<code>--allowedTools</code> 放行列出的工具，不经权限判断。Bash 不在放行列表里：沙箱打开时由 <code>autoAllowBashIfSandboxed</code> 自动放行，沙箱没有运行时由 auto 模式逐条判断。只用 <code>--tools</code> 而不放行时，auto 模式会拒绝 Write，且结果仍报告成功（实测）。</li>
@@ -227,6 +228,7 @@ agentrun variables: (none)</div>
 </ul>
 <p>沙箱设置（只在沙箱打开时传）：</p>
 <pre><code class="language-json">{
+  "autoMemoryDirectory": "&lt;会话临时目录&gt;/claude-memory",
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true,
@@ -240,6 +242,7 @@ agentrun variables: (none)</div>
     }
   }
 }</code></pre>
+<p><code>autoMemoryDirectory</code> 把 auto-memory 目录改到会话临时目录里。理由：claude-code 对当前项目 memory 目录里的 <code>.md</code> 文件内置放行 Write 与 Edit，不看 auto-memory 是否关闭，也不受 <code>dontAsk</code> 与放行规则限制；不改目录时，沙箱打开的运行仍能写用户的 <code>MEMORY.md</code>，内容会进入用户之后的 claude 会话。改到会话临时目录后，写用户的 memory 目录被拒绝（claude 2.1.288 与 2.1.303 云端实测）。沙箱没有运行时 Write 本来就能写任何位置，所以只在沙箱设置里改。</p>
 <p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时 <code>network</code> 改为 <code>{"allowedDomains":[],"httpProxyPort":&lt;代理端口&gt;,"socksProxyPort":&lt;代理端口&gt;}</code>，两个端口都是过滤代理的 TCP 端口（过滤代理按第一个字节区分 HTTP 与 SOCKS5）；<code>--dry-run</code> 的命令里端口写成 <code>&lt;proxy port&gt;</code>。</p>
 
 <h3>输出映射</h3>
@@ -250,20 +253,20 @@ agentrun variables: (none)</div>
   </thead>
   <tbody>
     <tr><td><code>system</code>，subtype <code>init</code></td><td><code>permissionMode</code>、<code>model</code>、<code>tools</code></td><td>不输出；用于检查 <code>--no-subagents</code></td></tr>
-    <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略</td></tr>
+    <tr><td><code>assistant</code></td><td><code>message.id</code>、<code>message.model</code>、<code>message.content[]</code>、<code>message.usage</code>、<code>parent_tool_use_id</code></td><td><code>tool_use</code> 块转成 <code>tool_start</code> 并记为未结束的调用（<code>Agent</code> 或 <code>Task</code> 转成 <code>subagent_start</code>）；<code>text</code> 块转成 <code>text</code>；<code>thinking</code> 块忽略</td></tr>
     <tr><td><code>system</code>，subtype <code>permission_denied</code></td><td><code>tool_use_id</code>、<code>tool_name</code>、<code>decision_reason</code></td><td>把对应的调用标为被拒绝；它出现在对应的 tool_result 之前</td></tr>
     <tr><td><code>user</code>，<code>isReplay</code> 为 true</td><td><code>message.content</code></td><td><code>prompt</code>，只取第一条。它在 <code>system/init</code> 之后、第一个 assistant 之前出现，<code>parent_tool_use_id</code> 为 null。之后出现的 <code>isReplay</code> 消息是后台 subagent 交回的结果（内容以 <code>&lt;agent-message</code> 开头），只写入 <code>--raw</code></td></tr>
     <tr><td><code>user</code>，其他</td><td><code>tool_result</code> 块的 <code>tool_use_id</code>、<code>is_error</code></td><td>对应的调用结束，输出 <code>tool</code></td></tr>
     <tr><td><code>system</code>，subtype <code>task_notification</code></td><td><code>tool_use_id</code>、<code>status</code>、<code>usage.duration_ms</code></td><td><code>subagent_end</code>；<code>status</code> 为 <code>completed</code> 时 finished，其他值 failed</td></tr>
-    <tr><td><code>result</code></td><td><code>is_error</code>、<code>subtype</code>、<code>result</code>、<code>modelUsage</code></td><td><code>end</code> 的 <code>result</code>、失败判定与 <code>usage</code></td></tr>
+    <tr><td><code>result</code></td><td><code>is_error</code>、<code>subtype</code>、<code>result</code>、<code>modelUsage</code>、<code>total_cost_usd</code></td><td><code>end</code> 的 <code>result</code>、失败判定与 <code>usage</code></td></tr>
     <tr><td>其他，例如 <code>stream_event</code>、<code>rate_limit_event</code>、<code>system/status</code>、<code>task_started</code>、<code>task_progress</code></td><td></td><td>只写入 <code>--raw</code></td></tr>
   </tbody>
 </table>
 <ul>
   <li><code>parent</code> 取所在 assistant 消息的 <code>parent_tool_use_id</code>；它不是任何 <code>subagent_start</code> 的 id 时按 null 处理。</li>
   <li>subagent：<code>kind</code> 取 input 的 <code>subagent_type</code>，缺省为 <code>general-purpose</code>；<code>model</code> 取 input 的 <code>model</code>；<code>description</code> 取 input 的 <code>description</code> 第一行。subagent 默认在后台运行，启动后立即有一个 <code>status</code> 为 <code>async_launched</code> 的 tool_result，这个结果不输出事件。前台运行的 subagent 没有 <code>task_notification</code>，在收到它的 tool_result 时输出 <code>subagent_end</code>，<code>is_error</code> 为 true 时 failed。subagent 交回结果用的内部工具 <code>SubagentHandback</code> 不输出 <code>tool</code>。</li>
-  <li>usage：claude-code 把一次模型调用拆成多条 assistant 消息（thinking、tool_use、text 各一条），它们的 <code>message.id</code> 相同，每条都带 usage。同一个 id 只输出一个 <code>usage</code>，取最后一条的值，<code>time</code> 取输出时的时间。合并按 <code>parent_tool_use_id</code> 分别进行：主 agent 与每个 subagent 各保存一条待输出的用量，某个 parent 出现新的 <code>message.id</code> 时输出它自己的那条；输出 <code>subagent_end</code> 之前与运行时结束时输出全部待输出的用量。理由：多个 subagent 并行时，它们的 assistant 消息交错出现，只按 id 的先后判断会把一次调用拆成多个 <code>usage</code>。字段：<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_input_tokens</code>、<code>cache_creation_input_tokens</code>。model 为 <code>&lt;synthetic&gt;</code> 的消息不输出 <code>usage</code>，它的文字照常输出。</li>
-  <li>一次运行可能有多个 result：subagent 在后台运行时，主 agent 每收到一个 subagent 的结果就多一轮，每轮一个 result，<code>modelUsage</code> 是到当时为止的累计值。所有用到 result 的地方都取运行时退出前的最后一个。<code>end.usage</code> 由它的 <code>modelUsage</code> 按模型换算。</li>
+  <li>usage：claude-code 把一次模型调用拆成多条 assistant 消息（thinking、tool_use、text 各一条），它们的 <code>message.id</code> 相同，每条都带 usage。同一个 id 只输出一个 <code>usage</code>，取最后一条的值，<code>time</code> 取输出时的时间。合并按 <code>parent_tool_use_id</code> 分别进行：主 agent 与每个 subagent 各保存一条待输出的用量，某个 parent 出现新的 <code>message.id</code> 时输出它自己的那条；输出 <code>subagent_end</code> 之前与运行时结束时输出全部待输出的用量。理由：多个 subagent 并行时，它们的 assistant 消息交错出现，只按 id 的先后判断会把一次调用拆成多个 <code>usage</code>。字段：<code>input_tokens</code>、<code>output_tokens</code>、<code>cache_read_input_tokens</code>、<code>cache_creation_input_tokens</code>；这里没有费用，<code>cost_usd</code> 为 null。model 为 <code>&lt;synthetic&gt;</code> 的消息不输出 <code>usage</code>，它的文字照常输出。</li>
+  <li>一次运行可能有多个 result：subagent 在后台运行时，主 agent 每收到一个 subagent 的结果就多一轮，每轮一个 result，<code>modelUsage</code> 是到当时为止的累计值。所有用到 result 的地方都取运行时退出前的最后一个。<code>end.usage</code> 由它的 <code>modelUsage</code> 按模型换算，<code>costUSD</code> 对应各模型的 <code>cost_usd</code>，总量的 <code>cost_usd</code> 取 <code>total_cost_usd</code>。</li>
 </ul>
 <table>
   <thead>
@@ -295,11 +298,11 @@ agentrun variables: (none)</div>
   --no-approve --offline
   --tools read,bash,edit,write,grep,find,ls
   [--model 服务商/模型] [--thinking LEVEL]
-  &lt;-- 之后的调用方参数&gt; -- [@&lt;图片副本&gt;...] &lt;提示词&gt;</code></pre>
+  &lt;-- 之后的调用方参数&gt; [-- @&lt;图片副本&gt;...]</code></pre>
 <ul>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
-  <li>提示词是命令行的最后一个参数，放在 <code>--</code> 之后、调用方参数之后，所以调用方的参数不会被当成提示词。标准输入启动后立即关闭。</li>
-  <li>给了 <code>--image</code> 时，每个图片副本写成 <code>@&lt;路径&gt;</code>，放在 <code>--</code> 与提示词之间。pi 按文件内容识别出图片，把它作为图片元素放进用户消息，在消息文字前面为每个文件加一段 <code>&lt;file name="&lt;路径&gt;"&gt;&lt;/file&gt;</code>，按模型的限制缩小图片时还在提示词后面追加一行尺寸说明（pi 1.2.0 实测，48 MB、4000×4000 像素的 PNG 被缩小到 2000×2000）。</li>
+  <li>提示词原文写入标准输入后关闭，不放在命令行里。理由：pi 把以 <code>@</code> 开头的位置参数当成文件路径，写在 <code>--</code> 之后也一样，文件不存在时报 <code>File not found</code> 退出，文件存在时把文件内容当成提示词。pi 去掉标准输入内容首尾的空白（pi 1.0.1 与 1.2.0 相同），所以模型收到的提示词与 <code>prompt</code> 事件都没有首尾的空白与空行，中间的换行与缩进不变；claude-code 与 codex 收到的是原文。调用方参数里的位置参数由 pi 当成消息：第一个直接接在提示词后面，中间不加分隔，之后的每个各算一轮新的消息，以 <code>@</code> 开头的被当成文件。所以调用方参数里只写选项。</li>
+  <li>给了 <code>--image</code> 时，命令最后加上 <code>--</code> 与每个图片副本的 <code>@&lt;路径&gt;</code>。pi 按文件内容识别出图片，把它作为图片元素放进用户消息，并在提示词之后为每个文件加一段 <code>&lt;file name="&lt;路径&gt;"&gt;&lt;/file&gt;</code>；按模型的限制缩小图片时，还在最后追加一行尺寸说明（pi 1.2.0 实测，48 MB、4000×4000 像素的 PNG 被缩小到 2000×2000）。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
   <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>。Linux：
 <pre><code class="language-bash">bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt;
@@ -320,15 +323,16 @@ agentrun variables: (none)</div>
 <p>没给 <code>--model</code> 时不传，pi 用它 <code>settings.json</code> 里的默认模型。设置里的模型不存在、或者没有设置文件时，pi 同样会不提示地改用环境里其他可用的服务商。这种情况由 doctor 的登录检查发现：它报告 pi 实际选中的服务商与模型，与设置不一致时失败。</p>
 
 <h3>输出映射</h3>
-<p><code>--mode json</code> 每行一个事件，只用以下三种，其余（<code>session</code>、<code>message_update</code>、<code>turn_end</code>、<code>agent_end</code> 等）只写入 <code>--raw</code>。不用 <code>turn_end</code> 与 <code>agent_end</code>，因为它们重复 <code>message_end</code> 的内容，会重复计算用量。</p>
+<p><code>--mode json</code> 每行一个事件，只用以下几种，其余（<code>session</code>、<code>message_update</code>、<code>turn_end</code>、<code>agent_end</code> 等）只写入 <code>--raw</code>。不用 <code>turn_end</code> 与 <code>agent_end</code>，因为它们重复 <code>message_end</code> 的内容，会重复计算用量。</p>
 <table>
   <thead>
     <tr><th>原始事件</th><th>转成</th></tr>
   </thead>
   <tbody>
+    <tr><td><code>tool_execution_start</code></td><td><code>tool_start</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，summary 由 <code>args</code> 计算</td></tr>
     <tr><td><code>tool_execution_end</code></td><td><code>tool</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，<code>denied</code> 为 false（<code>isError</code> 表示执行出错，不是拒绝）。<code>args</code> 不在这个事件里，从对应的 <code>tool_execution_start</code> 取。同一条消息里的多个调用并行执行，结束顺序可能与开始顺序不同</td></tr>
-    <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测）；<code>reasoning</code> 与 <code>cost</code> 不进统一事件</td></tr>
-    <tr><td>user 的 <code>message_end</code></td><td><code>prompt</code>：全部 text 元素按顺序用换行连接。给了 <code>--image</code> 时，文字里含有 pi 加的文件段与尺寸说明，只要其中包含提示词原文，就取提示词原文</td></tr>
+    <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测），<code>cost.total</code> 对应 <code>cost_usd</code>；<code>reasoning</code> 与 <code>cost</code> 的其他分项不进统一事件</td></tr>
+    <tr><td>user 的 <code>message_end</code></td><td><code>prompt</code>：全部 text 元素按顺序用换行连接。给了 <code>--image</code> 时，文字以去掉首尾空白的提示词开头、后面是 pi 加的文件段与尺寸说明，这时只取去掉首尾空白的提示词；开头不是它时原样输出</td></tr>
     <tr><td>第一个 assistant 的 <code>message_start</code></td><td>不输出；用于模型检查</td></tr>
   </tbody>
 </table>
@@ -405,18 +409,19 @@ agentrun variables: (none)</div>
   </thead>
   <tbody>
     <tr><td>没有对应的原始事件</td><td><code>prompt</code>：agentrun 在 <code>start</code> 之后用自己传入的提示词输出。codex 的输出里没有提示词（codex 0.159.2 实测）</td></tr>
-    <tr><td><code>item.completed</code>，<code>command_execution</code></td><td><code>tool</code>：<code>name</code> 为 <code>command_execution</code>，summary 为 <code>shell: </code> 加命令第一行</td></tr>
-    <tr><td><code>item.completed</code>，<code>file_change</code></td><td><code>tool</code>：summary 为 <code>patch: </code> 加全部路径，空格分隔</td></tr>
-    <tr><td><code>item.completed</code>，<code>mcp_tool_call</code></td><td><code>tool</code>：summary 为 <code>mcp: server.tool</code></td></tr>
+    <tr><td><code>item.started</code>，<code>command_execution</code></td><td><code>tool_start</code>：<code>name</code> 为 <code>command_execution</code>，summary 为 <code>shell: </code> 加命令第一行</td></tr>
+    <tr><td><code>item.started</code>，<code>file_change</code></td><td><code>tool_start</code>：<code>name</code> 为 <code>file_change</code>，summary 为 <code>patch: </code> 加全部路径，空格分隔</td></tr>
+    <tr><td><code>item.started</code>，<code>mcp_tool_call</code></td><td><code>tool_start</code>：<code>name</code> 为 <code>mcp_tool_call</code>，summary 为 <code>mcp: server.tool</code></td></tr>
+    <tr><td><code>item.completed</code>，<code>command_execution</code>、<code>file_change</code>、<code>mcp_tool_call</code></td><td><code>tool</code>，<code>id</code> 为 item 的 <code>id</code>。这个 <code>id</code> 之前没有 <code>item.started</code> 时，先按上面三行由这个 item 输出 <code>tool_start</code>，再输出 <code>tool</code></td></tr>
     <tr><td><code>item.completed</code>，<code>agent_message</code></td><td><code>text</code></td></tr>
-    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>input_tokens</code> 减去 <code>cached_input_tokens</code> 为输入，<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>，<code>cache_write_input_tokens</code> 对应 <code>cache_write_tokens</code>，<code>output_tokens</code> 为输出。<code>input_tokens</code> 含缓存部分按 OpenAI 用量的含义处理，样本里 <code>cached_input_tokens</code> 小于 <code>input_tokens</code>。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null</td></tr>
-    <tr><td>其他（<code>collab_tool_call</code>、<code>reasoning</code>、<code>todo_list</code>、<code>web_search</code>、<code>item.started</code> 等）</td><td>只写入 <code>--raw</code></td></tr>
+    <tr><td><code>turn.completed</code></td><td><code>usage</code>：<code>input_tokens</code> 减去 <code>cached_input_tokens</code> 为输入，<code>cached_input_tokens</code> 对应 <code>cache_read_tokens</code>，<code>cache_write_input_tokens</code> 对应 <code>cache_write_tokens</code>，<code>output_tokens</code> 为输出。<code>input_tokens</code> 含缓存部分按 OpenAI 用量的含义处理，样本里 <code>cached_input_tokens</code> 小于 <code>input_tokens</code>。事件里没有模型名，<code>model</code> 为 <code>--model</code> 的值，没给时为 null；codex 不报告费用，<code>cost_usd</code> 为 null</td></tr>
+    <tr><td>其他（<code>collab_tool_call</code>、<code>reasoning</code>、<code>todo_list</code>、<code>web_search</code>，以及其余类型的 <code>item.started</code> 等）</td><td>只写入 <code>--raw</code></td></tr>
   </tbody>
 </table>
 <p><code>denied</code> 恒为 false。codex 的输出里没有 subagent 的启动事件，也没有 subagent 自己的命令与文件改动，只有主 agent 等待 subagent 的 <code>collab_tool_call</code>（<code>tool</code> 为 <code>wait</code>，codex 0.159.2 实测）。所以 codex 不输出 <code>subagent_start</code> 与 <code>subagent_end</code>，<code>parent</code> 全部为 null。</p>
 <h3>失败判定</h3>
 <ol>
-  <li>Linux 上沙箱运行时，有 <code>command_execution</code> 的 <code>aggregated_output</code> 以 <code>bwrap: </code> 开头：detail 为 <code>sandbox failed to start: </code> 加这一行去掉 <code>bwrap: </code> 的部分，有多条时取第一条。启动前检查已经覆盖已知的失败情况，这一条是附加信号：codex 的沙箱启动失败时仍以退出码 0 结束并输出 <code>turn.completed</code>，只有命令的输出里有 <code>bwrap</code> 的报错；模型改用 <code>file_change</code> 写文件时连这条报错也没有（codex 0.160.0 实测）。</li>
+  <li>Linux 上沙箱运行时，有 <code>item.completed</code> 里 <code>command_execution</code> 的 <code>aggregated_output</code> 以 <code>bwrap: </code> 开头：detail 为 <code>sandbox failed to start: </code> 加这一行去掉 <code>bwrap: </code> 的部分，有多条时取第一条。启动前检查已经覆盖已知的失败情况，这一条是附加信号：codex 的沙箱启动失败时仍以退出码 0 结束并输出 <code>turn.completed</code>，只有命令的输出里有 <code>bwrap</code> 的报错；模型改用 <code>file_change</code> 写文件时连这条报错也没有（codex 0.160.0 实测）。</li>
   <li><code>turn.failed</code>：取最后一个的 <code>error.message</code> 前 500 个字符。</li>
   <li>没有 <code>turn.completed</code> 时的 <code>error</code> 事件：取最后一个的 <code>message</code> 前 500 个字符。codex 重试连接时也输出 <code>error</code>，重试成功后照常完成，所以有 <code>turn.completed</code> 时不看 <code>error</code>。</li>
   <li>退出码非 0：取标准错误的最后 500 个字符。</li>

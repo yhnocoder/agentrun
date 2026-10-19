@@ -120,7 +120,7 @@ impl Pi {
                 self.prompt_echoed = true;
                 let text = joined_text(&message["content"]);
                 let text = match &self.prompt_with_images {
-                    Some(prompt) if text.contains(prompt.as_str()) => prompt.clone(),
+                    Some(prompt) if text.starts_with(prompt.as_str()) => prompt.clone(),
                     _ => text,
                 };
                 vec![Record::PromptEcho { text }]
@@ -180,19 +180,20 @@ impl Adapter for Pi {
             argv.push(effort.clone());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
-        argv.push("--".to_string());
         let copies = write_copies(
             &invocation.images,
             &invocation.tempdir,
             invocation.args.dry_run,
         )?;
-        argv.extend(
-            copies
-                .iter()
-                .map(|copy| format!("@{}", copy.to_string_lossy())),
-        );
-        argv.push(invocation.prompt.clone());
-        self.prompt_with_images = (!copies.is_empty()).then(|| invocation.prompt.clone());
+        if !copies.is_empty() {
+            argv.push("--".to_string());
+            argv.extend(
+                copies
+                    .iter()
+                    .map(|copy| format!("@{}", copy.to_string_lossy())),
+            );
+            self.prompt_with_images = Some(invocation.prompt.trim().to_string());
+        }
         let mut env = Vec::new();
         let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
@@ -220,7 +221,7 @@ impl Adapter for Pi {
         argv = wrapped.argv(&argv);
         Ok(Launch {
             argv,
-            stdin: Vec::new(),
+            stdin: invocation.prompt.clone().into_bytes(),
             env,
             signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts,
@@ -436,6 +437,7 @@ fn counts(usage: &Value) -> TokenCounts {
         output_tokens: usage["output"].as_u64(),
         cache_read_tokens: usage["cacheRead"].as_u64(),
         cache_write_tokens: usage["cacheWrite"].as_u64(),
+        cost_usd: usage["cost"]["total"].as_f64(),
     }
 }
 
@@ -578,16 +580,14 @@ mod tests {
     fn arguments_without_options() {
         let setup = Setup::new();
         let launch = launch(&setup, &[], false, &[]);
-        let mut expected = fixed("/opt/bin/pi");
-        expected.extend(["--", "hi"].map(str::to_string));
-        assert_eq!(launch.argv, expected);
-        assert!(launch.stdin.is_empty());
+        assert_eq!(launch.argv, fixed("/opt/bin/pi"));
+        assert_eq!(launch.stdin, b"hi");
         assert!(!launch.signal_wrapped_child);
         assert_eq!(launch.env, vec![]);
     }
 
     #[test]
-    fn model_effort_and_caller_arguments_come_before_the_prompt() {
+    fn model_effort_and_caller_arguments_follow_the_fixed_arguments() {
         let setup = Setup::new();
         let launch = launch(
             &setup,
@@ -612,24 +612,22 @@ mod tests {
                 "low",
                 "--verbose",
                 "-x",
-                "--",
-                "hi",
             ]
         );
     }
 
     #[test]
-    fn prompt_starting_with_a_dash_stays_after_the_separator() {
+    fn prompt_goes_to_stdin_whatever_it_starts_with() {
         let setup = Setup::new();
-        let mut invocation = setup.invocation(&[], false, &[]);
-        invocation.prompt = "-n list files".to_string();
-        let launch = Pi::new()
-            .launch(Path::new("/opt/bin/pi"), &invocation)
-            .unwrap();
-        assert_eq!(
-            launch.argv[launch.argv.len() - 2..],
-            ["--", "-n list files"]
-        );
+        for prompt in ["-n list files", "@src/main.rs explain", "@missing.txt"] {
+            let mut invocation = setup.invocation(&[], false, &[]);
+            invocation.prompt = prompt.to_string();
+            let launch = Pi::new()
+                .launch(Path::new("/opt/bin/pi"), &invocation)
+                .unwrap();
+            assert_eq!(launch.argv, fixed("/opt/bin/pi"));
+            assert_eq!(launch.stdin, prompt.as_bytes());
+        }
     }
 
     fn images() -> Vec<Image> {
@@ -648,9 +646,10 @@ mod tests {
     }
 
     #[test]
-    fn images_are_copied_into_the_tempdir_and_passed_before_the_prompt() {
+    fn images_are_copied_into_the_tempdir_and_passed_as_file_arguments() {
         let setup = Setup::new();
         let mut invocation = setup.invocation(&[], false, &[]);
+        invocation.prompt = "  read these\n".to_string();
         invocation.images = images();
         let mut adapter = Pi::new();
         let launch = adapter
@@ -659,24 +658,48 @@ mod tests {
         let first = setup.tempdir().join("image-1.png");
         let second = setup.tempdir().join("image-2.webp");
         assert_eq!(
-            launch.argv[launch.argv.len() - 4..],
+            launch.argv[launch.argv.len() - 3..],
             [
                 "--".to_string(),
                 format!("@{}", first.display()),
                 format!("@{}", second.display()),
-                "hi".to_string(),
             ]
         );
+        assert_eq!(launch.stdin, b"  read these\n");
         assert_eq!(std::fs::read(&first).unwrap(), b"png bytes");
         assert_eq!(std::fs::read(&second).unwrap(), b"webp bytes");
         let echo = json!({"type": "message_end", "message": {"role": "user", "content": [
-            {"type": "text", "text": format!("<file name=\"{}\"></file>\nhi\n\n[Image: original 4000x4000, displayed at 2000x2000.]", first.display())},
+            {"type": "text", "text": format!(
+                "read these<file name=\"{}\"></file>\n<file name=\"{}\"></file>\n\n[Image: original 4000x4000, displayed at 2000x2000.]",
+                first.display(),
+                second.display()
+            )},
             {"type": "image", "data": "aGk=", "mimeType": "image/png"}
         ]}});
         assert_eq!(
             adapter.translate(&echo),
             vec![Record::PromptEcho {
-                text: "hi".to_string()
+                text: "read these".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn echo_that_does_not_start_with_the_prompt_is_kept_as_is() {
+        let setup = Setup::new();
+        let mut invocation = setup.invocation(&[], false, &[]);
+        invocation.images = images();
+        let mut adapter = Pi::new();
+        adapter
+            .launch(Path::new("/opt/bin/pi"), &invocation)
+            .unwrap();
+        let echo = json!({"type": "message_end", "message": {"role": "user", "content": [
+            {"type": "text", "text": "something else"}
+        ]}});
+        assert_eq!(
+            adapter.translate(&echo),
+            vec![Record::PromptEcho {
+                text: "something else".to_string()
             }]
         );
     }
@@ -1108,7 +1131,7 @@ mod tests {
             profile_path.to_string_lossy().into_owned(),
         ];
         expected.extend(fixed("/opt/bin/pi"));
-        expected.extend(["--model", "deepseek/deepseek-flash", "--", "hi"].map(str::to_string));
+        expected.extend(["--model", "deepseek/deepseek-flash"].map(str::to_string));
         assert_eq!(launch.argv, expected);
         assert!(!launch.signal_wrapped_child);
         assert_eq!(launch.service_hosts, ["api.deepseek.com"]);
@@ -1486,6 +1509,7 @@ mod tests {
                         output_tokens: Some(2),
                         cache_read_tokens: Some(5),
                         cache_write_tokens: Some(0),
+                        cost_usd: Some(0.1),
                     },
                 }
             ]

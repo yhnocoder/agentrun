@@ -79,14 +79,14 @@ cat <<'LINES'
 {"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"say hi"}]}}
 {"type":"message_start","message":{"role":"assistant","content":[],"provider":"deepseek","model":"deepseek-flash","stopReason":"pending"}}
 {"type":"message_update","message":{"role":"assistant","content":[]}}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"run it"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo hi\necho there"}}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":0,"totalTokens":10,"cost":{"total":0}},"stopReason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"run it"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo hi\necho there"}}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":0,"totalTokens":10,"cost":{"total":0.125}},"stopReason":"toolUse"}}
 {"type":"tool_execution_start","toolCallId":"call_1","toolName":"bash","args":{"command":"echo hi\necho there","timeout":30}}
 {"type":"tool_execution_end","toolCallId":"call_1","toolName":"bash","result":{"content":[{"type":"text","text":"hi\nthere\n"}]},"isError":false}
 {"type":"message_end","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"hi\nthere\n"}],"isError":false}}
 {"type":"turn_end"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[],"provider":"deepseek","model":"deepseek-flash","stopReason":"pending"}}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":5,"output":6,"cacheRead":7,"cacheWrite":8,"reasoning":0,"totalTokens":26,"cost":{"total":0}},"stopReason":"stop"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":5,"output":6,"cacheRead":7,"cacheWrite":8,"reasoning":0,"totalTokens":26,"cost":{"total":0.25}},"stopReason":"stop"}}
 {"type":"turn_end"}
 {"type":"agent_end","messages":[]}
 {"type":"agent_settled"}
@@ -137,7 +137,6 @@ fn fake_pi_run_without_sandbox() {
             "--thinking",
             "low",
             "--verbose",
-            "--",
         ])
     );
     assert_eq!(start["model"], "deepseek/deepseek-flash:high");
@@ -147,14 +146,15 @@ fn fake_pi_run_without_sandbox() {
         [
             json!({"schema": 1, "type": "prompt", "text": "say hi", "images": []}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "deepseek/deepseek-flash", "input_tokens": 1, "output_tokens": 2,
-                "cache_read_tokens": 3, "cache_write_tokens": 4, "context_tokens": 8}),
+                "cache_read_tokens": 3, "cache_write_tokens": 4, "cost_usd": 0.125, "context_tokens": 8}),
+            json!({"schema": 1, "type": "tool_start", "id": "call_1", "parent": null, "name": "bash", "summary": "bash: echo hi"}),
             json!({"schema": 1, "type": "tool", "id": "call_1", "parent": null, "name": "bash", "summary": "bash: echo hi", "denied": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "hi there"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "deepseek/deepseek-flash", "input_tokens": 5, "output_tokens": 6,
-                "cache_read_tokens": 7, "cache_write_tokens": 8, "context_tokens": 20}),
+                "cache_read_tokens": 7, "cache_write_tokens": 8, "cost_usd": 0.25, "context_tokens": 20}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12,
-                    "by_model": {"deepseek/deepseek-flash": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12}}},
+                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.375,
+                    "by_model": {"deepseek/deepseek-flash": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.375}}},
                 "result": "hi there"}),
         ]
     );
@@ -211,6 +211,65 @@ fn pi_uses_the_user_state_dir_which_stays_unchanged() {
     let end = support::events(&output).pop().unwrap();
     assert_eq!(end["status"], "finished");
     assert_eq!(end["result"], "ok");
+}
+
+const STDIN_PI: &str = r#"#!/bin/sh
+printf '%s\n' "$@" > "$PWD/args.txt"
+cat > "$PWD/stdin.txt"
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}'
+"#;
+
+#[test]
+fn prompt_starting_with_at_reaches_pi_on_stdin_and_not_as_an_argument() {
+    let env = Env::with("pi", STDIN_PI);
+    let prompt = "@missing.txt explain\n  second line  \n";
+    let mut sandboxes = vec!["off"];
+    if support::sandbox_available() {
+        sandboxes.push("on");
+    }
+    for sandbox in sandboxes {
+        let output = run(
+            &env,
+            &[
+                "--sandbox",
+                sandbox,
+                "--model",
+                "deepseek/deepseek-flash",
+                "--prompt",
+                prompt,
+            ],
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let stdin = std::fs::read_to_string(env.work().join("stdin.txt")).unwrap();
+        assert_eq!(stdin, prompt, "--sandbox {sandbox}");
+        let args = std::fs::read_to_string(env.work().join("args.txt")).unwrap();
+        assert!(
+            args.lines().all(|arg| arg != "--" && !arg.starts_with('@')),
+            "--sandbox {sandbox}: {args}"
+        );
+    }
+}
+
+#[test]
+fn arguments_equal_to_the_prompt_stay_in_the_command() {
+    let env = Env::with("pi", STDIN_PI);
+    let args = ["--sandbox", "off", "--effort", "low", "--prompt", "low"];
+    let output = run(&env, &[&args[..], &["--dry-run"]].concat());
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().next().unwrap().ends_with(" --thinking low"),
+        "{stdout}"
+    );
+    let output = run(&env, &args);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let argv = support::events(&output)[0]["argv"].clone();
+    let argv = argv.as_array().unwrap();
+    assert_eq!(argv[argv.len() - 2..], [json!("--thinking"), json!("low")]);
+    assert_eq!(
+        std::fs::read_to_string(env.work().join("stdin.txt")).unwrap(),
+        "low"
+    );
 }
 
 #[test]
@@ -317,7 +376,7 @@ fn dry_run_creates_no_state_dir_and_lists_no_state_variable() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(
-        lines[0].ends_with(" --tools read,bash,edit,write,grep,find,ls -x -- '<prompt 2 bytes>'"),
+        lines[0].ends_with(" --tools read,bash,edit,write,grep,find,ls -x"),
         "{}",
         lines[0]
     );
