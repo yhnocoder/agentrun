@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use agentrun::cli::{RunArgs, Runtime};
 use agentrun::network::proxy_environment;
-use agentrun::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
+use agentrun::output::{Record, SubagentStatus, TokenCounts, Usage};
 use agentrun::runtime::{Adapter, Failure, Invocation, Launch, PrivateDir};
 use agentrun::sandbox;
 use agentrun::transcript::Transcript;
@@ -73,8 +73,6 @@ impl Adapter for FakeAdapter {
             argv,
             stdin: format!("{}\n", invocation.prompt).into_bytes(),
             env: port.as_deref().map(proxy_environment).unwrap_or_default(),
-            signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
-            service_hosts: Vec::new(),
             wrapped: wrapped.kind,
             private_dirs,
         })

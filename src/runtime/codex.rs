@@ -308,10 +308,8 @@ impl Adapter for Codex {
         }
         argv.push("-".to_string());
         let mut env = vec![(OsString::from(HOME_VARIABLE), home.clone().into_os_string())];
-        let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
             env.extend(proxy_environment(&proxy.port_text()));
-            service_hosts.extend(SERVICE_HOSTS.iter().map(|host| host.to_string()));
         }
         let private_dirs = if invocation.args.dry_run {
             Vec::new()
@@ -331,8 +329,6 @@ impl Adapter for Codex {
             argv,
             stdin: invocation.prompt.clone().into_bytes(),
             env,
-            signal_wrapped_child: false,
-            service_hosts,
             wrapped: SandboxKind::None,
             private_dirs,
         })
@@ -761,8 +757,6 @@ mod tests {
         ]));
         assert_eq!(launch.argv, expected(&setup, &permissions, "disabled", &[]));
         assert_eq!(launch.stdin, b"hi");
-        assert!(!launch.signal_wrapped_child);
-        assert!(launch.service_hosts.is_empty());
         assert_eq!(
             launch.env,
             vec![(
@@ -782,7 +776,6 @@ mod tests {
             "permissions.agentrun.network.enabled=true",
         ]));
         assert_eq!(launch.argv, expected(&setup, &permissions, "live", &[]));
-        assert!(launch.service_hosts.is_empty());
         assert_eq!(launch.env.len(), 1);
     }
 
@@ -813,15 +806,6 @@ mod tests {
             "permissions.agentrun.network={enabled=true, enable_socks5=false, enable_socks5_udp=false, allow_upstream_proxy=true, domains={\"api.github.com\"=\"allow\", \"*.example.com\"=\"allow\", \"pypi.org\"=\"allow\"}}",
         ]));
         assert_eq!(launch.argv, expected(&setup, &permissions, "disabled", &[]));
-        assert_eq!(
-            launch.service_hosts,
-            [
-                "chatgpt.com",
-                "ab.chatgpt.com",
-                "auth.openai.com",
-                "api.openai.com"
-            ]
-        );
         let mut env = vec![(
             OsString::from("CODEX_HOME"),
             home_path(&setup.tempdir()).into_os_string(),
@@ -839,7 +823,6 @@ mod tests {
                 launch.argv,
                 expected(&setup, &full_access(), web_search, &[])
             );
-            assert!(launch.service_hosts.is_empty());
         }
         let launch = launch(
             &setup,

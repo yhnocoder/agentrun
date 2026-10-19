@@ -11,7 +11,7 @@ use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, display_
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, optional_string, string};
 use crate::network::{proxy_environment, url_host};
-use crate::output::{Record, SandboxKind, TokenCounts};
+use crate::output::{Record, TokenCounts};
 use crate::sandbox;
 use crate::session::Session;
 use crate::transcript::{Transcript, copy_dir_into};
@@ -173,16 +173,13 @@ impl Adapter for Dsh {
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value))),
         );
-        let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
-            match service_host(&invocation.session) {
-                Some(host) => service_hosts.push(host),
-                None if invocation.args.network == NetworkMode::None => {
-                    return Err(format!(
-                        "cannot tell which host dsh's model service uses from {BASE_URL_VARIABLE}. Use --network custom --allow-host <host of the model service>"
-                    ));
-                }
-                None => {}
+            if service_host(&invocation.session).is_none()
+                && invocation.args.network == NetworkMode::None
+            {
+                return Err(format!(
+                    "cannot tell which host dsh's model service uses from {BASE_URL_VARIABLE}. Use --network custom --allow-host <host of the model service>"
+                ));
             }
             env.extend(proxy_environment(&proxy.port_text()));
         }
@@ -199,8 +196,6 @@ impl Adapter for Dsh {
             argv: wrapped.argv(&argv),
             stdin: invocation.prompt.clone().into_bytes(),
             env,
-            signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
-            service_hosts,
             wrapped: wrapped.kind,
             private_dirs: Vec::new(),
         })
@@ -497,6 +492,7 @@ mod tests {
     use super::*;
     use crate::cli::{SandboxMode, parse_run};
     use crate::network::ProxyEndpoint;
+    use crate::output::SandboxKind;
     use crate::sandbox::{Sandbox, Wrapper};
     use crate::session::{Session, parse_env_args};
     use crate::transcript::Saved;
@@ -608,9 +604,7 @@ mod tests {
             ])
         );
         assert_eq!(launch.stdin, b"hi");
-        assert!(!launch.signal_wrapped_child);
         assert_eq!(launch.wrapped, SandboxKind::None);
-        assert!(launch.service_hosts.is_empty());
         let home = setup.tempdir().join(HOME_SUBDIR);
         let agents = setup.tempdir().join(AGENTS_SUBDIR);
         assert_eq!(
@@ -733,7 +727,6 @@ mod tests {
         let setup = Setup::new();
         let launch = proxied(&setup, &[KEY]).unwrap();
         assert_eq!(launch.argv[0], "/usr/bin/bwrap");
-        assert!(launch.signal_wrapped_child);
         assert_eq!(launch.wrapped, SandboxKind::Bubblewrap);
         assert_eq!(launch.argv.iter().filter(|arg| *arg == "--bind").count(), 2);
         let start = launch
@@ -745,7 +738,6 @@ mod tests {
             launch.argv[start - 3..start - 1],
             ["/usr/bin/socat", "4321"]
         );
-        assert_eq!(launch.service_hosts, ["api.deepseek.com"]);
         assert_eq!(
             env_value(&launch, "HTTPS_PROXY").as_deref(),
             Some("http://127.0.0.1:4321")
@@ -767,7 +759,10 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(launch.service_hosts, ["gateway.example"]);
+        assert_eq!(
+            env_value(&launch, "HTTPS_PROXY").as_deref(),
+            Some("http://127.0.0.1:4321")
+        );
         let setup = Setup::new();
         let detail = proxied(&setup, &[KEY, ("DEEPSEEK_BASE_URL", "gateway")]).unwrap_err();
         assert_eq!(
@@ -781,10 +776,11 @@ mod tests {
             &["--network", "full"],
         );
         invocation.proxy = Some(proxy(&setup));
-        let launch = Dsh::new()
-            .launch(Path::new("/opt/bin/dsh"), &invocation)
-            .unwrap();
-        assert!(launch.service_hosts.is_empty());
+        assert!(
+            Dsh::new()
+                .launch(Path::new("/opt/bin/dsh"), &invocation)
+                .is_ok()
+        );
     }
 
     #[test]

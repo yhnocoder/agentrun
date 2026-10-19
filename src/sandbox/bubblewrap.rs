@@ -107,23 +107,9 @@ pub(super) fn probe(
     cwd: &Path,
     checking: &dyn Fn(Option<i32>),
 ) -> Result<Available, Unavailable> {
-    let missing = |name: &str, hint: &'static str| Unavailable {
-        reason: format!("{name} not found in PATH"),
-        hint,
-    };
-    if runtime == Runtime::Codex {
-        let bwrap = find_executable_outside("bwrap", &session.path, cwd)
-            .ok_or_else(|| missing("bwrap", CODEX_INSTALL_HINT))?;
-        let started = Instant::now();
-        check_bwrap(&bwrap, session, cwd, checking)?;
-        return Ok(Available {
-            wrapper: Wrapper::Codex,
-            description: format!(
-                "codex (bubblewrap {}, check {}ms)",
-                bwrap.display(),
-                started.elapsed().as_millis()
-            ),
-        });
+    match runtime {
+        Runtime::Codex => return probe_for_codex(session, cwd, checking),
+        Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => {}
     }
     let bwrap = find_executable("bwrap", &session.path, cwd)
         .ok_or_else(|| missing("bwrap", INSTALL_HINT))?;
@@ -140,6 +126,34 @@ pub(super) fn probe(
         ),
         wrapper: Wrapper::Bubblewrap { bwrap, socat },
     })
+}
+
+#[cfg(target_os = "linux")]
+fn probe_for_codex(
+    session: &Session,
+    cwd: &Path,
+    checking: &dyn Fn(Option<i32>),
+) -> Result<Available, Unavailable> {
+    let bwrap = find_executable_outside("bwrap", &session.path, cwd)
+        .ok_or_else(|| missing("bwrap", CODEX_INSTALL_HINT))?;
+    let started = Instant::now();
+    check_bwrap(&bwrap, session, cwd, checking)?;
+    Ok(Available {
+        wrapper: Wrapper::Codex,
+        description: format!(
+            "codex (bubblewrap {}, check {}ms)",
+            bwrap.display(),
+            started.elapsed().as_millis()
+        ),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn missing(name: &str, hint: &'static str) -> Unavailable {
+    Unavailable {
+        reason: format!("{name} not found in PATH"),
+        hint,
+    }
 }
 
 #[cfg(target_os = "linux")]

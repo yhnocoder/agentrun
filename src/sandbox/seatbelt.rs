@@ -102,11 +102,14 @@ pub(super) fn probe(
     cwd: &Path,
     checking: &dyn Fn(Option<i32>),
 ) -> Result<Available, Unavailable> {
-    if runtime == Runtime::Codex {
-        return Ok(Available {
-            wrapper: Wrapper::Codex,
-            description: "codex".to_string(),
-        });
+    match runtime {
+        Runtime::Codex => {
+            return Ok(Available {
+                wrapper: Wrapper::Codex,
+                description: "codex".to_string(),
+            });
+        }
+        Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => {}
     }
     let unavailable = |reason: String| Unavailable {
         reason,

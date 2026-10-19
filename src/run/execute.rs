@@ -22,7 +22,7 @@ use crate::output::{
 };
 use crate::process_tree;
 use crate::runtime::{
-    Adapter, DETAIL_MAX_CHARS, Failure, Invocation, Launch, PrivateDir, contains, detail_tail,
+    self, Adapter, DETAIL_MAX_CHARS, Failure, Invocation, Launch, PrivateDir, contains, detail_tail,
 };
 use crate::sandbox::wrapper_failure;
 use crate::transcript;
@@ -76,7 +76,7 @@ pub(super) fn execute(
     let debug = invocation.args.debug;
     let (sender, receiver) = mpsc::channel();
     if let Some(proxy) = guards.proxy.as_mut() {
-        serve_proxy(caller, proxy, &invocation, &launch, sender.clone());
+        serve_proxy(caller, proxy, &invocation, sender.clone());
     }
     let raw = open_raw(raw, &invocation.tempdir, debug)?;
     if debug {
@@ -117,7 +117,7 @@ pub(super) fn execute(
     caller.signals.running(
         child.id() as i32,
         invocation.args.timeout.map(Duration::from_secs),
-        launch.signal_wrapped_child,
+        launch.wrapped == SandboxKind::Bubblewrap,
     );
     drop(hold);
 
@@ -193,13 +193,17 @@ fn serve_proxy(
     caller: &Caller,
     proxy: &mut FilterProxy,
     invocation: &Invocation,
-    launch: &Launch,
     sender: Sender<Message>,
 ) {
     let policy = Policy {
         mode: invocation.args.network,
         rules: invocation.allow_hosts.clone(),
-        service_hosts: launch.service_hosts.clone(),
+        service_hosts: runtime::service_hosts(
+            invocation.runtime,
+            invocation.args.model.as_deref(),
+            &invocation.session,
+            &invocation.cwd,
+        ),
     };
     let notes = proxy.serve_session(policy, &invocation.session.env, move |network| {
         let _ = sender.send(Message::Network(network));

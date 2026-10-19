@@ -62,6 +62,7 @@ impl Command {
     }
 }
 
+// why(#107): 变体顺序决定 doctor 的检查顺序与默认禁读列表的顺序
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 pub enum Runtime {
     #[serde(rename = "claude-code")]

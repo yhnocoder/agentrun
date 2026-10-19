@@ -477,8 +477,6 @@ impl Adapter for ClaudeCode {
             argv,
             stdin: prompt_line(&invocation.prompt, &invocation.images),
             env,
-            signal_wrapped_child: false,
-            service_hosts: Vec::new(),
             wrapped: SandboxKind::None,
             private_dirs: Vec::new(),
         })
@@ -990,7 +988,6 @@ mod tests {
             argv[20]
         );
         assert!(has_env(&launch, SOCAT_IPV4));
-        assert!(launch.service_hosts.is_empty());
         let open = proxied(false, None, &["--network", "full"]);
         let argv = argv_without_session_id(&open);
         assert_eq!(
