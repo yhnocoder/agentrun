@@ -229,7 +229,11 @@ impl Adapter for Codex {
             };
             argv.extend(config(format!("default_permissions={PROFILE}")));
             let mut hidden_reads = hidden(&invocation.denied_reads);
-            if invocation.denied_reads.contains(&login) {
+            let real_login = std::fs::canonicalize(&login).unwrap_or_else(|_| login.clone());
+            if hidden_reads
+                .iter()
+                .any(|entry| real_login.starts_with(&entry.path))
+            {
                 hidden_reads.push(Hidden {
                     path: home_path(&tempdir).join(LOGIN_FILE),
                     dir: false,
@@ -1075,31 +1079,35 @@ mod tests {
     }
 
     #[test]
-    fn denying_the_login_file_also_denies_the_private_home_link() {
+    fn denying_the_login_file_or_its_directory_also_denies_the_private_home_link() {
         let setup = Setup::new();
-        let invocation = Invocation {
-            denied_reads: vec![setup.login()],
-            ..setup.invocation(true, &[])
-        };
-        let launch = Codex::new()
-            .launch(Path::new("/opt/bin/codex"), &invocation)
-            .unwrap();
-        let login = std::fs::canonicalize(setup.login()).unwrap();
-        let link = home_path(&std::fs::canonicalize(setup.tempdir()).unwrap()).join(LOGIN_FILE);
-        let filesystem = launch
-            .argv
-            .iter()
-            .find(|arg| arg.starts_with("permissions.agentrun.filesystem="))
-            .unwrap();
-        assert!(
-            filesystem.ends_with(&format!(
-                "=\"write\", \"{}\"=\"deny\", \"{}\"=\"deny\"}}",
-                login.display(),
-                link.display()
-            )),
-            "{filesystem}"
-        );
-        assert_eq!(std::fs::read_link(&link).unwrap(), setup.login());
+        let login = setup.login();
+        for denied in [login.clone(), login.parent().unwrap().to_path_buf()] {
+            let invocation = Invocation {
+                denied_reads: vec![denied.clone()],
+                ..setup.invocation(true, &[])
+            };
+            let launch = Codex::new()
+                .launch(Path::new("/opt/bin/codex"), &invocation)
+                .unwrap();
+            let denied = std::fs::canonicalize(&denied).unwrap();
+            let link = home_path(&std::fs::canonicalize(setup.tempdir()).unwrap()).join(LOGIN_FILE);
+            let filesystem = launch
+                .argv
+                .iter()
+                .find(|arg| arg.starts_with("permissions.agentrun.filesystem="))
+                .unwrap();
+            assert!(
+                filesystem.ends_with(&format!(
+                    "=\"write\", \"{}\"=\"deny\", \"{}\"=\"deny\"}}",
+                    denied.display(),
+                    link.display()
+                )),
+                "{filesystem}"
+            );
+            assert_eq!(std::fs::read_link(&link).unwrap(), login);
+            std::fs::remove_dir_all(link.parent().unwrap()).unwrap();
+        }
     }
 
     #[test]
