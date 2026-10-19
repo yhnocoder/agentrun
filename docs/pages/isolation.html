@@ -148,7 +148,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
   </thead>
   <tbody>
     <tr><td>claude-code</td><td><code>--settings</code> 的 <code>permissions.deny</code> 给每个路径写两条规则 <code>Read(//&lt;路径&gt;)</code> 与 <code>Read(//&lt;路径&gt;/**)</code>，路径里的 <code>\ * ? [ ] { }</code> 前面加反斜杠，按字面匹配。Read、Grep、Glob 读这些路径时被拒绝，Grep 搜索上层目录时跳过它们；<code>sandbox.filesystem.denyRead</code> 列出同样的路径，Bash 命令读不到（Linux 上目录显示为空，文件读取报 Permission denied）。路径是符号链接时，链接与目标都写（claude 2.1.303 云端实测）</td><td><code>--settings</code> 只有 <code>permissions.deny</code>。Read、Grep、Glob 照样被拒绝；Bash 命令不在沙箱里，命令里直接写出这些路径时被 claude-code 拒绝，间接的写法由分类器判断，没有保证（claude 2.1.303 云端实测）</td></tr>
-    <tr><td>codex</td><td>自定义权限配置的 <code>filesystem</code> 表给每个存在的路径加一项 <code>"&lt;真实路径&gt;"="deny"</code>。用户登录文件或它所在的目录在列表里时（按真实路径比较），私有 <code>CODEX_HOME</code> 里指向它的符号链接 <code>auth.json</code> 按链接本身的路径再加一项，不依赖 codex 是否解析符号链接。<code>--deny-read</code> 的真实路径含 <code>* ? [ ] { }</code> 时是用法错误，<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: codex cannot deny a path that contains * ? [ ] { }</code>：codex 把这类表项当作模式，文档没有转义写法，<code>"a*b"="deny"</code> 既挡不住字面路径 <code>a*b</code> 也挡不住 <code>aXb</code>（codex 0.160.1 macOS 实测）。默认列表不检查</td><td>不限制</td></tr>
+    <tr><td>codex</td><td>自定义权限配置的 <code>filesystem</code> 表给每个存在的路径加一项 <code>"&lt;真实路径&gt;"="deny"</code>。用户登录文件或它所在的目录在列表里时（按真实路径比较），私有 <code>CODEX_HOME</code> 里指向它的符号链接 <code>auth.json</code> 按链接本身的路径再加一项，不依赖 codex 是否解析符号链接。codex 能看到这些拒绝项，读写被拒路径的命令它不执行，所以这些命令没有 <code>tool</code> 事件（codex 0.160.1 macOS 实测）。<code>--deny-read</code> 的真实路径含 <code>* ? [ ] { }</code> 时是用法错误，<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: codex cannot deny a path that contains * ? [ ] { }</code>，解析后的路径与给出的不同时，在给出的路径后加 <code>(resolves to &lt;真实路径&gt;)</code>：codex 把这类表项当作模式，文档没有转义写法，<code>"a*b"="deny"</code> 既挡不住字面路径 <code>a*b</code> 也挡不住 <code>aXb</code>（codex 0.160.1 macOS 实测）。默认列表不检查</td><td>不限制</td></tr>
     <tr><td>pi</td><td>存在的路径先解析符号链接。Linux：目录用 <code>--tmpfs</code> 加 <code>--remount-ro</code> 换成只读的空目录，其他文件用 <code>--ro-bind /dev/null</code> 覆盖（读取报 Permission denied），写在所有 <code>--bind</code> 之后，所以工作目录与状态目录里的路径也能挡住。macOS：Seatbelt 配置末尾加 <code>(deny file-read* (subpath "&lt;真实路径&gt;") ...)</code></td><td>不限制</td></tr>
   </tbody>
 </table>
@@ -270,7 +270,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
     <tr><td>pi</td><td>能读读取限制以外、用户可读的任何文件；能改写用户 pi 状态目录里的 <code>auth.json</code> 与 <code>models-store.json</code>；Linux 上还能在状态目录里新建原本没有的条目，例如 <code>extensions/</code>，用户下次在沙箱外运行 pi 时会加载。agent 可以把状态目录里的 <code>auth.json</code> 换成指向其他文件的符号链接，之后带 <code>AGENTRUN_PI_AUTH</code> 运行时，agentrun 把凭据写到那个文件，这个文件可以在沙箱之外，见<a href="session.html#credentials">凭据</a>。网络只通向模型服务，所以读到的文件只能经模型服务带出</td><td>能读、写容器内任何位置，能联网，边界是容器</td></tr>
   </tbody>
 </table>
-<p>读取限制按路径匹配。限制范围以外已有的硬链接指向同一个文件时，通过硬链接能读到内容。工作目录里被拒绝读取的目录，沙箱运行时 claude-code 的命令写进去报告成功，但写入的文件在运行结束后不存在（Linux 上这个目录在沙箱里换成了空目录，云端实测）；pi 与 codex 写进去时报错，文件不会写出（codex 0.160.1 macOS 实测，codex 的拒绝项优先于工作目录的写权限）。</p>
+<p>读取限制按路径匹配。限制范围以外已有的硬链接指向同一个文件时，通过硬链接能读到内容。工作目录里被拒绝读取的目录，沙箱运行时 claude-code 的命令写进去报告成功，但写入的文件在运行结束后不存在（Linux 上这个目录在沙箱里换成了空目录，云端实测）；pi 写进去时报只读错误；codex 的拒绝项优先于工作目录的写权限，文件不会写出（codex 0.160.1 macOS 实测）。</p>
 <p>读取限制只针对文件。会话环境里的变量（例如 <code>DEEPSEEK_API_KEY</code> 与容器里的令牌）agent 都能读到；默认列表以外的凭据文件，需要用 <code>--deny-read</code> 自己加上。pi 的会话记录目录（状态目录里的 <code>sessions/</code>）不在默认列表里。</p>
 <p>保存会话（<code>--session-dir</code>）的剩余风险：</p>
 <ul>

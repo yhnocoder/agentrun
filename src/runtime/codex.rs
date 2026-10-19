@@ -196,17 +196,22 @@ impl Adapter for Codex {
 
     fn check_args(&self, args: &RunArgs) -> Result<(), String> {
         reject_max_turns(args)?;
-        match args.deny_read.iter().find(|path| {
-            let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        for given in &args.deny_read {
+            let absolute = std::path::absolute(given).unwrap_or_else(|_| given.clone());
             let real = std::fs::canonicalize(&absolute).unwrap_or(absolute);
-            real.to_string_lossy().contains(GLOB_CHARACTERS)
-        }) {
-            Some(path) => Err(format!(
-                "--deny-read {}: codex cannot deny a path that contains * ? [ ] {{ }}",
-                path.display()
-            )),
-            None => Ok(()),
+            if real.to_string_lossy().contains(GLOB_CHARACTERS) {
+                let resolved = if &real == given {
+                    String::new()
+                } else {
+                    format!(" (resolves to {})", real.display())
+                };
+                return Err(format!(
+                    "--deny-read {}{resolved}: codex cannot deny a path that contains * ? [ ] {{ }}",
+                    given.display()
+                ));
+            }
         }
+        Ok(())
     }
 
     fn launch(&mut self, executable: &Path, invocation: &Invocation) -> Result<Launch, String> {
@@ -1167,12 +1172,21 @@ mod tests {
         std::fs::create_dir(&bracketed).unwrap();
         std::os::unix::fs::symlink(&bracketed, root.path().join("plain")).unwrap();
         let plain_link = root.path().join("plain").to_string_lossy().into_owned();
-        for path in ["/data/a*b", "/data/a?b", "/data/{a}", plain_link.as_str()] {
+        let resolved = format!(
+            " (resolves to {})",
+            std::fs::canonicalize(&bracketed).unwrap().display()
+        );
+        for (path, suffix) in [
+            ("/data/a*b", ""),
+            ("/data/a?b", ""),
+            ("/data/{a}", ""),
+            (plain_link.as_str(), resolved.as_str()),
+        ] {
             let invocation = setup.invocation(false, &["--deny-read", path]);
             assert_eq!(
                 Codex::new().check_args(&invocation.args),
                 Err(format!(
-                    "--deny-read {path}: codex cannot deny a path that contains * ? [ ] {{ }}"
+                    "--deny-read {path}{suffix}: codex cannot deny a path that contains * ? [ ] {{ }}"
                 ))
             );
         }
