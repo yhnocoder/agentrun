@@ -136,7 +136,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </table>
 <ul>
   <li><code>~</code> 与这三个变量取会话环境里的值（<code>--env</code> 与 <code>--env-file</code> 之后），相对路径按工作目录解析，与运行时自己查找登录文件的方式相同。会话环境没有 <code>HOME</code> 时，主目录里的条目不加。</li>
-  <li>agentrun 自己的运行不使用这几个会话记录路径：claude-code 用 <code>--no-session-persistence</code>，沙箱里的 memory 目录在会话临时目录；codex 用私有 <code>CODEX_HOME</code>。所以三个运行时都挡住它们。</li>
+  <li>agent 的工具与命令不需要读这几个会话记录路径：codex 用私有 <code>CODEX_HOME</code>；claude-code 沙箱里的 memory 目录在会话临时目录，没有 <code>--session-dir</code> 时用 <code>--no-session-persistence</code> 不写记录，给出时由 claude 进程在运行期间把记录写进 <code>projects/</code>、继续会话时从 <code>--session-dir</code> 读取，都在沙箱外，不受读取限制，见<a href="run.html#sessions">保存与继续会话</a>。所以三个运行时都挡住它们。</li>
   <li>pi 的整个进程在沙箱里，要读写自己的登录文件来登录和刷新令牌，所以运行 pi 时不挡它。claude-code 与 codex 的进程在沙箱外读写自己的登录文件，只有它们的工具与命令受读取限制，所以运行它们时自己的登录文件也挡住。</li>
   <li><code>--deny-read</code> 的相对路径按 agentrun 的当前目录展开成绝对路径。以 <code>~</code> 开头的路径是用法错误（退出码 2），<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: ~ is not expanded, give the full path</code>，因为 <code>~/.env</code> 会被当成当前目录下名为 <code>~</code> 的目录，什么也挡不住。</li>
   <li>路径等于或包含运行需要的目录时是用法错误，<code>detail</code> 为 <code>--deny-read &lt;路径&gt;: contains the &lt;名称&gt; &lt;目录&gt;</code>；默认列表里包含这些目录的项直接去掉。这些目录是工作目录（<code>working directory</code>）、会话临时目录所在的目录（<code>session temporary directory</code>，调用方的 <code>TMPDIR</code>，未设时 <code>/tmp</code>），运行 pi 时还有 pi 的状态目录（<code>pi state directory</code>）。理由：工作目录读不到时 agent 无法工作；会话临时目录里有图片的副本、codex 的私有 <code>CODEX_HOME</code> 与 claude-code 的 memory 目录；pi 在沙箱里读自己的状态目录来登录。</li>
@@ -249,16 +249,17 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </table>
 <p>后两个主机取自 codex 0.159.2 内置的地址，没有实测。只放行前两个时，令牌过期的那次运行刷新失败，API key 登录完全不能用。</p>
 
-<h2>配置与账号</h2>
+<h2 id="config">配置与账号</h2>
 <p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
-  <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，关闭 auto-memory，不保存会话，每次传一个新生成的会话 id。沙箱打开时 auto-memory 目录改到会话临时目录，agent 不能写用户的 memory 目录。</li>
+  <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，关闭 auto-memory，新会话每次传一个新生成的会话 id。沙箱打开时 auto-memory 目录改到会话临时目录，agent 不能写用户的 memory 目录。</li>
   <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#codex-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
-  <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
+  <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>
+<p>三个运行时默认都不保存会话。调用方给出 <code>--session-dir</code> 时，运行结束后会话记录移到那个目录，<code>--resume</code> 只从那里读，不读用户自己的会话记录。运行期间 codex 的记录在私有目录里，pi 的记录在会话临时目录里；claude-code 的新会话写在用户配置目录的 <code>projects/</code> 里，结束后才移走，带来的风险见<a href="#residual">剩余风险</a>，做法见<a href="run.html#sessions">保存与继续会话</a>。</p>
 <p>账号由登录方式决定。会话环境按运行时删除会改变登录方式的变量，容器里的凭据由环境变量写入登录文件，见<a href="session.html">会话环境</a>。</p>
 
-<h2>剩余风险</h2>
+<h2 id="residual">剩余风险</h2>
 <table>
   <thead>
     <tr><th>运行时</th><th>沙箱运行时</th><th>沙箱没有运行时</th></tr>
@@ -271,6 +272,12 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </table>
 <p>读取限制按路径匹配。限制范围以外已有的硬链接指向同一个文件时，通过硬链接能读到内容。工作目录里被拒绝读取的目录，沙箱运行时 claude-code 的命令写进去报告成功，但写入的文件在运行结束后不存在（Linux 上这个目录在沙箱里换成了空目录，云端实测）；pi 写进去时报只读错误。codex 对工作目录里被拒绝读取的目录与工作目录的写权限哪个优先、是否把路径里的 <code>*</code> 与 <code>[</code> 当作通配符，没有实测。</p>
 <p>读取限制只针对文件。会话环境里的变量（例如 <code>DEEPSEEK_API_KEY</code> 与容器里的令牌）agent 都能读到；默认列表以外的凭据文件，需要用 <code>--deny-read</code> 自己加上。pi 的会话记录目录（状态目录里的 <code>sessions/</code>）不在默认列表里。</p>
+<p>保存会话（<code>--session-dir</code>）的剩余风险：</p>
+<ul>
+  <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。只有给出 <code>--session-dir</code> 时这样做，不给时仍加 <code>--no-session-persistence</code>，不写记录。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行同样在结束时移走（云端实测 <code>interrupted</code> 与 <code>timeout</code>）。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在用户的配置目录里。运行期间用户在同一个工作目录里运行 <code>claude --continue</code> 可能接上这次运行的会话，用户写进去的内容在运行结束时随记录一起被移到 <code>--session-dir</code>。</li>
+  <li>pi 的记录在运行期间放在会话临时目录里，沙箱里的 agent 能改写这次会话的记录，改写后的内容随记录一起保存，下次继续时进入模型上下文。其他会话的记录 agent 写不到。</li>
+  <li><code>--session-dir</code> 放在工作目录或会话临时目录之内时，沙箱里的 agent 能改写已保存的全部会话，改写的内容在下次继续时进入模型上下文。agentrun 不检查这一点，由调用方把目录放在两者之外。</li>
+</ul>
 <p>过滤代理本身的剩余风险：</p>
 <ul>
   <li>HTTPS 只按 <code>CONNECT</code> 的主机名与端口判定，TLS 里的 SNI 与 <code>Host</code> 不检查。放行的主机如果和别的站点共用 IP 并按 SNI 选站点，隧道里可以访问那些站点。</li>

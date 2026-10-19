@@ -155,6 +155,19 @@ pub struct RunArgs {
     pub env_file: Vec<PathBuf>,
     #[arg(long, help = "Do not allow the agent to start subagents")]
     pub no_subagents: bool,
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Save the session in this directory so that --resume can continue it"
+    )]
+    pub session_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "ID",
+        requires = "session_dir",
+        help = "Continue the session with this id saved in --session-dir"
+    )]
+    pub resume: Option<String>,
     #[arg(long, value_enum, help = "Format of standard output")]
     pub format: Option<Format>,
     #[arg(

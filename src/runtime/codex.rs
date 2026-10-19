@@ -11,17 +11,20 @@ use super::{
 };
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::image::write_copies;
-use crate::json::{first_line, string};
+use crate::json::{first_line, optional_string, string};
 use crate::network::{HostRule, proxy_environment};
 use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, Hidden, hidden, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
+use crate::transcript::{Transcript, copy_into, find_file_within};
 
 pub(crate) const MIN_VERSION: Version = Version(0, 159, 2);
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
 pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
 const HOME_LABEL: &str = "codex home";
+const SESSIONS_SUBDIR: &str = "sessions";
+const RESUME_COMMAND: &str = "resume";
 pub(crate) const LOGIN_FILE: &str = "auth.json";
 const HISTORY_ENTRIES: [&str; 2] = ["sessions", "history.jsonl"];
 pub(crate) const SERVICE_HOSTS: [&str; 4] = [
@@ -87,6 +90,9 @@ pub struct Codex {
     turn_completed: bool,
     turn_failed: Option<String>,
     last_error: Option<String>,
+    home: PathBuf,
+    saving: bool,
+    session_id: Option<String>,
     started_items: HashSet<String>,
 }
 
@@ -198,6 +204,9 @@ impl Adapter for Codex {
         self.model = invocation.args.model.clone();
         self.sandboxed = invocation.sandbox.runs();
         let home = home_path(&invocation.tempdir);
+        self.home = home.clone();
+        self.saving = invocation.args.session_dir.is_some();
+        self.session_id = invocation.resume.as_ref().map(|saved| saved.id.clone());
         let network = invocation.args.network;
         let mut argv = vec![executable.to_string_lossy().into_owned()];
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
@@ -276,6 +285,10 @@ impl Adapter for Codex {
             )));
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
+        if let Some(saved) = &invocation.resume {
+            argv.push(RESUME_COMMAND.to_string());
+            argv.push(saved.id.clone());
+        }
         argv.push("-".to_string());
         let mut env = vec![(OsString::from(HOME_VARIABLE), home.clone().into_os_string())];
         let mut service_hosts = Vec::new();
@@ -287,6 +300,11 @@ impl Adapter for Codex {
             Vec::new()
         } else {
             create_home(&home, &login)?;
+            if let Some(saved) = &invocation.resume {
+                copy_into(&saved.file, &home.join(SESSIONS_SUBDIR)).inspect_err(|_| {
+                    let _ = std::fs::remove_dir_all(&home);
+                })?;
+            }
             vec![PrivateDir {
                 label: HOME_LABEL,
                 path: home,
@@ -309,6 +327,12 @@ impl Adapter for Codex {
 
     fn translate(&mut self, line: &Value) -> Vec<Record> {
         match line["type"].as_str() {
+            Some("thread.started") => {
+                if self.session_id.is_none() {
+                    self.session_id = optional_string(&line["thread_id"]);
+                }
+                Vec::new()
+            }
             Some("item.started") => self.item_started(&line["item"]),
             Some("item.completed") => self.item_completed(&line["item"]),
             Some("turn.completed") => {
@@ -349,6 +373,19 @@ impl Adapter for Codex {
             return Some(Failure::Unexplained);
         }
         (!self.turn_completed).then(|| Failure::Message(NO_TURN_DETAIL.to_string()))
+    }
+
+    fn transcript(&self) -> Option<Transcript> {
+        if !self.saving {
+            return None;
+        }
+        let id = self.session_id.clone()?;
+        let file = find_file_within(&self.home.join(SESSIONS_SUBDIR), &id)?;
+        Some(Transcript {
+            id,
+            entries: vec![file],
+            emptied_dir: None,
+        })
     }
 }
 
@@ -1589,5 +1626,109 @@ mod tests {
         std::fs::write(&login, "{}").unwrap();
         let session = Session::assemble(Runtime::Codex, &[], &[], &[], &[]);
         assert_eq!(check_login(&session, &login), Ok(()));
+    }
+
+    const SAVED_ID: &str = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+    fn resumed(setup: &Setup, extra: &[&str]) -> (Codex, Result<Launch, String>) {
+        let saved = setup.root.path().join("saved/codex");
+        std::fs::create_dir_all(&saved).unwrap();
+        let file = saved.join(format!("rollout-2026-10-19T03-04-46-{SAVED_ID}.jsonl"));
+        std::fs::write(&file, "{\"old\":1}\n").unwrap();
+        let mut args = vec!["--session-dir", "/saved", "--resume", SAVED_ID];
+        args.extend(extra);
+        let mut invocation = setup.invocation(false, &args);
+        invocation.resume = Some(crate::transcript::Saved {
+            id: SAVED_ID.to_string(),
+            file,
+        });
+        let _ = std::fs::remove_dir_all(home_path(&setup.tempdir()));
+        let mut codex = Codex::new();
+        let launch = codex.launch(Path::new("/opt/bin/codex"), &invocation);
+        (codex, launch)
+    }
+
+    #[test]
+    fn resume_copies_the_saved_rollout_into_the_private_home() {
+        let setup = Setup::new();
+        let (codex, launch) = resumed(&setup, &["--", "-c", "x=1"]);
+        let launch = launch.unwrap();
+        let tail: Vec<&str> = launch.argv[launch.argv.len() - 5..]
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(tail, ["-c", "x=1", "resume", SAVED_ID, "-"]);
+        let copied = home_path(&setup.tempdir()).join(format!(
+            "sessions/rollout-2026-10-19T03-04-46-{SAVED_ID}.jsonl"
+        ));
+        assert_eq!(std::fs::read_to_string(&copied).unwrap(), "{\"old\":1}\n");
+        assert_eq!(
+            codex.transcript(),
+            Some(Transcript {
+                id: SAVED_ID.to_string(),
+                entries: vec![copied],
+                emptied_dir: None,
+            })
+        );
+    }
+
+    #[test]
+    fn dry_run_resume_copies_nothing() {
+        let setup = Setup::new();
+        let (_, launch) = resumed(&setup, &["--dry-run"]);
+        let launch = launch.unwrap();
+        assert!(launch.private_dirs.is_empty());
+        assert_eq!(
+            launch.argv[launch.argv.len() - 3..],
+            ["resume", SAVED_ID, "-"]
+        );
+        assert!(!home_path(&setup.tempdir()).exists());
+    }
+
+    #[test]
+    fn transcript_of_a_new_session_follows_the_thread_id() {
+        let setup = Setup::new();
+        let mut codex = Codex::new();
+        codex
+            .launch(
+                Path::new("/opt/bin/codex"),
+                &setup.invocation(false, &["--session-dir", "/saved"]),
+            )
+            .unwrap();
+        assert_eq!(codex.transcript(), None);
+        translate(
+            &mut codex,
+            json!({"type":"thread.started","thread_id":SAVED_ID}),
+        );
+        assert_eq!(codex.transcript(), None);
+        let file = home_path(&setup.tempdir()).join(format!(
+            "sessions/2026/10/19/rollout-2026-10-19T03-04-46-{SAVED_ID}.jsonl"
+        ));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{}\n").unwrap();
+        assert_eq!(
+            codex.transcript(),
+            Some(Transcript {
+                id: SAVED_ID.to_string(),
+                entries: vec![file.clone()],
+                emptied_dir: None,
+            })
+        );
+        translate(
+            &mut codex,
+            json!({"type":"thread.started","thread_id":"0199-other"}),
+        );
+        assert_eq!(codex.transcript().unwrap().id, SAVED_ID);
+
+        let mut unsaved = Codex::new();
+        let _ = std::fs::remove_dir_all(home_path(&setup.tempdir()));
+        unsaved
+            .launch(Path::new("/opt/bin/codex"), &setup.invocation(false, &[]))
+            .unwrap();
+        translate(
+            &mut unsaved,
+            json!({"type":"thread.started","thread_id":SAVED_ID}),
+        );
+        assert_eq!(unsaved.transcript(), None);
     }
 }
