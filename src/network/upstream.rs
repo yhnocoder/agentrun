@@ -4,6 +4,7 @@ use std::net::Ipv4Addr;
 
 use super::NO_PROXY_VARIABLES;
 use super::address::{HTTP_DEFAULT_PORT, in_cidr};
+use crate::encoding::base64;
 
 const SECURE_UPSTREAM_VARIABLES: [&str; 4] =
     ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
@@ -193,32 +194,6 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let group = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let number = u32::from(group[0]) << 16 | u32::from(group[1]) << 8 | u32::from(group[2]);
-        encoded.push(TABLE[(number >> 18) as usize & 63] as char);
-        encoded.push(TABLE[(number >> 12) as usize & 63] as char);
-        encoded.push(if chunk.len() > 1 {
-            TABLE[(number >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        encoded.push(if chunk.len() > 2 {
-            TABLE[number as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,10 +280,6 @@ mod tests {
         ] {
             assert_eq!(ProxyAddress::parse(value), None, "{value}");
         }
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"a"), "YQ==");
-        assert_eq!(base64(b"ab"), "YWI=");
-        assert_eq!(base64(b"abc"), "YWJj");
         assert_eq!(percent_decode("a%20b%zz%4"), "a b%zz%4");
     }
 

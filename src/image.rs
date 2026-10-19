@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 
 const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const COPY_PREFIX: &str = "image-";
-const BASE64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_SIGNATURE: [u8; 3] = [0xff, 0xd8, 0xff];
 const JPEG_LS_MARKER: u8 = 0xf7;
@@ -158,40 +156,9 @@ pub fn write_copies(
     Ok(copies)
 }
 
-pub fn base64(bytes: &[u8]) -> String {
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let triple = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let bits = u32::from_be_bytes([0, triple[0], triple[1], triple[2]]);
-        for position in 0..4 {
-            if position <= chunk.len() {
-                let index = (bits >> (18 - 6 * position)) & 0x3f;
-                encoded.push(BASE64_ALPHABET[index as usize] as char);
-            } else {
-                encoded.push('=');
-            }
-        }
-    }
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64_matches_the_standard_alphabet_with_padding() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64(&[0xff, 0xfe, 0xfd, 0x00]), "//79AA==");
-    }
 
     fn png(chunks: &[&[u8; 4]]) -> Vec<u8> {
         let mut bytes = PNG_SIGNATURE.to_vec();

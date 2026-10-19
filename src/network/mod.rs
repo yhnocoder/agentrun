@@ -13,7 +13,7 @@ pub use rule::HostRule;
 
 pub(crate) use address::in_cidr;
 pub(crate) use proxy::FilterProxy;
-pub(crate) use rule::{Policy, check_usage};
+pub(crate) use rule::{Policy, SERVICE_PORT, check_usage};
 pub(crate) use upstream::ProxyAddress;
 
 pub(crate) const SOCKET_FILE: &str = "proxy.sock";
