@@ -67,11 +67,11 @@ sudo dnf install bubblewrap socat</code></pre>
 <h2 id="doctor">检查环境</h2>
 <p>运行 <code>agentrun doctor</code>，后面写上你要用的运行时：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code
-<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude 2.1.303
 <span class="dim">[ok]  </span> claude-code  login       oauth_token
 <span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
 <span class="dim">[skip]</span> claude-code  network     --network none</div>
-<p>每一行是一项检查：运行时能不能找到，能不能登录，沙箱能不能启动，网络限制能不能执行。<code>sandbox</code> 一行说明 agentrun 在一个临时目录里试过了：沙箱里的命令能写这个目录，写不了目录以外的地方。全部是 <code>ok</code> 或 <code>skip</code> 就可以继续。出现 <code>fail</code> 时，这一行会写明原因和改法，也可以查<a href="guide.html#faq">常见问题</a>。</p>
+<p>每一行是一项检查：运行时能不能找到、版本是否满足上面表里的要求，能不能登录，沙箱能不能启动，网络限制能不能执行。<code>sandbox</code> 一行说明 agentrun 在一个临时目录里试过了：沙箱里的命令能写这个目录，写不了目录以外的地方。全部是 <code>ok</code> 或 <code>skip</code> 就可以继续。出现 <code>fail</code> 时，这一行会写明原因和改法，也可以查<a href="guide.html#faq">常见问题</a>。</p>
 
 <h2 id="first-run">运行第一个任务</h2>
 <p>新建一个目录，放一个小文件：</p>

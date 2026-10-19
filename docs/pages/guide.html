@@ -217,10 +217,19 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <p>agentrun 在 PATH 里找不到运行时。确认运行时已经安装；它装在 PATH 之外时，用 <code>--path</code> 把它所在的目录加进来：</p>
 <pre><code class="language-bash">agentrun codex --path ~/tools/codex/bin --prompt "..."</code></pre>
 
+<h3><code>requires &gt;= X.Y.Z</code></h3>
+<p>doctor 找到的运行时版本低于 agentrun 要求的最低版本。<code>executable</code> 一行写出路径、找到的版本和要求的版本：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code --path /opt/claude-old/bin
+<span class="warn">[fail]</span> claude-code  executable  /opt/claude-old/bin/claude 2.1.287, requires &gt;= 2.1.288
+<span class="dim">[ok]  </span> claude-code  login       oauth_token
+<span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
+<span class="dim">[skip]</span> claude-code  network     --network none</div>
+<p>升级这个路径上的运行时，或者用 <code>--path</code> 指向新版本所在的目录。各运行时的最低版本见<a href="quickstart.html#runtimes">准备运行时</a>的表。</p>
+
 <h3><code>not logged in. Run claude login</code></h3>
 <p>doctor 发现 claude-code 没有登录。在本机运行 <code>claude login</code>；在容器里传入 <code>CLAUDE_CODE_OAUTH_TOKEN</code>：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code
-<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude 2.1.303
 <span class="warn">[fail]</span> claude-code  login       not logged in. Run claude login, or set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token)
 <span class="warn">[fail]</span> claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. <span class="dim">（后略）</span>
 <span class="dim">[skip]</span> claude-code  network     --network none</div>
@@ -234,7 +243,7 @@ agentrun: codex login file /root/.codex/auth.json not found. Run codex login, or
 <h3>pi 用的模型和你想的不一样</h3>
 <p>pi 遇到拼错的模型名会照样运行，没有设置默认模型时还会改用环境里其他可用的服务商。doctor 的 <code>login</code> 一行会报出这两种情况：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor pi --model deepseek/deepseek-flsh
-<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi
+<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi 1.2.0
 <span class="warn">[fail]</span> pi           login       pi does not know deepseek/deepseek-flsh (from --model): Warning: Model "deepseek-flsh" not found for provider "deepseek". Using custom model id.
 <span class="dim">[ok]  </span> pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 <span class="dim">[skip]</span> pi           network     --network none</div>

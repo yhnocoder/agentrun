@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, PrivateDir, detail_head, reject_max_turns};
+use super::{
+    Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_max_turns,
+};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, string};
 use crate::network::{HostRule, proxy_environment};
@@ -14,6 +16,7 @@ use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{BWRAP_PREFIX, start_failure};
 use crate::session::{CODEX_AUTH_VARIABLE, Session, home_placeholder};
 
+pub(crate) const MIN_VERSION: Version = Version(0, 159, 2);
 pub(crate) const HOME_VARIABLE: &str = "CODEX_HOME";
 pub(crate) const HOME_SUBDIR: &str = ".codex";
 const HOME_SUFFIX: &str = "-codex";
