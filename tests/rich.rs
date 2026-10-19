@@ -280,10 +280,10 @@ fn scroll_lines_match_text_and_panel_stays_at_bottom() {
 
     session.push(MAIN_TEXT);
     assert_eq!(session.expected.last().unwrap(), "[main] text done");
-    session.push(r#"{"record":"tool_end","id":"t1","denied":false}"#);
+    session.push(r#"{"record":"tool_end","id":"t1","denied":false,"error":true}"#);
     assert_eq!(
         session.expected.last().unwrap(),
-        "[main] tool Bash: cargo check"
+        "[main] tool Bash: cargo check (error)"
     );
     let panel = session.panel();
     assert!(!panel[3].contains("Bash: cargo check"), "{}", panel[3]);

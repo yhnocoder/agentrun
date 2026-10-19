@@ -32,12 +32,18 @@ impl TextFormatter {
             )],
             Body::ToolStart(_) => Vec::new(),
             Body::Tool(tool) => {
-                let denied = if tool.denied { " (denied)" } else { "" };
+                let outcome = if tool.denied {
+                    " (denied)"
+                } else if tool.error == Some(true) {
+                    " (error)"
+                } else {
+                    ""
+                };
                 vec![format!(
                     "[{}] tool {}{}",
                     self.label(tool.parent.as_deref()),
                     first_line(&tool.summary),
-                    denied
+                    outcome
                 )]
             }
             Body::Text(text) => vec![format!(
@@ -308,9 +314,27 @@ mod tests {
                 name: "Bash".to_string(),
                 summary: "Bash: cat ~/.ssh/id_rsa".to_string(),
                 denied: true,
+                error: Some(false),
             }))),
             vec!["[main] tool Bash: cat ~/.ssh/id_rsa (denied)"]
         );
+        for (error, line) in [
+            (Some(true), "[main] tool Bash: cargo test (error)"),
+            (Some(false), "[main] tool Bash: cargo test"),
+            (None, "[main] tool Bash: cargo test"),
+        ] {
+            assert_eq!(
+                text.lines(&event(Body::Tool(Tool {
+                    id: "t2".to_string(),
+                    parent: None,
+                    name: "Bash".to_string(),
+                    summary: "Bash: cargo test".to_string(),
+                    denied: false,
+                    error,
+                }))),
+                vec![line]
+            );
+        }
     }
 
     #[test]
@@ -354,6 +378,7 @@ mod tests {
                 name: "Read".to_string(),
                 summary: "Read: tests/parse.rs".to_string(),
                 denied: false,
+                error: Some(false),
             }))),
             vec!["[general-purpose#2] tool Read: tests/parse.rs"]
         );
