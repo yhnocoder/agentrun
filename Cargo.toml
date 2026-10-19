@@ -2,7 +2,7 @@
 name = "agentrun"
 version = "1.0.1"
 edition = "2024"
-description = "Run claude-code, codex and pi in a sandbox with one command, on macOS, Linux, cloud containers and docker."
+description = "Run claude-code, codex, pi and dsh in a sandbox with one command, on macOS, Linux, cloud containers and docker."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/yhnocoder/agentrun"
 homepage = "https://yhnocoder.github.io/agentrun/"

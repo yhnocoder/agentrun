@@ -80,6 +80,12 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
             if runtime == Runtime::Codex {
                 invocation.session.codex_auth = Some("{}".into());
             }
+            if runtime == Runtime::Dsh {
+                invocation
+                    .session
+                    .env
+                    .insert("DEEPSEEK_API_KEY".into(), "replay".into());
+            }
             let launch = adapter
                 .launch(Path::new(runtime.executable()), &invocation)
                 .unwrap();

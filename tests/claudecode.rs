@@ -673,9 +673,11 @@ fn deny_read_lists_the_defaults_then_the_given_paths() {
             ".claude/.credentials.json",
             ".codex/auth.json",
             ".pi/agent/auth.json",
+            ".dsh/.env",
             ".claude/projects",
             ".codex/sessions",
             ".codex/history.jsonl",
+            ".dsh/sessions",
         ])
         .map(|entry| home.join(entry).to_string_lossy().into_owned())
         .collect();

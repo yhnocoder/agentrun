@@ -29,8 +29,8 @@ use crate::transcript::{self, Saved};
 use execute::execute;
 use signal::SharedWriter;
 
-pub(crate) use execute::read_lines;
 pub use execute::{Exit, conclude, stderr_tail, translate_line};
+pub(crate) use execute::{TEMP_ENV_VARS, read_lines};
 pub use signal::Signals;
 
 const DRY_RUN_TEMPDIR: &str = "<tempdir>";

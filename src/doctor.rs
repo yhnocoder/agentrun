@@ -21,7 +21,8 @@ use crate::network::{
 };
 use crate::output::{Network, NetworkReason, SandboxKind, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
-use crate::run::{Caller, create_tempdir, read_lines, shell_quote};
+use crate::run::{Caller, TEMP_ENV_VARS, create_tempdir, read_lines, shell_quote};
+use crate::runtime::dsh::{self, Dsh};
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{self, Adapter, Invocation, Version, codex};
 use crate::sandbox::{
@@ -46,6 +47,8 @@ const OUTSIDE_FILE: &str = "outside.txt";
 const UNREADABLE_FILE: &str = "unreadable.txt";
 const UNREADABLE_TEXT: &str = "unreadable";
 const CODEX_HOME_DIR: &str = "codex-home";
+const DSH_LOGIN_DIR: &str = "dsh-login";
+const DSH_LOGIN_EFFORT: &str = "off";
 const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
 const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
 const SERVICE_PORT: u16 = 443;
@@ -192,13 +195,14 @@ pub fn run(caller: Caller, args: DoctorArgs, timeout: Duration) -> u8 {
         }
     };
     let codex_home = tempdir.path().join(CODEX_HOME_DIR);
-    if let Some(codex) = plan
-        .targets
-        .iter()
-        .find(|target| target.runtime == Runtime::Codex)
-    {
-        let login = codex::login_file(&codex.session, &plan.cwd);
-        if let Err(detail) = codex::create_home(&codex_home, &login) {
+    for target in &plan.targets {
+        let created = match target.runtime {
+            Runtime::Codex => {
+                codex::create_home(&codex_home, &codex::login_file(&target.session, &plan.cwd))
+            }
+            Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => Ok(()),
+        };
+        if let Err(detail) = created {
             return usage_error(&caller, &detail);
         }
     }
@@ -510,6 +514,7 @@ impl Doctor {
                     Runtime::ClaudeCode => self.claude_code_login(target, executable),
                     Runtime::Codex => self.codex_login(target, executable),
                     Runtime::Pi => self.pi_login(target, executable),
+                    Runtime::Dsh => self.dsh_login(target, executable),
                 };
                 self.record_result(runtime, Check::Login, result);
             }
@@ -532,7 +537,7 @@ impl Doctor {
         ];
         let env = match target.runtime {
             Runtime::Codex => self.codex_env(),
-            Runtime::ClaudeCode | Runtime::Pi => Vec::new(),
+            Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => Vec::new(),
         };
         let finished = self
             .execute(
@@ -696,6 +701,62 @@ impl Doctor {
                 .stderr_line()
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("pi {} before choosing a model", finished.exit_text))),
+        }
+    }
+
+    fn dsh_login(&self, target: &Target, executable: &Path) -> Result<String, String> {
+        let tempdir = self.tempdir.join(DSH_LOGIN_DIR);
+        std::fs::create_dir_all(&tempdir)
+            .map_err(|error| format!("cannot create {}: {error}", tempdir.display()))?;
+        let args = RunArgs {
+            effort: Some(DSH_LOGIN_EFFORT.to_string()),
+            ..self.run_args()
+        };
+        let invocation = Invocation {
+            tempdir,
+            ..Invocation::new(
+                Runtime::Dsh,
+                args,
+                self.cwd.clone(),
+                PROMPT.to_string(),
+                target.session.clone(),
+            )
+        };
+        let mut launch = Dsh::new().launch(executable, &invocation)?;
+        launch.env.extend(TEMP_ENV_VARS.iter().map(|key| {
+            (
+                OsString::from(key),
+                invocation.tempdir.clone().into_os_string(),
+            )
+        }));
+        let outcome = |line: &str| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| dsh::login_outcome(&value))
+        };
+        let finished = self.execute(
+            target.runtime,
+            Check::Login,
+            Run {
+                argv: &launch.argv,
+                env: &launch.env,
+                stdin: &launch.stdin,
+                session: &target.session,
+            },
+            |line| outcome(line).is_some(),
+        )?;
+        match finished.stdout.iter().find_map(|line| outcome(line)) {
+            Some(Ok(())) => Ok(match &self.args.model {
+                Some(model) => format!("{} ({model})", dsh::KEY_VARIABLE),
+                None => dsh::KEY_VARIABLE.to_string(),
+            }),
+            Some(Err(detail)) => Err(detail),
+            None => Err(finished
+                .stderr_line()
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    format!("dsh {} before the first model reply", finished.exit_text)
+                })),
         }
     }
 

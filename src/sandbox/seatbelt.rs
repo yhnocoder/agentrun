@@ -109,7 +109,7 @@ pub(super) fn probe(
                 description: "codex".to_string(),
             });
         }
-        Runtime::ClaudeCode | Runtime::Pi => {}
+        Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => {}
     }
     let unavailable = |reason: String| Unavailable {
         reason,

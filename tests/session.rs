@@ -163,9 +163,11 @@ fn dry_run_lists_variable_names_and_skips_credentials() {
         .chain(&[
             ".claude/.credentials.json",
             ".codex/auth.json",
+            ".dsh/.env",
             ".claude/projects",
             ".codex/sessions",
             ".codex/history.jsonl",
+            ".dsh/sessions",
         ])
         .map(|entry| format!("{home_str}/{entry}"))
         .collect();

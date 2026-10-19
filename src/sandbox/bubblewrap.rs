@@ -109,7 +109,7 @@ pub(super) fn probe(
 ) -> Result<Available, Unavailable> {
     match runtime {
         Runtime::Codex => return probe_for_codex(session, cwd, checking),
-        Runtime::ClaudeCode | Runtime::Pi => {}
+        Runtime::ClaudeCode | Runtime::Pi | Runtime::Dsh => {}
     }
     let bwrap = find_executable("bwrap", &session.path, cwd)
         .ok_or_else(|| missing("bwrap", INSTALL_HINT))?;
