@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use httparse::Status;
+
 use super::address::{Target, is_private, target_text};
 use super::http::handle_http;
 use super::rule::{Allowance, Policy};
@@ -365,12 +367,13 @@ fn tunnel_through(
         HeadError::Read(error) => upstream_failure(error),
     })?;
     let _ = stream.set_read_timeout(None);
-    let status = String::from_utf8_lossy(&head);
-    let code = status
-        .split(' ')
-        .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or(INVALID_UPSTREAM_RESPONSE)?;
+    let mut slots = header_slots(&head);
+    let mut response = httparse::Response::new(&mut slots);
+    let code = match response.parse(&head) {
+        Ok(Status::Complete(_)) => response.code,
+        _ => None,
+    }
+    .ok_or(INVALID_UPSTREAM_RESPONSE)?;
     if (200..300).contains(&code) {
         Ok((stream, leftover))
     } else {
@@ -465,6 +468,10 @@ pub(super) fn read_head(
         };
         buffer.extend_from_slice(&chunk[..count]);
     }
+}
+
+pub(super) fn header_slots(head: &[u8]) -> Vec<httparse::Header<'_>> {
+    vec![httparse::EMPTY_HEADER; head.iter().filter(|byte| **byte == b'\n').count()]
 }
 
 fn find_blank_line(buffer: &[u8]) -> Option<usize> {

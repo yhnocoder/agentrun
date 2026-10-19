@@ -5,6 +5,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use toml_writer::{ToTomlValue, TomlStringBuilder};
 
 use super::{
     Adapter, Failure, Invocation, Launch, PrivateDir, Version, detail_head, reject_limits,
@@ -541,20 +542,7 @@ fn domains(allow_hosts: &[HostRule]) -> String {
 }
 
 fn toml_string(text: &str) -> String {
-    let mut quoted = String::with_capacity(text.len() + 2);
-    quoted.push('"');
-    for c in text.chars() {
-        match c {
-            '\\' => quoted.push_str("\\\\"),
-            '"' => quoted.push_str("\\\""),
-            c if (c as u32) < 0x20 || c == '\x7f' => {
-                quoted.push_str(&format!("\\u{:04X}", c as u32));
-            }
-            c => quoted.push(c),
-        }
-    }
-    quoted.push('"');
-    quoted
+    TomlStringBuilder::new(text).as_basic().to_toml_value()
 }
 
 fn item_error(item: &Value) -> Option<bool> {
@@ -1199,7 +1187,7 @@ mod tests {
     fn toml_strings_escape_quotes_backslashes_and_control_characters() {
         assert_eq!(toml_string("plain"), "\"plain\"");
         assert_eq!(toml_string("a\\b\"c"), "\"a\\\\b\\\"c\"");
-        assert_eq!(toml_string("x\ny\t\x7f"), "\"x\\u000Ay\\u0009\\u007F\"");
+        assert_eq!(toml_string("x\ny\t\x7f"), "\"x\\ny\\t\\u007F\"");
         assert_eq!(toml_string("路径/中文"), "\"路径/中文\"");
     }
 

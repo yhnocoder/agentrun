@@ -1,14 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Serialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::{Adapter, Failure, Invocation, Launch, Version};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
-use crate::encoding::base64;
 use crate::image::Image;
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
@@ -40,7 +41,6 @@ const HANDBACK_TOOL: &str = "SubagentHandback";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
 const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
-const RANDOM_SOURCE: &str = "/dev/urandom";
 const TOOL_USE_ERROR_TAG: &str = "<tool_use_error>";
 const SETTINGS_DENIALS: [&str; 2] = [
     "denied by your permission settings",
@@ -358,7 +358,7 @@ impl Adapter for ClaudeCode {
         self.no_subagents = invocation.args.no_subagents;
         self.session_id = match &invocation.resume {
             Some(saved) => saved.id.clone(),
-            None => session_id()?,
+            None => Uuid::new_v4().to_string(),
         };
         self.saving = match (&invocation.args.session_dir, &invocation.resume) {
             (None, _) => Saving::Off,
@@ -676,7 +676,7 @@ fn prompt_line(prompt: &str, images: &[Image]) -> Vec<u8> {
                 source: ImageSource {
                     kind: "base64",
                     media_type: image.kind.media_type(),
-                    data: base64(&image.bytes),
+                    data: STANDARD.encode(&image.bytes),
                 },
             })
             .collect();
@@ -693,28 +693,6 @@ fn prompt_line(prompt: &str, images: &[Image]) -> Vec<u8> {
     .expect("prompt serializes");
     line.push(b'\n');
     line
-}
-
-fn session_id() -> Result<String, String> {
-    let mut bytes = [0u8; 16];
-    std::fs::File::open(RANDOM_SOURCE)
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(|error| format!("cannot read {RANDOM_SOURCE} for the session id: {error}"))?;
-    Ok(format_uuid_v4(bytes))
-}
-
-fn format_uuid_v4(mut bytes: [u8; 16]) -> String {
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
 }
 
 fn tool_summary(name: &str, input: &Value, cwd: &Path) -> String {
@@ -1137,25 +1115,6 @@ mod tests {
                 "--x",
             ]
         );
-    }
-
-    #[test]
-    fn session_id_is_a_lowercase_uuid_v4() {
-        let id = session_id().unwrap();
-        let parts: Vec<&str> = id.split('-').collect();
-        assert_eq!(
-            parts.iter().map(|part| part.len()).collect::<Vec<_>>(),
-            [8, 4, 4, 4, 12]
-        );
-        assert!(id.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
-        assert!(id.chars().all(|c| !c.is_ascii_uppercase()));
-        assert_eq!(&id[14..15], "4");
-        assert!("89ab".contains(&id[19..20]));
-        assert_eq!(
-            format_uuid_v4([0xff; 16]),
-            "ffffffff-ffff-4fff-bfff-ffffffffffff"
-        );
-        assert_ne!(session_id().unwrap(), id);
     }
 
     #[test]

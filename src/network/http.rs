@@ -5,10 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use httparse::Status;
+
 use super::address::{HTTP_DEFAULT_PORT, Target, authority_text, parse_host_port, target_text};
 use super::proxy::{
     Client, Decision, Route, Server, UPSTREAM_IDLE_TIMEOUT, admit, connect, copy_until_idle,
-    read_head, relay, write_all,
+    header_slots, read_head, relay, write_all,
 };
 use crate::output::NetworkReason;
 
@@ -19,16 +21,16 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
         return;
     };
     let _ = client.set_read_timeout(None);
-    let text = String::from_utf8_lossy(&head).into_owned();
-    let mut lines = text.split("\r\n");
-    let request_line = lines.next().unwrap_or_default();
-    let headers: Vec<&str> = lines.filter(|line| !line.is_empty()).collect();
-    let mut parts = request_line.split(' ');
-    let (Some(method), Some(target), Some(version)) = (parts.next(), parts.next(), parts.next())
+    let mut slots = header_slots(&head);
+    let mut request = httparse::Request::new(&mut slots);
+    let parsed = request.parse(&head);
+    let (Ok(Status::Complete(_)), Some(method), Some(target), Some(version)) =
+        (parsed, request.method, request.path, request.version)
     else {
         respond(&mut client, "400 Bad Request", "");
         return;
     };
+    let headers = request.headers;
     if method.eq_ignore_ascii_case("CONNECT") {
         let Some(target) = parse_host_port(target, None) else {
             respond(&mut client, "400 Bad Request", "");
@@ -75,11 +77,7 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
         respond(&mut client, "400 Bad Request", "");
         return;
     };
-    if !version.starts_with("HTTP/1.") {
-        respond(&mut client, "400 Bad Request", "");
-        return;
-    }
-    let body_length = match request_body_length(&headers) {
+    let body_length = match request_body_length(headers) {
         Ok(length) => length,
         Err(status) => {
             respond(&mut client, status, "");
@@ -106,12 +104,19 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
         Route::Upstream(_) => format!("http://{authority}{path}"),
         Route::Direct(_) => path,
     };
-    let mut forwarded = format!("{method} {request_target} {version}\r\nHost: {authority}\r\n");
-    for header in &headers {
-        let proxy_header = header.len() >= 6 && header[..6].eq_ignore_ascii_case("proxy-");
-        if !proxy_header && !header_is(header, "connection") && !header_is(header, "host") {
-            forwarded.push_str(header);
-            forwarded.push_str("\r\n");
+    let mut forwarded =
+        format!("{method} {request_target} HTTP/1.{version}\r\nHost: {authority}\r\n");
+    for header in headers.iter() {
+        let name = header.name;
+        let proxy_header = name.len() >= 6 && name[..6].eq_ignore_ascii_case("proxy-");
+        if !proxy_header
+            && !name.eq_ignore_ascii_case("connection")
+            && !name.eq_ignore_ascii_case("host")
+        {
+            forwarded.push_str(&format!(
+                "{name}: {}\r\n",
+                String::from_utf8_lossy(header.value)
+            ));
         }
     }
     forwarded.push_str("Connection: close\r\n");
@@ -141,21 +146,21 @@ pub(super) fn handle_http(mut client: Client, server: &Server, first: u8) {
     }
 }
 
-fn request_body_length(headers: &[&str]) -> Result<u64, &'static str> {
+fn request_body_length(headers: &[httparse::Header]) -> Result<u64, &'static str> {
     if headers
         .iter()
-        .any(|header| header_is(header, "transfer-encoding"))
+        .any(|header| header.name.eq_ignore_ascii_case("transfer-encoding"))
     {
         return Err("411 Length Required");
     }
     let mut length = None;
     for header in headers {
-        if !header_is(header, "content-length") {
+        if !header.name.eq_ignore_ascii_case("content-length") {
             continue;
         }
-        let value = header
-            .split_once(':')
-            .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        let value = std::str::from_utf8(header.value)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
             .ok_or("400 Bad Request")?;
         if length.is_some_and(|seen| seen != value) {
             return Err("400 Bad Request");
@@ -234,12 +239,6 @@ fn denied_body(target: &Target, reason: NetworkReason) -> String {
         target_text(target),
         reason.name()
     )
-}
-
-fn header_is(header: &str, name: &str) -> bool {
-    header
-        .split_once(':')
-        .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case(name))
 }
 
 fn split_absolute_url(target: &str) -> Option<(String, String)> {
@@ -377,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_urls_and_header_names() {
+    fn absolute_urls() {
         assert_eq!(
             split_absolute_url("http://user@Example.com:8080/a/b?c=d"),
             Some(("Example.com:8080".to_string(), "/a/b?c=d".to_string()))
@@ -392,8 +391,5 @@ mod tests {
         );
         assert_eq!(split_absolute_url("https://example.com/"), None);
         assert_eq!(split_absolute_url("/relative"), None);
-        assert!(header_is("Connection: keep-alive", "connection"));
-        assert!(header_is("connection : close", "Connection"));
-        assert!(!header_is("Proxy-Connection: close", "connection"));
     }
 }

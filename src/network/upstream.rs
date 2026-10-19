@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::net::Ipv4Addr;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
 use super::NO_PROXY_VARIABLES;
 use super::address::{HTTP_DEFAULT_PORT, in_cidr};
-use crate::encoding::base64;
 
 const SECURE_UPSTREAM_VARIABLES: [&str; 4] =
     ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
@@ -39,7 +41,7 @@ impl ProxyAddress {
         let authorization = userinfo.map(|userinfo| {
             let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
             let pair = format!("{}:{}", percent_decode(user), percent_decode(password));
-            format!("Basic {}", base64(pair.as_bytes()))
+            format!("Basic {}", STANDARD.encode(pair.as_bytes()))
         });
         Some(ProxyAddress {
             host: host.to_string(),
