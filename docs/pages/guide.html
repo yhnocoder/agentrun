@@ -57,21 +57,19 @@ agentrun claude-code &lt; task.md</code></pre>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --network custom --allow-host pypi.org --format text --prompt "依次运行 curl -sI https://pypi.org/simple/ 与 curl -sI https://example.com ，然后用一行回复：pypi=状态码 example=状态码"
 <span class="dim">[main]</span> prompt 依次运行 curl -sI https://pypi.org/simple/ 与 curl -sI https://example.com ，然后用一行回复：pypi=状态码 example=状态码
 <span class="dim">[main]</span> <span class="warn">net denied example.com:443 (not_allowed)</span>
-<span class="dim">[main]</span> tool bash: curl -sI https://pypi.org/simple/ | head -1; curl -sI https://example.com | head -1
-<span class="dim">[main]</span> tool bash: echo "--- pypi ---"; curl -sI https://pypi.org/simple/ ; echo "--- example ---"; curl -sI https://example.com
+<span class="dim">[main]</span> tool bash: curl -sI https://pypi.org/simple/ | head -5; echo "---"; curl -sI https://example.com | head -5
 <span class="dim">[main]</span> text pypi=200 example=403
-<span class="dim">[end]</span> finished 6.8s  in 7.9k  out 0.4k  cached 86%</div>
+<span class="dim">[end]</span> finished 5.1s  in 4.7k  out 0.1k  cached 59%  $0.0008</div>
 <p>被拒绝的连接显示为 <code>net denied</code> 一行，括号里是原因。解析到内网地址的主机默认也会被拒绝，需要访问时把主机名原样写进 <code>--allow-host</code>。agentrun 不支持 IPv6。规则的细节见<a href="isolation.html#network">网络</a>。</p>
 
 <h2 id="deny-read">不让 agent 读某些文件</h2>
 <p>默认情况下，agent 读不到 <code>~/.ssh</code>、<code>~/.aws</code>、<code>~/.gnupg</code>、<code>~/.config/gh</code>、<code>~/.netrc</code>、<code>~/.kube</code>、<code>~/.docker/config.json</code>、<code>~/.config/gcloud</code>、<code>~/.azure</code>，也读不到 claude-code、codex 与 pi 的登录文件（运行 pi 时 pi 自己的登录文件除外），以及 claude-code 与 codex 保存的会话记录（<code>~/.claude/projects</code>、<code>~/.codex/sessions</code>、<code>~/.codex/history.jsonl</code>）。还有别的文件不想让 agent 看到时，用 <code>--deny-read</code> 加上，可以写多次，文件和目录都可以：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --deny-read .env --format text --prompt "依次运行 cat ~/.aws/config 与 cat .env，然后用一行回复：每个文件是否读到了内容"
 <span class="dim">[main]</span> prompt 依次运行 cat ~/.aws/config 与 cat .env，然后用一行回复：每个文件是否读到了内容
-<span class="dim">[main]</span> text 我会运行这些命令。
 <span class="dim">[main]</span> tool bash: cat ~/.aws/config
 <span class="dim">[main]</span> tool bash: cat .env
-<span class="dim">[main]</span> text `~/.aws/config` 不存在，所以没有读到内容；`.env` 因权限不足（Permission denied）没有读到内容：两个文件都没有读到内容。
-<span class="dim">[end]</span> finished 3.1s  in 4.6k  out 0.1k  cached 92%</div>
+<span class="dim">[main]</span> text 两个文件都没有读到内容：`~/.aws/config` 不存在（No such file or directory），`.env` 无读取权限（Permission denied）。
+<span class="dim">[end]</span> finished 3.9s  in 4.6k  out 0.1k  cached 92%  $0.0003</div>
 <p>agent 看到的目录是空的，文件读取报错，运行照常继续。这次实际挡住了哪些路径，见 jsonl 输出里 <code>start</code> 事件的 <code>deny_read</code>，或者加 <code>--dry-run</code> 看 <code>deny read:</code> 一行。</p>
 <p>agent 确实需要读默认列表里的某个路径时，加 <code>--no-default-deny-read</code> 去掉整个默认列表，再用 <code>--deny-read</code> 把其余路径加回来。<code>--deny-read</code> 不能写工作目录或它的上层目录。</p>
 <p>这项限制靠沙箱执行。沙箱没有运行时，只有 claude-code 的读文件与搜索工具仍然受限制，命令、codex 与 pi 都能读到这些文件，见<a href="isolation.html#read">读取限制</a>。</p>
@@ -97,7 +95,8 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <span class="dim">[main]</span> prompt 运行 sleep 30，然后回复 done
 <span class="dim">[main]</span> tool Bash: sleep 30
 <span class="dim">[main]</span> tool Bash: sleep 30
-<span class="dim">[end]</span> timeout 5.5s  in 31.7k  out 24  cached 69%
+<span class="dim">[main]</span> text `sleep 30` 已在后台运行,结束时我会收到通知。等它跑完再回复 done。
+<span class="dim">[end]</span> timeout 6.9s  in 52.6k  out 0.3k  cached 88%  $0.0281
 <span class="prompt">$</span> echo $?
 3</div>
 <p>按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
@@ -141,6 +140,11 @@ agentrun: sandbox is not available: bwrap cannot start: Creating new namespace f
 <p>两种情况不会让结果变成失败：agent 的某次工具调用被拒绝，以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
 jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code></pre>
+<p>要记录每次运行的花费，从 <code>end</code> 事件读 <code>usage.cost_usd</code>，单位是美元：</p>
+<div class="term"><span class="prompt">$</span> agentrun pi --model deepseek/deepseek-flash --format jsonl --prompt "回复 OK" &gt; run.jsonl
+<span class="prompt">$</span> jq -c 'select(.type == "end") | {status, cost_usd: .usage.cost_usd}' run.jsonl
+{"status":"finished","cost_usd":0.000072288}</div>
+<p>codex 不报告费用，<code>cost_usd</code> 为 null；claude-code 没完成一轮就被中断时也为 null。金额由运行时按单价表计算，用订阅登录时它不是实际扣费。按模型拆分的金额与各运行时的差别见<a href="events.html#cost">费用</a>。</p>
 
 <h2 id="parallel">同时运行多个 agent</h2>
 <p>需要几个 agent 同时处理不同的任务时，在后台启动多个 agentrun，每个用自己的 <code>--cwd</code>，输出写到各自的文件，再用 <code>wait</code> 等它们都结束：</p>
@@ -150,12 +154,12 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <span class="prompt">$</span> cat api.log web.log
 <span class="dim">[main]</span> prompt 创建 hello.txt，内容为 api
 <span class="dim">[main]</span> tool Write: hello.txt
-<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`，内容为 `api`，末尾带一个换行符。
-<span class="dim">[end]</span> finished 5.6s  in 27.8k  out 0.1k  cached 82%
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/api/hello.txt`,内容为 `api`,末尾带一个换行符。
+<span class="dim">[end]</span> finished 6.6s  in 34.1k  out 0.1k  cached 86%  $0.0189
 <span class="dim">[main]</span> prompt 创建 hello.txt，内容为 web
 <span class="dim">[main]</span> tool Write: hello.txt
-<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`，内容为 `web`（末尾带一个换行）。
-<span class="dim">[end]</span> finished 5.0s  in 27.8k  out 0.1k  cached 82%</div>
+<span class="dim">[main]</span> text 已创建 `/tmp/demo/web/hello.txt`,内容为 `web`,末尾带一个换行。
+<span class="dim">[end]</span> finished 6.3s  in 34.1k  out 0.1k  cached 86%  $0.0188</div>
 <p>每个运行有自己的临时目录、网络代理和 <code>network</code> 事件，结束或被中断时只停止自己启动的进程，所以每个日志可以单独按<a href="#ci">上一节</a>的方法判断成败。运行时可以不同，例如一个用 claude-code、一个用 pi。</p>
 <p>同时运行时注意三点：</p>
 <ul>
@@ -206,8 +210,8 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "用 Write 工具把 hello 写到 /tmp/outside.txt"
 <span class="dim">[main]</span> prompt 用 Write 工具把 hello 写到 /tmp/outside.txt
 <span class="dim">[main]</span> tool Write: /tmp/outside.txt <span class="warn">(denied)</span>
-<span class="dim">[main]</span> text 没写成。Write 工具往 `/tmp/outside.txt` 写入时被拒绝了。当前是 don't ask 模式，这个路径在工作目录 `/tmp/demo` 之外，没有放行规则。
-<span class="dim">[end]</span> finished 7.7s  in 32.7k  out 0.3k  cached 85%</div>
+<span class="dim">[main]</span> text 我没能写入 `/tmp/outside.txt`。Write 工具的调用被拒绝了,原因是当前会话处于 "don't ask" 模式,不允许写工作目录之外的路径。
+<span class="dim">[end]</span> finished 8.9s  in 35.3k  out 0.4k  cached 83%  $0.0263</div>
 <p>三种情况下这些限制会变化：</p>
 <ul>
   <li><code>--sandbox relax</code>：沙箱能启动就用，启动不了就不用沙箱照常运行。</li>
@@ -226,10 +230,19 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
 <p>agentrun 在 PATH 里找不到运行时。确认运行时已经安装；它装在 PATH 之外时，用 <code>--path</code> 把它所在的目录加进来：</p>
 <pre><code class="language-bash">agentrun codex --path ~/tools/codex/bin --prompt "..."</code></pre>
 
+<h3><code>requires &gt;= X.Y.Z</code></h3>
+<p>doctor 找到的运行时版本低于 agentrun 要求的最低版本。<code>executable</code> 一行写出路径、找到的版本和要求的版本：</p>
+<div class="term"><span class="prompt">$</span> agentrun doctor claude-code --path /opt/claude-old/bin
+<span class="warn">[fail]</span> claude-code  executable  /opt/claude-old/bin/claude 2.1.287, requires &gt;= 2.1.288
+<span class="dim">[ok]  </span> claude-code  login       oauth_token
+<span class="dim">[ok]  </span> claude-code  sandbox     bubblewrap: wrote inside, blocked outside
+<span class="dim">[skip]</span> claude-code  network     --network none</div>
+<p>升级这个路径上的运行时，或者用 <code>--path</code> 指向新版本所在的目录。各运行时的最低版本见<a href="quickstart.html#runtimes">准备运行时</a>的表。</p>
+
 <h3><code>not logged in. Run claude login</code></h3>
 <p>doctor 发现 claude-code 没有登录。在本机运行 <code>claude login</code>；在容器里传入 <code>CLAUDE_CODE_OAUTH_TOKEN</code>：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor claude-code
-<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude
+<span class="dim">[ok]  </span> claude-code  executable  /opt/node22/bin/claude 2.1.303
 <span class="warn">[fail]</span> claude-code  login       not logged in. Run claude login, or set CLAUDE_CODE_OAUTH_TOKEN (from claude setup-token)
 <span class="warn">[fail]</span> claude-code  sandbox     bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. <span class="dim">（后略）</span>
 <span class="dim">[skip]</span> claude-code  network     --network none</div>
@@ -243,7 +256,7 @@ agentrun: codex login file /root/.codex/auth.json not found. Run codex login, or
 <h3>pi 用的模型和你想的不一样</h3>
 <p>pi 遇到拼错的模型名会照样运行，没有设置默认模型时还会改用环境里其他可用的服务商。doctor 的 <code>login</code> 一行会报出这两种情况：</p>
 <div class="term"><span class="prompt">$</span> agentrun doctor pi --model deepseek/deepseek-flsh
-<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi
+<span class="dim">[ok]  </span> pi           executable  /opt/node22/bin/pi 1.2.0
 <span class="warn">[fail]</span> pi           login       pi does not know deepseek/deepseek-flsh (from --model): Warning: Model "deepseek-flsh" not found for provider "deepseek". Using custom model id.
 <span class="dim">[ok]  </span> pi           sandbox     bubblewrap: wrote inside, blocked outside, pi started
 <span class="dim">[skip]</span> pi           network     --network none</div>

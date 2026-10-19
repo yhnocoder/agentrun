@@ -92,7 +92,7 @@ cat <<'LINES'
 {"type":"assistant","message":{"id":"msg_1","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo hi\necho there"}}],"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}},"parent_tool_use_id":null}
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"hi"}]},"parent_tool_use_id":null}
 {"type":"assistant","message":{"id":"msg_2","model":"claude-sonnet-5-5","content":[{"type":"text","text":"hi there"}],"usage":{"input_tokens":5,"output_tokens":6,"cache_read_input_tokens":7,"cache_creation_input_tokens":8}},"parent_tool_use_id":null}
-{"type":"result","subtype":"success","is_error":false,"result":"hi there","modelUsage":{"claude-sonnet-5-5":{"inputTokens":6,"outputTokens":8,"cacheReadInputTokens":10,"cacheCreationInputTokens":12}}}
+{"type":"result","subtype":"success","is_error":false,"result":"hi there","total_cost_usd":0.0125,"modelUsage":{"claude-sonnet-5-5":{"inputTokens":6,"outputTokens":8,"cacheReadInputTokens":10,"cacheCreationInputTokens":12,"costUSD":0.0125}}}
 LINES
 "#;
 
@@ -164,13 +164,13 @@ fn fake_claude_run_without_sandbox() {
             json!({"schema": 1, "type": "tool_start", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi"}),
             json!({"schema": 1, "type": "tool", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi", "denied": false}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "claude-sonnet-5-5", "input_tokens": 1, "output_tokens": 2,
-                "cache_read_tokens": 3, "cache_write_tokens": 4, "context_tokens": 8}),
+                "cache_read_tokens": 3, "cache_write_tokens": 4, "cost_usd": null, "context_tokens": 8}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "hi there"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "claude-sonnet-5-5", "input_tokens": 5, "output_tokens": 6,
-                "cache_read_tokens": 7, "cache_write_tokens": 8, "context_tokens": 20}),
+                "cache_read_tokens": 7, "cache_write_tokens": 8, "cost_usd": null, "context_tokens": 20}),
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
-                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12,
-                    "by_model": {"claude-sonnet-5-5": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12}}},
+                "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.0125,
+                    "by_model": {"claude-sonnet-5-5": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12, "cost_usd": 0.0125}}},
                 "result": "hi there"}),
         ]
     );

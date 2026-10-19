@@ -2,12 +2,13 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct TokenCounts {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cache_read_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
 }
 
 impl TokenCounts {
@@ -43,7 +44,12 @@ impl TokenCounts {
         self.output_tokens = add(self.output_tokens, other.output_tokens);
         self.cache_read_tokens = add(self.cache_read_tokens, other.cache_read_tokens);
         self.cache_write_tokens = add(self.cache_write_tokens, other.cache_write_tokens);
+        self.cost_usd = add(self.cost_usd, other.cost_usd);
     }
+}
+
+pub fn cost(usd: f64) -> String {
+    format!("${usd:.4}")
 }
 
 pub fn tokens(count: u64) -> String {
@@ -56,14 +62,17 @@ pub fn tokens(count: u64) -> String {
     }
 }
 
-fn add(total: Option<u64>, value: Option<u64>) -> Option<u64> {
+fn add<T: Copy + Default + std::ops::Add<Output = T>>(
+    total: Option<T>,
+    value: Option<T>,
+) -> Option<T> {
     match (total, value) {
         (None, None) => None,
-        _ => Some(total.unwrap_or(0) + value.unwrap_or(0)),
+        _ => Some(total.unwrap_or_default() + value.unwrap_or_default()),
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Usage {
     #[serde(flatten)]
     pub totals: TokenCounts,
@@ -100,6 +109,7 @@ mod tests {
             output_tokens: output,
             cache_read_tokens: read,
             cache_write_tokens: write,
+            cost_usd: None,
         }
     }
 
@@ -150,7 +160,7 @@ mod tests {
         assert!(usage.by_model.is_empty());
         assert_eq!(
             serde_json::to_string(&usage).unwrap(),
-            r#"{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}}"#
+            r#"{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"cost_usd":null,"by_model":{}}"#
         );
     }
 
@@ -163,5 +173,27 @@ mod tests {
         assert_eq!(usage.totals, counts(Some(11), None, Some(5), None));
         assert_eq!(usage.by_model["m1"], counts(Some(10), None, Some(5), None));
         assert_eq!(usage.by_model["unknown"], counts(Some(1), None, None, None));
+    }
+
+    #[test]
+    fn cost_follows_the_same_null_rule() {
+        let priced = |usd| TokenCounts {
+            cost_usd: usd,
+            ..TokenCounts::default()
+        };
+        let usage = Usage::sum([
+            (Some("m1"), &priced(Some(0.25))),
+            (Some("m1"), &priced(None)),
+            (Some("m2"), &priced(None)),
+            (Some("m3"), &priced(Some(0.0))),
+            (Some("m1"), &priced(Some(0.5))),
+        ]);
+        assert_eq!(usage.totals.cost_usd, Some(0.75));
+        assert_eq!(usage.by_model["m1"].cost_usd, Some(0.75));
+        assert_eq!(usage.by_model["m2"].cost_usd, None);
+        assert_eq!(usage.by_model["m3"].cost_usd, Some(0.0));
+        assert_eq!(cost(0.0123456), "$0.0123");
+        assert_eq!(cost(0.0), "$0.0000");
+        assert_eq!(cost(12.34567), "$12.3457");
     }
 }
