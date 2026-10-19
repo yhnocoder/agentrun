@@ -245,6 +245,41 @@ fn hidden_paths_read_as_empty_or_denied_even_inside_the_working_directory() {
 }
 
 #[test]
+fn overlapping_hidden_paths_start_in_either_order() {
+    let Some(wrapped) = Wrapped::new() else {
+        return;
+    };
+    let home = wrapped.home();
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/id"), "secret").unwrap();
+    std::fs::create_dir_all(home.join(".ssh2")).unwrap();
+    std::fs::write(home.join(".ssh2/id"), "other secret").unwrap();
+    std::os::unix::fs::symlink(home.join(".ssh/id"), home.join("id-link")).unwrap();
+    let ssh = home.join(".ssh");
+    let orders = [
+        vec![ssh.clone(), ssh.join("id"), home.join(".ssh2")],
+        vec![ssh.join("id"), home.join(".ssh2"), ssh.clone()],
+        vec![home.join("id-link"), ssh.clone(), home.join(".ssh2/id")],
+    ];
+    for order in orders {
+        let output = wrapped
+            .command_hiding(
+                "for f in \"$@\"; do if content=$(cat \"$f\" 2>/dev/null); then echo \"read: $content\"; else echo blocked; fi; done\n",
+                &[
+                    ssh.join("id").to_str().unwrap(),
+                    home.join(".ssh2/id").to_str().unwrap(),
+                ],
+                &hidden(&order),
+                None,
+            )
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{order:?} {output:?}");
+        assert_eq!(stdout(&output), "blocked\nblocked\n", "{order:?}");
+    }
+}
+
+#[test]
 fn lock_directories_can_be_created_and_removed_in_the_state_dir() {
     let Some(wrapped) = Wrapped::new() else {
         return;
