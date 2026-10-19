@@ -179,8 +179,10 @@ impl TextFormatter {
     }
 
     fn result_not_shown(&self, result: &str) -> bool {
-        content_lines(result).count() > PREVIEW_LINES
-            || self.last_main_text.as_deref().map(str::trim) != Some(result.trim())
+        let shown = self.last_main_text.as_deref().map(content_lines);
+        content_lines(result).next().is_some()
+            && (content_lines(result).count() > PREVIEW_LINES
+                || !shown.is_some_and(|shown| shown.eq(content_lines(result))))
     }
 
     fn label(&self, agent: Option<&str>) -> String {
@@ -192,7 +194,9 @@ impl TextFormatter {
 }
 
 fn content_lines(text: &str) -> impl Iterator<Item = &str> {
-    text.lines().filter(|line| !line.trim().is_empty())
+    text.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
 }
 
 fn preview(text: &str) -> Vec<String> {
@@ -603,9 +607,19 @@ mod tests {
             vec!["[end] finished 31.3s"]
         );
         assert_eq!(
+            text.lines(&with_result("\r\na\r\nb\r\n\r\nc\r\n", EndStatus::Finished)),
+            vec!["[end] finished 31.3s"]
+        );
+        assert_eq!(
             text.lines(&with_result("a\nb", EndStatus::Finished)),
             vec!["[result]", "a", "b", "[end] finished 31.3s"]
         );
+        for empty in ["", " \n\r\n "] {
+            assert_eq!(
+                text.lines(&with_result(empty, EndStatus::Failed)),
+                vec!["[end] failed 31.3s"]
+            );
+        }
         assert_eq!(
             text.lines(&with_result(
                 "\nOutput:\n\n```\nx\n```\n",

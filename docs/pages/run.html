@@ -58,7 +58,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
   </thead>
   <tbody>
     <tr><td><code>--cwd DIR</code></td><td>会话的工作目录，必须存在。agentrun 把它解析为真实路径（展开符号链接），运行时、沙箱、claude-code 的放行规则与 <code>start</code> 事件都用这个路径，理由：bwrap 不能把目录挂载到符号链接上，claude-code 按真实路径匹配放行规则。沙箱运行时，它与会话临时目录是 agent 仅有的可写目录</td><td>当前目录</td></tr>
-    <tr><td><code>--prompt TEXT</code></td><td>提示词。以 <code>-</code> 开头的值也是提示词，例如以 Markdown 列表开头的任务。<code>--prompt</code> 后面的参数是 agentrun 运行子命令的长选项（例如 <code>--dry-run</code>，或带 <code>=值</code> 的写法）时是用法错误，<code>detail</code> 为 <code>--prompt is followed by the option --dry-run; to use it as the prompt, write --prompt=--dry-run</code>；要用这样的提示词时写成 <code>--prompt=--dry-run</code>。理由：脚本里没加引号的空变量会让 <code>--prompt</code> 吞掉后面的选项，运行照常开始</td><td>无</td></tr>
+    <tr><td><code>--prompt TEXT</code></td><td>提示词。以 <code>-</code> 开头的值也是提示词，例如以 Markdown 列表开头的任务。<code>--prompt</code> 后面的参数是 agentrun 运行子命令的长选项（例如 <code>--dry-run</code>，或带 <code>=值</code> 的写法）或 <code>--</code> 时是用法错误，<code>detail</code> 为 <code>--prompt is followed by the option --dry-run; to use it as the prompt, write --prompt=--dry-run</code>；要用这样的提示词时写成 <code>--prompt=--dry-run</code>。理由：脚本里没加引号的空变量会让 <code>--prompt</code> 吞掉后面的选项，运行照常开始</td><td>无</td></tr>
     <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词。与 <code>--prompt</code> 同时给出是用法错误</td><td>无</td></tr>
     <tr><td><code>--image FILE</code></td><td>与提示词一起交给模型的图片，可重复，见<a href="#images">图片</a>。dsh 不支持，给出时是用法错误</td><td>无</td></tr>
     <tr><td>标准输入</td><td>前两项都没给时从标准输入读提示词。标准输入是终端时不等待，直接报用法错误；提示词为空也是用法错误</td><td></td></tr>

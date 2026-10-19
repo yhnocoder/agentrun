@@ -286,6 +286,10 @@ fn prompt_followed_by_an_option_is_a_usage_error() {
             &["--prompt", "--help"][..],
             "--prompt is followed by the option --help; to use it as the prompt, write --prompt=--help",
         ),
+        (
+            &["--prompt", "--", "--dry-run"][..],
+            "--prompt is followed by --; to use it as the prompt, write --prompt=--",
+        ),
     ] {
         let mut given = vec!["--model", "deepseek/deepseek-flash"];
         given.extend(args);

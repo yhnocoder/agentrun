@@ -412,6 +412,12 @@ pub(crate) fn option_after_prompt(args: &[OsString]) -> Option<String> {
             Some("--") => return None,
             Some("--prompt") => {
                 let value = rest.next().flatten()?;
+                if value == "--" {
+                    return Some(
+                        "--prompt is followed by --; to use it as the prompt, write --prompt=--"
+                            .to_string(),
+                    );
+                }
                 let given = value.split_once('=').map_or(value, |(name, _)| name);
                 if options.iter().any(|option| option == given) {
                     return Some(format!(
