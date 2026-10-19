@@ -411,17 +411,10 @@ pub(crate) fn create_tempdir(caller: &Caller, prefix: &str) -> Result<TempDir, S
 
 fn plan_lines(launch: &Launch, invocation: &Invocation) -> Vec<String> {
     let session = &invocation.session;
-    let prompt = invocation.prompt.as_str();
     let command = launch
         .argv
         .iter()
-        .map(|arg| {
-            if arg == prompt {
-                shell_quote(&format!("<prompt {} bytes>", prompt.len()))
-            } else {
-                shell_quote(arg)
-            }
-        })
+        .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()
         .join(" ");
     vec![
@@ -487,7 +480,6 @@ mod tests {
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("two words"), "'two words'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(shell_quote("<prompt 12 bytes>"), "'<prompt 12 bytes>'");
         assert_eq!(shell_quote("修复"), "'修复'");
         assert_eq!(shell_quote("$HOME"), "'$HOME'");
     }

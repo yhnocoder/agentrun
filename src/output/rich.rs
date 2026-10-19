@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::aggregate::OpenTools;
 use super::event::{Body, Event};
 use super::text::TextFormatter;
 use super::usage::{TokenCounts, tokens};
@@ -37,8 +36,15 @@ struct Panel {
     main_context: Option<u64>,
     subagents: Vec<Subagent>,
     seen_subagent: bool,
+    open_tools: Vec<OpenTool>,
     totals: TokenCounts,
     any_usage: bool,
+}
+
+struct OpenTool {
+    id: String,
+    agent: Option<String>,
+    summary: String,
 }
 
 struct Subagent {
@@ -56,6 +62,7 @@ impl Panel {
             main_context: None,
             subagents: Vec::new(),
             seen_subagent: false,
+            open_tools: Vec::new(),
             totals: TokenCounts::default(),
             any_usage: false,
         }
@@ -64,6 +71,16 @@ impl Panel {
     fn observe(&mut self, event: &Event, now: Instant) {
         match &event.body {
             Body::Start(start) => self.main_model = start.model.clone(),
+            Body::ToolStart(start) => self.open_tools.push(OpenTool {
+                id: start.id.clone(),
+                agent: start.parent.clone(),
+                summary: start.summary.clone(),
+            }),
+            Body::Tool(tool) => {
+                if let Some(index) = self.open_tools.iter().position(|open| open.id == tool.id) {
+                    self.open_tools.remove(index);
+                }
+            }
             Body::Usage(usage) => {
                 self.totals.add(&usage.counts);
                 self.any_usage = true;
@@ -95,10 +112,17 @@ impl Panel {
         }
     }
 
+    fn open_tool(&self, agent: Option<&str>) -> Option<&str> {
+        self.open_tools
+            .iter()
+            .rev()
+            .find(|open| open.agent.as_deref() == agent)
+            .map(|open| open.summary.as_str())
+    }
+
     fn lines(
         &self,
         text: &TextFormatter,
-        open_tools: &OpenTools,
         width: usize,
         height: usize,
         now: Instant,
@@ -125,8 +149,7 @@ impl Panel {
                             .unwrap_or_default()
                             .to_string(),
                         subagent.description.clone(),
-                        open_tools
-                            .get(Some(&subagent.id))
+                        self.open_tool(Some(&subagent.id))
                             .unwrap_or_default()
                             .to_string(),
                         clock(now.duration_since(subagent.started)),
@@ -143,7 +166,7 @@ impl Panel {
         let status = vec![
             "main".to_string(),
             self.main_model.clone().unwrap_or_default(),
-            open_tools.get(None).unwrap_or_default().to_string(),
+            self.open_tool(None).unwrap_or_default().to_string(),
             clock(now.duration_since(self.started)),
             self.usage(),
             context(self.main_context),
@@ -261,7 +284,6 @@ fn dim_label(line: &str, color: bool) -> String {
 pub struct Rich {
     text: TextFormatter,
     panel: Panel,
-    open_tools: OpenTools,
     size: Box<dyn Fn() -> (usize, usize)>,
     color: bool,
     drawn: usize,
@@ -280,7 +302,6 @@ impl Rich {
         Rich {
             text: TextFormatter::new(sandbox, sandbox_reason),
             panel: Panel::new(Instant::now()),
-            open_tools: OpenTools::default(),
             size,
             color,
             drawn: 0,
@@ -288,10 +309,6 @@ impl Rich {
             finished: false,
             stderr_pending: Vec::new(),
         }
-    }
-
-    pub fn set_open_tools(&mut self, open_tools: OpenTools) {
-        self.open_tools = open_tools;
     }
 
     pub fn event(&mut self, out: &mut dyn Write, event: &Event) {
@@ -354,9 +371,7 @@ impl Rich {
             bytes.push(b'\n');
         }
         let (width, height) = (self.size)();
-        let panel = self
-            .panel
-            .lines(&self.text, &self.open_tools, width, height, now, self.color);
+        let panel = self.panel.lines(&self.text, width, height, now, self.color);
         bytes.extend_from_slice(panel.join("\n").as_bytes());
         self.drawn = panel.len();
         let _ = out.write_all(&bytes);
@@ -382,7 +397,8 @@ mod tests {
     use super::*;
     use crate::cli::{NetworkMode, Runtime};
     use crate::output::event::{
-        NetworkInfo, SandboxKind, Start, SubagentEnd, SubagentStart, SubagentStatus, UsageReport,
+        NetworkInfo, SandboxKind, Start, SubagentEnd, SubagentStart, SubagentStatus, Tool,
+        ToolStart, UsageReport,
     };
 
     fn event(body: Body) -> Event {
@@ -456,30 +472,42 @@ mod tests {
             self.panel.observe(event, now);
         }
 
-        fn lines(
-            &self,
-            open_tools: &OpenTools,
-            width: usize,
-            height: usize,
-            now: Instant,
-            color: bool,
-        ) -> Vec<String> {
-            self.panel
-                .lines(&self.text, open_tools, width, height, now, color)
+        fn lines(&self, width: usize, height: usize, now: Instant, color: bool) -> Vec<String> {
+            self.panel.lines(&self.text, width, height, now, color)
         }
-    }
 
-    fn no_tools() -> OpenTools {
-        OpenTools::default()
-    }
-
-    fn tools(map: &[(&str, &str)]) -> OpenTools {
-        let mut open_tools = OpenTools::default();
-        for (agent, tool) in map {
-            let agent = (*agent != "main").then(|| agent.to_string());
-            open_tools.insert(agent, tool.to_string());
+        fn start_tool(&mut self, id: &str, parent: Option<&str>, summary: &str) {
+            let event = event(Body::ToolStart(ToolStart {
+                id: id.to_string(),
+                parent: parent.map(str::to_string),
+                name: "Bash".to_string(),
+                summary: summary.to_string(),
+            }));
+            self.observe(&event, self.panel.started);
         }
-        open_tools
+
+        fn end_tool(&mut self, id: &str) {
+            let event = event(Body::Tool(Tool {
+                id: id.to_string(),
+                parent: None,
+                name: "Bash".to_string(),
+                summary: String::new(),
+                denied: false,
+            }));
+            self.observe(&event, self.panel.started);
+        }
+
+        fn end_subagent(&mut self, id: &str, now: Instant) {
+            self.observe(
+                &event(Body::SubagentEnd(SubagentEnd {
+                    id: id.to_string(),
+                    status: SubagentStatus::Finished,
+                    duration_ms: 0,
+                    usage: Default::default(),
+                })),
+                now,
+            );
+        }
     }
 
     fn at(started: Instant, seconds: u64) -> Instant {
@@ -491,11 +519,31 @@ mod tests {
         let started = Instant::now();
         let mut panel = Board::new(started);
         panel.observe(&start(Some("sonnet")), started);
-        let lines = panel.lines(&no_tools(), 40, 24, at(started, 24), false);
+        let lines = panel.lines(40, 24, at(started, 24), false);
         assert_eq!(
             lines,
             vec!["─".repeat(39), "⠋ main  sonnet  0:24".to_string()]
         );
+    }
+
+    #[test]
+    fn open_tool_is_the_last_open_call_of_each_agent() {
+        let started = Instant::now();
+        let mut board = Board::new(started);
+        assert_eq!(board.panel.open_tool(None), None);
+        board.observe(&subagent_start("s1", 1, "Explore", None, "look"), started);
+        board.start_tool("t1", None, "Bash: first");
+        board.start_tool("t2", Some("s1"), "Read: a.rs");
+        board.start_tool("t3", None, "Bash: second");
+        assert_eq!(board.panel.open_tool(None), Some("Bash: second"));
+        assert_eq!(board.panel.open_tool(Some("s1")), Some("Read: a.rs"));
+
+        board.end_tool("t3");
+        assert_eq!(board.panel.open_tool(None), Some("Bash: first"));
+        board.end_tool("t2");
+        assert_eq!(board.panel.open_tool(Some("s1")), None);
+        board.end_tool("t1");
+        assert_eq!(board.panel.open_tool(None), None);
     }
 
     #[test]
@@ -507,13 +555,9 @@ mod tests {
             &subagent_start("s1", 1, "Explore", Some("haiku"), "look\nsecond"),
             at(started, 13),
         );
-        let lines = panel.lines(
-            &tools(&[("main", "Bash: cargo check"), ("s1", "Read: src/cli.rs")]),
-            80,
-            24,
-            at(started, 24),
-            false,
-        );
+        panel.start_tool("t1", None, "Bash: cargo check");
+        panel.start_tool("t2", Some("s1"), "Read: src/cli.rs");
+        let lines = panel.lines(80, 24, at(started, 24), false);
         assert_eq!(
             lines,
             vec![
@@ -524,16 +568,10 @@ mod tests {
                 "⠋ main  Bash: cargo check  0:24".to_string(),
             ]
         );
-        panel.observe(
-            &event(Body::SubagentEnd(SubagentEnd {
-                id: "s1".to_string(),
-                status: SubagentStatus::Finished,
-                duration_ms: 0,
-                usage: Default::default(),
-            })),
-            at(started, 30),
-        );
-        let lines = panel.lines(&no_tools(), 80, 24, at(started, 30), false);
+        panel.end_tool("t2");
+        panel.end_subagent("s1", at(started, 30));
+        panel.end_tool("t1");
+        let lines = panel.lines(80, 24, at(started, 30), false);
         assert_eq!(
             lines,
             vec![
@@ -571,7 +609,7 @@ mod tests {
             ),
             started,
         );
-        let lines = panel.lines(&no_tools(), 120, 24, at(started, 65), false);
+        let lines = panel.lines(120, 24, at(started, 65), false);
         assert_eq!(
             lines[2],
             "  ⠋ explore#1          claude-haiku-4-5   查找调用  1:05  ctx 14.1k"
@@ -581,8 +619,9 @@ mod tests {
             "  ⠋ general-purpose#2  claude-sonnet-5-5  写测试    1:05"
         );
         assert_eq!("查找调用".width(), 8);
-        let tool = tools(&[("s1", "Read: src/cli.rs"), ("s2", "Edit: tests/parse.rs")]);
-        let lines = panel.lines(&tool, 120, 24, at(started, 65), false);
+        panel.start_tool("t1", Some("s1"), "Read: src/cli.rs");
+        panel.start_tool("t2", Some("s2"), "Edit: tests/parse.rs");
+        let lines = panel.lines(120, 24, at(started, 65), false);
         assert_eq!(
             lines[2],
             "  ⠋ explore#1          claude-haiku-4-5   查找调用  Read: src/cli.rs      1:05  ctx 14.1k"
@@ -601,30 +640,27 @@ mod tests {
             &subagent_start("s1", 1, "Explore", None, "这是一个很长的中文描述需要被截断"),
             started,
         );
-        let tool = tools(&[("s1", "Read: src/some/very/long/path/to/file.rs")]);
-        let full = panel.lines(&no_tools(), 200, 24, started, false)[2].clone();
+        let full = panel.lines(200, 24, started, false)[2].clone();
         assert_eq!(
             full,
             "  ⠋ explore#1  这是一个很长的中文描述需要被截断  0:00"
         );
 
-        let lines = panel.lines(&tool, 61, 24, started, false);
+        panel.start_tool("t1", Some("s1"), "Read: src/some/very/long/path/to/file.rs");
+        let lines = panel.lines(61, 24, started, false);
         assert_eq!(
             lines[2],
             "  ⠋ explore#1  这是一个…   Read: src/some/very/long/p…  0:00"
         );
         assert_eq!(lines[2].width(), 60);
 
-        let lines = panel.lines(&tool, 40, 24, started, false);
+        let lines = panel.lines(40, 24, started, false);
         assert_eq!(lines[2], "  ⠋ explore#1  这是一个…   Read: src… …");
         assert_eq!(lines[2].width(), 39);
 
         panel.observe(&subagent_start("s2", 2, "Explore", None, "短描述"), started);
-        let both = tools(&[
-            ("s1", "Read: src/some/very/long/path/to/file.rs"),
-            ("s2", "Grep: x"),
-        ]);
-        let lines = panel.lines(&both, 61, 24, started, false);
+        panel.start_tool("t2", Some("s2"), "Grep: x");
+        let lines = panel.lines(61, 24, started, false);
         assert_eq!(
             lines[2],
             "  ⠋ explore#1  这是一个…   Read: src/some/very/long/p…  0:00"
@@ -633,17 +669,10 @@ mod tests {
             lines[3],
             "  ⠋ explore#2  短描述      Grep: x                      0:00"
         );
-        panel.observe(
-            &event(Body::SubagentEnd(SubagentEnd {
-                id: "s2".to_string(),
-                status: SubagentStatus::Finished,
-                duration_ms: 0,
-                usage: Default::default(),
-            })),
-            started,
-        );
+        panel.end_tool("t2");
+        panel.end_subagent("s2", started);
 
-        let lines = panel.lines(&tool, 20, 24, started, false);
+        let lines = panel.lines(20, 24, started, false);
         assert_eq!(lines[2], "  ⠋ explore#1  这…");
         assert!(lines[2].width() <= 19);
     }
@@ -653,13 +682,13 @@ mod tests {
         let started = Instant::now();
         let mut panel = Board::new(started);
         panel.observe(&start(Some("claude-sonnet-5-5")), started);
-        let tool = tools(&[("main", "Bash: cargo test --workspace --all-features")]);
-        let lines = panel.lines(&tool, 50, 24, started, false);
+        panel.start_tool("t1", None, "Bash: cargo test --workspace --all-features");
+        let lines = panel.lines(50, 24, started, false);
         assert_eq!(
             lines[1],
             "⠋ main  claude-sonnet-5-5  Bash: cargo tes…  0:00"
         );
-        let lines = panel.lines(&tool, 30, 24, started, false);
+        let lines = panel.lines(30, 24, started, false);
         assert_eq!(lines[1], "⠋ main  claude-sonnet-5-5  B…");
     }
 
@@ -673,12 +702,12 @@ mod tests {
                 started,
             );
         }
-        let lines = panel.lines(&no_tools(), 80, 9, started, false);
+        let lines = panel.lines(80, 9, started, false);
         assert_eq!(lines.len(), 8);
         assert_eq!(lines[2], "  ⠋ explore#1  x  0:00");
         assert_eq!(lines[4], "  ⠋ explore#3  x  0:00");
         assert_eq!(lines[5], "  … and 2 more");
-        let lines = panel.lines(&no_tools(), 80, 5, started, false);
+        let lines = panel.lines(80, 5, started, false);
         assert_eq!(lines[2], "  ⠋ explore#1  x  0:00");
         assert_eq!(lines[3], "  … and 4 more");
         assert_eq!(lines.len(), 6);
@@ -703,7 +732,7 @@ mod tests {
         let mut panel = Board::new(started);
         panel.observe(&start(None), started);
         assert_eq!(
-            panel.lines(&no_tools(), 80, 24, at(started, 24), false)[1],
+            panel.lines(80, 24, at(started, 24), false)[1],
             "⠋ main  0:24"
         );
         panel.observe(
@@ -720,7 +749,7 @@ mod tests {
             started,
         );
         assert_eq!(
-            panel.lines(&no_tools(), 80, 24, at(started, 24), false)[1],
+            panel.lines(80, 24, at(started, 24), false)[1],
             "⠋ main  claude-sonnet-5-5  0:24  in 60.2k  cached 70%"
         );
         panel.observe(
@@ -728,14 +757,9 @@ mod tests {
             started,
         );
         panel.observe(&usage(None, None, counts(18234, 0, 42000, 1000)), started);
+        panel.start_tool("t1", None, "Bash: cargo check");
         assert_eq!(
-            panel.lines(
-                &tools(&[("main", "Bash: cargo check")]),
-                120,
-                24,
-                at(started, 24),
-                false
-            )[1],
+            panel.lines(120, 24, at(started, 24), false)[1],
             "⠋ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 122.5k  cached 69%  ctx 61.2k"
         );
     }
@@ -745,16 +769,10 @@ mod tests {
         let started = Instant::now();
         let panel = Board::new(started);
         let frame = |ms| {
-            panel.lines(
-                &no_tools(),
-                80,
-                24,
-                started + Duration::from_millis(ms),
-                false,
-            )[1]
-            .chars()
-            .next()
-            .unwrap()
+            panel.lines(80, 24, started + Duration::from_millis(ms), false)[1]
+                .chars()
+                .next()
+                .unwrap()
         };
         assert_eq!(frame(0), '⠋');
         assert_eq!(frame(100), '⠙');
@@ -766,9 +784,9 @@ mod tests {
     fn color_dims_rule_and_labels_unless_disabled() {
         let started = Instant::now();
         let panel = Board::new(started);
-        let colored = panel.lines(&no_tools(), 10, 24, started, true);
+        let colored = panel.lines(10, 24, started, true);
         assert_eq!(colored[0], format!("\x1b[2m{}\x1b[0m", "─".repeat(9)));
-        let plain = panel.lines(&no_tools(), 10, 24, started, false);
+        let plain = panel.lines(10, 24, started, false);
         assert!(!plain.concat().contains('\x1b'));
         assert_eq!(
             dim_label("[explore#1] tool Grep: x", true),

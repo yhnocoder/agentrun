@@ -174,8 +174,6 @@ impl Adapter for Pi {
             argv.push(effort.clone());
         }
         argv.extend(invocation.args.runtime_args.iter().cloned());
-        argv.push("--".to_string());
-        argv.push(invocation.prompt.clone());
         let mut env = Vec::new();
         let mut service_hosts = Vec::new();
         if let Some(proxy) = &invocation.proxy {
@@ -204,7 +202,7 @@ impl Adapter for Pi {
         argv = wrapped.argv(&argv);
         Ok(Launch {
             argv,
-            stdin: Vec::new(),
+            stdin: invocation.prompt.clone().into_bytes(),
             env,
             signal_wrapped_child: wrapped.kind == SandboxKind::Bubblewrap,
             service_hosts,
@@ -561,16 +559,14 @@ mod tests {
     fn arguments_without_options() {
         let setup = Setup::new();
         let launch = launch(&setup, &[], false, &[]);
-        let mut expected = fixed("/opt/bin/pi");
-        expected.extend(["--", "hi"].map(str::to_string));
-        assert_eq!(launch.argv, expected);
-        assert!(launch.stdin.is_empty());
+        assert_eq!(launch.argv, fixed("/opt/bin/pi"));
+        assert_eq!(launch.stdin, b"hi");
         assert!(!launch.signal_wrapped_child);
         assert_eq!(launch.env, vec![]);
     }
 
     #[test]
-    fn model_effort_and_caller_arguments_come_before_the_prompt() {
+    fn model_effort_and_caller_arguments_follow_the_fixed_arguments() {
         let setup = Setup::new();
         let launch = launch(
             &setup,
@@ -595,24 +591,22 @@ mod tests {
                 "low",
                 "--verbose",
                 "-x",
-                "--",
-                "hi",
             ]
         );
     }
 
     #[test]
-    fn prompt_starting_with_a_dash_stays_after_the_separator() {
+    fn prompt_goes_to_stdin_whatever_it_starts_with() {
         let setup = Setup::new();
-        let mut invocation = setup.invocation(&[], false, &[]);
-        invocation.prompt = "-n list files".to_string();
-        let launch = Pi::new()
-            .launch(Path::new("/opt/bin/pi"), &invocation)
-            .unwrap();
-        assert_eq!(
-            launch.argv[launch.argv.len() - 2..],
-            ["--", "-n list files"]
-        );
+        for prompt in ["-n list files", "@src/main.rs explain", "@missing.txt"] {
+            let mut invocation = setup.invocation(&[], false, &[]);
+            invocation.prompt = prompt.to_string();
+            let launch = Pi::new()
+                .launch(Path::new("/opt/bin/pi"), &invocation)
+                .unwrap();
+            assert_eq!(launch.argv, fixed("/opt/bin/pi"));
+            assert_eq!(launch.stdin, prompt.as_bytes());
+        }
     }
 
     fn mounts(argv: &[String]) -> Vec<(&str, &str)> {
@@ -1029,7 +1023,7 @@ mod tests {
             profile_path.to_string_lossy().into_owned(),
         ];
         expected.extend(fixed("/opt/bin/pi"));
-        expected.extend(["--model", "deepseek/deepseek-flash", "--", "hi"].map(str::to_string));
+        expected.extend(["--model", "deepseek/deepseek-flash"].map(str::to_string));
         assert_eq!(launch.argv, expected);
         assert!(!launch.signal_wrapped_child);
         assert_eq!(launch.service_hosts, ["api.deepseek.com"]);

@@ -249,7 +249,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 <h2>配置与账号</h2>
 <p>agent 不应读到用户自己的运行时配置、插件、规则、MCP 服务器与会话记录，也不应把记录写进用户的会话。三个运行时都用参数关闭这些来源，详见<a href="run.html">运行</a>：</p>
 <ul>
-  <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，不保存会话，每次传一个新生成的会话 id。</li>
+  <li>claude-code：不加载用户、项目与本地设置，不加载 MCP 服务器，关闭 auto-memory，不保存会话，每次传一个新生成的会话 id。沙箱打开时 auto-memory 目录改到会话临时目录，agent 不能写用户的 memory 目录。</li>
   <li>codex：使用私有的 <code>CODEX_HOME</code>，只带入用户的登录文件，见<a href="session.html#codex-home">私有配置目录</a>；不读工作目录里的 <code>AGENTS.md</code> 与 <code>.codex/</code>，不加载技能说明；关闭插件、连接器、hooks 等会给模型增加工具的功能。</li>
   <li>pi：不加载扩展、技能、提示模板、主题与上下文文件，不信任工作目录里的项目级配置，启动时不联网下载资源，不保存会话。用户状态目录里的设置、自定义模型与 <code>bin/</code> 照常读取，见<a href="session.html#pi-state">pi 使用用户的状态目录</a>。</li>
 </ul>

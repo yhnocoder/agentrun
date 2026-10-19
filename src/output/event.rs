@@ -57,6 +57,7 @@ fn format_time(time: SystemTime) -> String {
 pub enum Body {
     Start(Start),
     Prompt(Prompt),
+    ToolStart(ToolStart),
     Tool(Tool),
     Text(Text),
     Usage(UsageReport),
@@ -71,6 +72,7 @@ impl Body {
         match self {
             Body::Start(_) => "start",
             Body::Prompt(_) => "prompt",
+            Body::ToolStart(_) => "tool_start",
             Body::Tool(_) => "tool",
             Body::Text(_) => "text",
             Body::Usage(_) => "usage",
@@ -113,6 +115,14 @@ pub struct NetworkInfo {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Prompt {
     pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ToolStart {
+    pub id: String,
+    pub parent: Option<String>,
+    pub name: String,
+    pub summary: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -355,6 +365,16 @@ mod tests {
 
     #[test]
     fn tool_fields_in_order() {
+        let start = at(Body::ToolStart(ToolStart {
+            id: "t1".to_string(),
+            parent: Some("s1".to_string()),
+            name: "Bash".to_string(),
+            summary: "Bash: ls".to_string(),
+        }));
+        assert_eq!(
+            start.to_json(),
+            r#"{"schema":1,"type":"tool_start","time":"2026-10-04T13:00:00.000Z","id":"t1","parent":"s1","name":"Bash","summary":"Bash: ls"}"#
+        );
         let event = at(Body::Tool(Tool {
             id: "t1".to_string(),
             parent: None,
