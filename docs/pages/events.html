@@ -326,7 +326,7 @@ interface Usage extends TokenCounts {
     <tr><th>运行时</th><th><code>usage</code> 事件</th><th><code>end.usage</code></th><th><code>subagent_end.usage</code></th></tr>
   </thead>
   <tbody>
-    <tr><td>claude-code</td><td>null，逐次调用的用量里没有费用</td><td>总量取最后一个 result 的 <code>total_cost_usd</code>，<code>by_model</code> 取 <code>modelUsage</code> 各模型的 <code>costUSD</code></td><td>null</td></tr>
+    <tr><td>claude-code</td><td>null，逐次调用的用量里没有费用</td><td>总量取最后一个 result 的 <code>total_cost_usd</code>，<code>by_model</code> 取 <code>modelUsage</code> 各模型的 <code>costUSD</code>。总量用运行时自己的合计，与 token 字段不同，不保证等于 <code>by_model</code> 之和；样本里两者相等</td><td>null</td></tr>
     <tr><td>pi</td><td>这次调用的 <code>usage.cost.total</code></td><td><code>usage</code> 事件之和</td><td>没有 subagent</td></tr>
     <tr><td>codex</td><td>null</td><td>null</td><td>没有这个事件</td></tr>
   </tbody>
