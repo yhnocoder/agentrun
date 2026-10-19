@@ -197,7 +197,7 @@ agentrun variables: (none)</div>
   &lt;-- 之后的调用方参数&gt;</code></pre>
 <ul>
   <li><code>--setting-sources ""</code> 不加载用户、项目与本地设置，工作目录里的 <code>CLAUDE.md</code> 不进入模型上下文（实测）。因此沙箱设置只来自 <code>--settings</code>。</li>
-  <li>会话环境设置 <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>，关闭 auto-memory。理由：<code>--setting-sources ""</code> 不关闭它，claude-code 仍把用户的 <code>~/.claude/projects/&lt;项目&gt;/memory/MEMORY.md</code> 放进模型上下文；设置这个变量后，请求里不再有这个文件的内容与 memory 的说明（claude 2.1.303 云端实测）。这个变量在 <code>--env</code> 之后设置，调用方不能用 <code>--env</code> 改回。</li>
+  <li>会话环境设置 <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>，关闭 auto-memory。理由：<code>--setting-sources ""</code> 不关闭它，claude-code 仍把用户的 <code>~/.claude/projects/&lt;项目&gt;/memory/MEMORY.md</code> 放进模型上下文；设置这个变量后，请求里不再有这个文件的内容与 memory 的说明（claude 2.1.288 与 2.1.303 云端实测）。这个变量在 <code>--env</code> 之后设置，调用方不能用 <code>--env</code> 改回。</li>
   <li><code>--strict-mcp-config</code> 不加载任何 MCP 服务器。</li>
   <li><code>--session-id</code> 每次新生成，与 <code>--no-session-persistence</code> 一起用。理由：在 Claude Code 会话里运行 agentrun 时，<code>claude -p</code> 子进程会继承父会话的 id，把记录写进父会话，只加 <code>--no-session-persistence</code> 不能避免。</li>
   <li><code>--tools</code> 限定可用的内置工具，去掉网页工具与技能等。<code>--allowedTools</code> 放行列出的工具，不经权限判断。Bash 不在放行列表里：沙箱打开时由 <code>autoAllowBashIfSandboxed</code> 自动放行，沙箱没有运行时由 auto 模式逐条判断。只用 <code>--tools</code> 而不放行时，auto 模式会拒绝 Write，且结果仍报告成功（实测）。</li>
@@ -222,7 +222,7 @@ agentrun variables: (none)</div>
     }
   }
 }</code></pre>
-<p><code>autoMemoryDirectory</code> 把 auto-memory 目录改到会话临时目录里。理由：claude-code 对当前项目 memory 目录里的 <code>.md</code> 文件内置放行 Write 与 Edit，不看 auto-memory 是否关闭，也不受 <code>dontAsk</code> 与放行规则限制；不改目录时，沙箱打开的运行仍能写用户的 <code>MEMORY.md</code>，内容会进入用户之后的 claude 会话。改到会话临时目录后，写用户的 memory 目录被拒绝（claude 2.1.303 云端实测）。沙箱没有运行时 Write 本来就能写任何位置，所以只在沙箱设置里改。</p>
+<p><code>autoMemoryDirectory</code> 把 auto-memory 目录改到会话临时目录里。理由：claude-code 对当前项目 memory 目录里的 <code>.md</code> 文件内置放行 Write 与 Edit，不看 auto-memory 是否关闭，也不受 <code>dontAsk</code> 与放行规则限制；不改目录时，沙箱打开的运行仍能写用户的 <code>MEMORY.md</code>，内容会进入用户之后的 claude 会话。改到会话临时目录后，写用户的 memory 目录被拒绝（claude 2.1.288 与 2.1.303 云端实测）。沙箱没有运行时 Write 本来就能写任何位置，所以只在沙箱设置里改。</p>
 <p><code>allowWrite</code> 与空的 <code>allowedDomains</code> 生效：Bash 能写 <code>allowWrite</code> 列出的目录，不能写 <code>/tmp</code> 的其他位置，不能联网（云端实测）。<code>failIfUnavailable</code> 不能发现沙箱启动失败：PATH 里的 <code>bwrap</code> 启动失败时，claude-code 不报错，每条 Bash 命令以退出码 1 失败，整次运行仍报告成功（云端实测）。所以沙箱能否使用只靠 agentrun 的启动前检查判断，这一项保留作为额外的保护。<code>--network full|custom</code> 时 <code>network</code> 改为 <code>{"allowedDomains":[],"httpProxyPort":&lt;代理端口&gt;,"socksProxyPort":&lt;代理端口&gt;}</code>，两个端口都是过滤代理的 TCP 端口（过滤代理按第一个字节区分 HTTP 与 SOCKS5）；<code>--dry-run</code> 的命令里端口写成 <code>&lt;proxy port&gt;</code>。</p>
 
 <h3>输出映射</h3>
