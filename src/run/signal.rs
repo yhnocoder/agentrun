@@ -272,8 +272,8 @@ impl Signals {
                 self.shared.changed.notify_all();
                 true
             }
-            Phase::Running(_) => false,
-            _ => true,
+            Phase::Finishing => true,
+            _ => false,
         }
     }
 
@@ -483,6 +483,7 @@ mod tests {
     #[test]
     fn limit_terminates_only_a_runtime_that_is_not_terminating_yet() {
         let (signals, _) = preparing();
+        assert!(!signals.stop_for_limit());
         let mut child = sleeper();
         signals.running(child.id() as i32, None, false);
         signals.shared.receive(Signal::Interrupt);
