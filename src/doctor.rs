@@ -20,7 +20,7 @@ use crate::network::{
 };
 use crate::output::{Network, NetworkReason, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
-use crate::run::{Caller, TEMP_ENV_VARS, create_tempdir, shell_quote};
+use crate::run::{Caller, create_tempdir, shell_quote, temp_environment};
 use crate::runtime::dsh::{self, Dsh};
 use crate::runtime::pi::{self, Model, Pi};
 use crate::runtime::{self, Adapter, Invocation, Version, codex};
@@ -749,12 +749,7 @@ impl Doctor {
             )
         };
         let mut launch = Dsh::new().launch(executable, &invocation)?;
-        launch.env.extend(TEMP_ENV_VARS.iter().map(|key| {
-            (
-                OsString::from(key),
-                invocation.tempdir.clone().into_os_string(),
-            )
-        }));
+        launch.env.extend(temp_environment(&invocation.tempdir));
         let outcome = |line: &str| {
             serde_json::from_str::<Value>(line)
                 .ok()

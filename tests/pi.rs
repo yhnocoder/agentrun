@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Instant;
 
@@ -590,4 +590,53 @@ fn session_dir_saves_the_session_and_resume_continues_it() {
         assert!(!saved.join("written-by-the-agent").exists());
     }
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[test]
+fn session_dir_inside_the_working_directory_gets_a_note() {
+    if !support::sandbox_available() {
+        eprintln!("skipped: the sandbox is not available");
+        return;
+    }
+    let env = Env::with("pi", SESSION_PI);
+    write_user_file(
+        &env,
+        "settings.json",
+        "{\"defaultProvider\":\"deepseek\",\"defaultModel\":\"deepseek-flash\"}",
+    );
+    let sessions = env.work().join("sessions");
+    let note = format!(
+        "[note] --session-dir {} is inside the working directory. The agent can change the saved sessions",
+        sessions.display()
+    );
+    let text_run = |session_dir: &Path| {
+        let output = run(
+            &env,
+            &[
+                "--format",
+                "text",
+                "--session-dir",
+                session_dir.to_str().unwrap(),
+                "--prompt",
+                "hi",
+            ],
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let stdout = text_run(&sessions);
+    assert_eq!(stdout.lines().next(), Some(note.as_str()), "{stdout}");
+    let link = env.root().join("link-to-work");
+    std::os::unix::fs::symlink(env.work(), &link).unwrap();
+    let through_link = link.join("new/sessions");
+    let stdout = text_run(&through_link);
+    let note = format!(
+        "[note] --session-dir {} is inside the working directory. The agent can change the saved sessions",
+        through_link.display()
+    );
+    assert_eq!(stdout.lines().next(), Some(note.as_str()), "{stdout}");
+    let stdout = text_run(&env.root().join("outside"));
+    assert!(!stdout.contains("[note]"), "{stdout}");
+    let stdout = text_run(&env.work().join("../outside-by-parent/sessions"));
+    assert!(!stdout.contains("[note]"), "{stdout}");
 }
