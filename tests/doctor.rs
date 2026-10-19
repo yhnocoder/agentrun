@@ -340,7 +340,7 @@ fn executable_check_compares_the_runtime_version() {
 
     env.install(
         "pi",
-        "#!/bin/sh\necho \"Error: Cannot find module '/nonexistent/cli.js'\" >&2\necho 'Node.js v22.22.0' >&2\nexit 1\n",
+        "#!/bin/sh\nprintf '%s\\n' 'node:internal/modules/cjs/loader:1386' '  throw err;' '  ^' '' \"Error: Cannot find module '/nonexistent/cli.js'\" '    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)' '' 'Node.js v22.22.0' >&2\nexit 1\n",
     );
     env.install("codex", "#!/bin/sh\nexit 2\n");
     let output = run(&env, &["codex", "pi", "--sandbox", "off"]);

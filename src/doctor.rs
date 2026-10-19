@@ -40,6 +40,7 @@ const DRAIN: Duration = Duration::from_secs(1);
 const TEMPDIR_PREFIX: &str = "agentrun-doctor-";
 const PROMPT: &str = "agentrun doctor";
 const VERSION_FLAG: &str = "--version";
+const ERROR_MARKER: &str = "Error:";
 const ORDER: [Runtime; 3] = [Runtime::ClaudeCode, Runtime::Codex, Runtime::Pi];
 const SANDBOX_SCRIPT: &str =
     r#"echo ok > "$1/inside.txt"; echo ok > "$2/outside.txt" 2>/dev/null; echo done"#;
@@ -327,7 +328,15 @@ impl Finished {
     }
 
     fn failure(&self) -> String {
-        match self.stderr_line().or_else(|| self.stdout_line()) {
+        let error_line = self.stderr.lines().map(str::trim).find(|line| {
+            line.split_once(ERROR_MARKER).is_some_and(|(kind, _)| {
+                kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        });
+        match error_line
+            .or_else(|| self.stderr_line())
+            .or_else(|| self.stdout_line())
+        {
             Some(line) => format!("{}: {line}", self.exit_text),
             None => self.exit_text.clone(),
         }
