@@ -283,6 +283,40 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
     assert!(env.leftovers().is_empty());
 }
 
+#[test]
+fn symlinked_cwd_gets_write_rules_for_the_real_directory() {
+    if !support::sandbox_available() {
+        return;
+    }
+    let env = Env::with("claude", FAKE_CLAUDE);
+    let link = env.root().join("link");
+    std::os::unix::fs::symlink(env.work(), &link).unwrap();
+    let output = env
+        .command(&[
+            "claude-code",
+            "--cwd",
+            link.to_str().unwrap(),
+            "--dry-run",
+            "--no-default-deny-read",
+            "--prompt",
+            "hi",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let command = stdout.lines().next().unwrap();
+    let work = env.work().to_string_lossy().into_owned();
+    assert!(
+        command.contains(&format!("Edit(/{work}/**),Write(/{work}/**)")),
+        "{command}"
+    );
+    assert!(
+        command.contains(&format!(r#""allowWrite":["{work}","<tempdir>"]"#)),
+        "{command}"
+    );
+}
+
 const SESSION_CLAUDE: &str = r#"#!/bin/sh
 while [ $# -gt 0 ]; do
   case "$1" in
