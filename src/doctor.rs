@@ -730,6 +730,7 @@ impl Doctor {
             model: self.args.model.clone(),
             effort: None,
             max_turns: None,
+            max_tokens: None,
             timeout: None,
             sandbox: Some(SandboxMode::Off),
             network: NetworkMode::None,

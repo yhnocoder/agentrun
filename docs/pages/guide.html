@@ -105,6 +105,19 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 3</div>
 <p>按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
 
+<h2 id="limits">限制轮数与 token</h2>
+<p>当你担心 agent 反复调用模型、用掉过多的 token 时，给出上限。<code>--max-turns N</code> 限制主 agent 调用模型的次数，subagent 的调用不计入；<code>--max-tokens N</code> 限制所有模型调用（包括 subagent）的 token 数之和。超过上限时 agentrun 停止运行时和它启动的所有进程，结果是 <code>limit</code>，退出码 4：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --max-turns 2 --format text --prompt "依次运行 echo 1、echo 2、echo 3 三条命令，每次只运行一条，最后回复 done"
+<span class="dim">[main]</span> prompt 依次运行 echo 1、echo 2、echo 3 三条命令，每次只运行一条，最后回复 done
+<span class="dim">[main]</span> tool Bash: echo 1
+<span class="dim">[main]</span> tool Bash: echo 2
+<span class="dim">[main]</span> tool Bash: echo 3 (error)
+<span class="dim">[end]</span> limit 6.5s  in 36.6k  out 48  cached 88%  --max-turns 2 reached: the main agent started turn 3
+<span class="prompt">$</span> echo $?
+4</div>
+<p><code>[end]</code> 行的最后写出是哪个上限、你给的值和实际的值。主 agent 开始第 3 次调用时 agentrun 停止了运行，所以最后一个 <code>tool</code> 是这次调用请求的命令，它可能没有执行，也可能已经开始执行；这里 claude-code 在停止时把它报告为出错，所以带 <code>(error)</code>。<code>--max-tokens</code> 的结果写成 <code>--max-tokens 5000 exceeded: 7389 tokens</code>。agent 在超过上限时已经完成任务并正常退出的，结果仍是 <code>finished</code>。给了 <code>--session-dir</code> 时，超过上限的运行同样保存会话，你可以用 <code>--resume</code> 接着运行，见<a href="#resume">接着上一次运行继续</a>。</p>
+<p>codex 只在运行结束时报告用量，agentrun 无法在运行中停止它，所以 codex 不接受这两个选项，给出时直接报错。两个上限的计数方法见<a href="run.html#limits">轮数与 token 上限</a>。</p>
+
 <h2 id="resume">接着上一次运行继续</h2>
 <p>默认每次运行都是新会话。想在上一次运行的基础上继续，例如「测试还是没过，接着修」，第一次运行时用 <code>--session-dir</code> 指定一个保存会话的目录：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --format text --prompt "在 notes.txt 里写一句问候语"
