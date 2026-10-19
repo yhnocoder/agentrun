@@ -1,10 +1,15 @@
 #[allow(dead_code)]
 mod support;
 
+use std::ffi::OsString;
 use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
+
+use agentrun::run::{Caller, Signals};
+use agentrun::runtime;
 
 use serde_json::Value;
 use support::env::Env;
@@ -72,12 +77,66 @@ fn unknown_subcommand_is_rejected() {
 }
 
 #[test]
+fn no_arguments_print_help_to_stderr() {
+    let output = run(&Env::new(), &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("Run claude-code, codex and pi"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Usage: agentrun <COMMAND>"), "{stderr}");
+    assert!(!stderr.contains("doctor-connect"), "{stderr}");
+}
+
+#[test]
 fn missing_subcommand_names_only_public_commands() {
-    let detail = assert_rejected(&run(&Env::new(), &[]));
+    let detail = assert_rejected(&run(&Env::new(), &["--"]));
     assert_eq!(
         detail,
         "no command given: use claude-code, codex, pi or doctor; see agentrun --help"
     );
+}
+
+fn reject_on(stdout_is_terminal: bool, stderr_is_terminal: bool, format: &str) -> (String, String) {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let stderr = Arc::new(Mutex::new(Vec::new()));
+    let caller = Caller {
+        args: ["agentrun", "pi", "--bogus", "--format", format]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        env: Vec::new(),
+        stdin: Box::new(std::io::empty()),
+        stdin_is_terminal: false,
+        stdout: Arc::clone(&stdout) as Arc<Mutex<dyn Write + Send>>,
+        stdout_is_terminal,
+        stderr: Arc::clone(&stderr) as Arc<Mutex<dyn Write + Send>>,
+        stderr_is_terminal,
+        signals: Signals::install(),
+    };
+    assert_eq!(agentrun::run::run(caller, &runtime::builtin), 2);
+    let text =
+        |buffer: &Arc<Mutex<Vec<u8>>>| String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    (text(&stdout), text(&stderr))
+}
+
+#[test]
+fn rejection_on_a_terminal_is_written_once() {
+    let detail =
+        "unexpected argument '--bogus' found; tip: to pass '--bogus' as a value, use '-- --bogus'";
+    for format in ["text", "rich"] {
+        let (stdout, stderr) = reject_on(true, true, format);
+        assert_eq!(stdout, format!("[end] rejected {detail}\n"), "{format}");
+        assert_eq!(stderr, "", "{format}");
+    }
+    let (_, stderr) = reject_on(false, true, "text");
+    assert_eq!(stderr, format!("agentrun: {detail}\n"));
+    let (_, stderr) = reject_on(true, false, "text");
+    assert_eq!(stderr, format!("agentrun: {detail}\n"));
+    let (_, stderr) = reject_on(true, true, "jsonl");
+    assert_eq!(stderr, format!("agentrun: {detail}\n"));
 }
 
 #[test]

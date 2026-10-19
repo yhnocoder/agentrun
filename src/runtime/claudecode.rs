@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Adapter, Failure, Invocation, Launch, Version};
+use super::{Adapter, Failure, Invocation, Launch, Version, display_path};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
@@ -733,14 +733,6 @@ fn tool_summary(name: &str, input: &Value, cwd: &Path) -> String {
     match value {
         Some(value) => format!("{name}: {value}"),
         None => name.to_string(),
-    }
-}
-
-fn display_path(path: &Path, cwd: &Path) -> String {
-    match path.strip_prefix(cwd) {
-        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
-        Ok(relative) => relative.to_string_lossy().into_owned(),
-        Err(_) => path.to_string_lossy().into_owned(),
     }
 }
 

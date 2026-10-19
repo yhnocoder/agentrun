@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use clap::Parser;
 use clap::error::ErrorKind as ClapErrorKind;
+use clap::{CommandFactory, Parser};
 use tempfile::TempDir;
 
 use crate::cli::{
@@ -171,6 +171,11 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
 }
 
 fn parse_command(caller: &Caller) -> Command {
+    if caller.args.len() <= 1 {
+        caller.signals.finishing();
+        caller.print_error_line(Cli::command().render_help().to_string().trim_end());
+        return Command::Exit(EndStatus::Rejected.exit_code());
+    }
     let cli = match Cli::try_parse_from(&caller.args) {
         Ok(cli) => cli,
         Err(error) => {
@@ -296,7 +301,11 @@ fn reject(caller: &mut Caller, format: Format, detail: &str, started: Instant) -
             End::early(EndStatus::Rejected, detail.to_string(), started),
         )
     });
-    caller.print_error_line(&format!("agentrun: {detail}"));
+    let end_line_on_terminal =
+        format != Format::Jsonl && caller.stdout_is_terminal && caller.stderr_is_terminal;
+    if !end_line_on_terminal {
+        caller.print_error_line(&format!("agentrun: {detail}"));
+    }
     EndStatus::Rejected.exit_code()
 }
 
