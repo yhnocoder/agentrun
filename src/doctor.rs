@@ -15,8 +15,8 @@ use serde_json::Value;
 use crate::cli::{ConnectArgs, DoctorArgs, Format, NetworkMode, RunArgs, Runtime, SandboxMode};
 use crate::credential::write_session_credential;
 use crate::network::{
-    self, FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, check_usage, in_cidr,
-    proxy_environment,
+    self, FilterProxy, HostRule, Policy, ProxyAddress, ProxyEndpoint, SERVICE_PORT, check_usage,
+    in_cidr, proxy_environment,
 };
 use crate::output::{Network, NetworkReason, Signal};
 use crate::process_tree::{kill_group_members, wait_for_exit};
@@ -50,7 +50,6 @@ const UNREADABLE_TEXT: &str = "unreadable";
 const CODEX_HOME_DIR: &str = "codex-home";
 const PI_UNKNOWN_MODEL_PREFIX: &str = "Warning: Model ";
 const PI_UNKNOWN_MODEL_TEXT: &str = "not found for provider";
-const SERVICE_PORT: u16 = 443;
 const DENIED_HOST: &str = "doctor-check.invalid";
 const PRIVATE_HOST: &str = "169.254.169.254";
 const PRIVATE_PORT: u16 = 80;
