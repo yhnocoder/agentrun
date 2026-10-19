@@ -1,4 +1,4 @@
-{"schema":1,"type":"prompt","text":"fix the tests"}
+{"schema":1,"type":"prompt","text":"fix the tests","images":[]}
 {"schema":1,"type":"tool","id":"t1","parent":null,"name":"Read","summary":"Read: src/parse.rs","denied":false}
 {"schema":1,"type":"subagent_start","id":"s1","parent":null,"number":1,"kind":"Explore","model":"haiku","description":"find callers"}
 {"schema":1,"type":"tool","id":"t2","parent":"s1","name":"Grep","summary":"Grep: parse_line","denied":false}

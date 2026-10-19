@@ -243,7 +243,8 @@ mod tests {
         let mut text = TextFormatter::new(SandboxMode::On, "");
         assert_eq!(
             text.lines(&event(Body::Prompt(Prompt {
-                text: "fix tests\nmore".to_string()
+                text: "fix tests\nmore".to_string(),
+                images: Vec::new()
             }))),
             vec!["[main] prompt fix tests"]
         );

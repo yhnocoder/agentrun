@@ -19,6 +19,7 @@ use crate::cli::{
 };
 use crate::credential::write_session_credential;
 use crate::doctor;
+use crate::image::read_images;
 use crate::network::{self, FilterProxy, ProxyEndpoint};
 use crate::output::{End, EndStatus, Event, Output, write_end};
 use crate::runtime::{Adapter, Invocation, Launch};
@@ -311,6 +312,7 @@ fn prepare(
     let allow_hosts = network::check_usage(args.network, &args.allow_host)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let prompt = read_prompt(caller, &args)?;
+    let images = read_images(&args.image)?;
     let env_args = parse_env_args(&args.env, &caller.env)?;
     let path_dirs = resolve_path_dirs(&args.path)?;
     let raw = match &args.raw {
@@ -333,6 +335,7 @@ fn prepare(
         caller.print_error_line(&format!("[debug] sandbox: {}", sandbox.description));
     }
     let invocation = Invocation {
+        images,
         format,
         sandbox,
         allow_hosts,

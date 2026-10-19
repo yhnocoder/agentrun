@@ -58,7 +58,7 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
             json!({"schema": 1, "type": "start", "runtime": "claude-code", "sandbox": "none",
                 "network": {"mode": "none", "allow": [], "enforced": false},
                 "model": "m1", "cwd": work, "argv": [executable, "--extra"], "env": []}),
-            json!({"schema": 1, "type": "prompt", "text": "hi"}),
+            json!({"schema": 1, "type": "prompt", "text": "hi", "images": []}),
             json!({"schema": 1, "type": "tool", "id": "t1", "parent": null, "name": "Bash", "summary": "Bash: ls", "denied": true}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "stdin=hi"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "m1", "input_tokens": 10, "output_tokens": 2,

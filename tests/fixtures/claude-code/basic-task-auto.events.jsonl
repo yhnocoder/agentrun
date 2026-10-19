@@ -1,4 +1,4 @@
-{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents."}
+{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents.","images":[]}
 {"schema":1,"type":"tool","id":"toolu_01QsV5S5eVU6Y3bxqNqZhqiR","parent":null,"name":"Write","summary":"Write: probe.txt","denied":false}
 {"schema":1,"type":"usage","parent":null,"model":"claude-sonnet-5-5","input_tokens":2,"output_tokens":16,"cache_read_tokens":5845,"cache_write_tokens":5953,"context_tokens":11800}
 {"schema":1,"type":"tool","id":"toolu_01DzGXu1qWDsFvV9aVEHjwWy","parent":null,"name":"Read","summary":"Read: probe.txt","denied":false}

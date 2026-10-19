@@ -41,6 +41,16 @@ agentrun claude-code --prompt-file task.md
 agentrun claude-code &lt; task.md</code></pre>
 <p>长提示词放在文件里，避免 shell 的引号问题。同时给出两种方式，或者提示词为空，agentrun 都会报用法错误。</p>
 
+<h2 id="images">让 agent 看图片</h2>
+<p>需要模型看截图、设计稿或照片时，用 <code>--image</code> 把图片和提示词一起传入。有多张图片时重复这个选项，模型按你给出的顺序看到它们：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --format text --image screenshot.png --prompt "图里写的是什么？只回答图里的文字。"
+<span class="dim">[main]</span> prompt 图里写的是什么？只回答图里的文字。
+<span class="dim">[main]</span> text ZEBRA 4721
+<span class="dim">[end]</span> finished 5.3s  in 17.8k  out 0.1k  cached 70%</div>
+<p>图片可以放在任何你能读到的位置，不需要放进工作目录。在 jsonl 输出里，<code>prompt</code> 事件的 <code>images</code> 列出你给的路径，可以用来核对这次运行带了哪些图片：</p>
+<pre><code class="language-json">{"schema":1,"type":"prompt","time":"2026-10-19T03:14:26.078Z","text":"图里写的是什么？只回答图里的文字。","images":["screenshot.png"]}</code></pre>
+<p>只支持 PNG、JPEG、GIF 和 WebP，单个文件不超过 20 MiB。文件不存在、类型不对或太大时，agentrun 报用法错误，运行时不会启动。用 pi 时要选支持图片输入的模型：模型不支持图片时 pi 不报错，模型看不到图片。传法的细节见<a href="run.html#images">图片</a>。</p>
+
 <h2 id="network">让 agent 访问网络</h2>
 <p>默认情况下，agent 运行的命令不能联网。运行时自己访问模型服务不受影响。需要联网时有两种放开方式：</p>
 <table>

@@ -143,7 +143,7 @@ impl Session {
             expected: Vec::new(),
             started: Instant::now(),
         };
-        let events = session.aggregator.begin(prompt);
+        let events = session.aggregator.begin(prompt, Vec::new());
         session.emit(&events);
         session
     }
