@@ -57,6 +57,7 @@ pub struct Translated {
 
 pub struct Aggregator {
     echoes_prompt: bool,
+    images: Vec<String>,
     open_tools: Vec<StartedTool>,
     subagent_parents: HashMap<String, Option<String>>,
     running: Vec<RunningSubagent>,
@@ -94,6 +95,7 @@ impl Aggregator {
     pub fn new(echoes_prompt: bool) -> Aggregator {
         Aggregator {
             echoes_prompt,
+            images: Vec::new(),
             open_tools: Vec::new(),
             subagent_parents: HashMap::new(),
             running: Vec::new(),
@@ -105,11 +107,12 @@ impl Aggregator {
         }
     }
 
-    pub fn begin(&self, prompt: &str) -> Vec<Event> {
+    pub fn begin(&mut self, prompt: &str, images: Vec<String>) -> Vec<Event> {
+        self.images = images;
         if self.echoes_prompt {
             Vec::new()
         } else {
-            vec![prompt_event(prompt)]
+            vec![self.prompt_event(prompt)]
         }
     }
 
@@ -123,7 +126,7 @@ impl Aggregator {
             match record {
                 Record::PromptEcho { text } => {
                     if self.echoes_prompt {
-                        translated.events.push(prompt_event(&text));
+                        translated.events.push(self.prompt_event(&text));
                     }
                 }
                 Record::ToolStart {
@@ -250,6 +253,13 @@ impl Aggregator {
         parent.filter(|id| self.subagent_parents.contains_key(id))
     }
 
+    fn prompt_event(&self, text: &str) -> Event {
+        Event::now(Body::Prompt(event::Prompt {
+            text: text.to_string(),
+            images: self.images.clone(),
+        }))
+    }
+
     fn subagent_end_event(&self, subagent: RunningSubagent, status: SubagentStatus) -> Event {
         let usage = Usage::sum(
             self.usages
@@ -286,12 +296,6 @@ fn tool_event(tool: StartedTool, denied: bool) -> Event {
         name: tool.name,
         summary: tool.summary,
         denied,
-    }))
-}
-
-fn prompt_event(text: &str) -> Event {
-    Event::now(Body::Prompt(event::Prompt {
-        text: text.to_string(),
     }))
 }
 

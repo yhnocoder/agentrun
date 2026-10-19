@@ -299,7 +299,8 @@ interface ToolDefinition {
 <h3>user 消息</h3>
 <pre><code class="language-typescript">interface UserMessage {
   role: "user";
-  // 观测值是 [{ type: "text", text: "提示词" }]；文档允许字符串与 image 块
+  // 观测值是 [{ type: "text", text: "提示词" }]；用 @文件 传入图片时，
+  // 是一个 text 元素加上每张图片一个 image 元素（1.2.0 实测）。文档也允许字符串
   content: string | (TextContent | ImageContent)[];
   timestamp: number;
 }</code></pre>
@@ -727,7 +728,7 @@ interface ThinkingLevelChanged { type: "thinking_level_changed"; level: string; 
 
 <h2>样本范围</h2>
 <ul>
-  <li>本文的 1.0.1 样本只覆盖 deepseek provider 与 <code>read</code>、<code>bash</code>、<code>write</code> 三个工具的执行；<code>edit</code>、<code>grep</code>、<code>find</code>、<code>ls</code> 的 <code>result.details</code> 形状、其他 provider 的 <code>api</code> 与签名字段、图片内容块、<code>length</code>、<code>aborted</code>、<code>deferred</code> 三种 <code>stopReason</code>、压缩与扩展相关事件、SIGTERM 的行为均未实测。</li>
+  <li>本文的 1.0.1 样本只覆盖 deepseek provider 与 <code>read</code>、<code>bash</code>、<code>write</code> 三个工具的执行；<code>edit</code>、<code>grep</code>、<code>find</code>、<code>ls</code> 的 <code>result.details</code> 形状、其他 provider 的 <code>api</code> 与签名字段、tool 结果里的图片内容块、<code>length</code>、<code>aborted</code>、<code>deferred</code> 三种 <code>stopReason</code>、压缩与扩展相关事件、SIGTERM 的行为均未实测。</li>
   <li>pi 在 <code>--mode json</code> 下的输出同时也是 RPC 模式的事件格式（RPC 没有 <code>session</code> 头，另有 <code>bash_execution_update</code> 与 <code>extension_error</code>），以及 SDK 的 <code>AgentSessionEvent</code> 去掉累计快照后的形状。TypeScript 类型 <code>JsonAgentSessionEvent</code> 由 <code>@earendil-works/pi-coding-agent</code> 导出。</li>
 </ul>
 </main>

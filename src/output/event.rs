@@ -114,6 +114,7 @@ pub struct NetworkInfo {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Prompt {
     pub text: String,
+    pub images: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -349,10 +350,11 @@ mod tests {
     fn prompt_and_text_fields_in_order() {
         assert_eq!(
             at(Body::Prompt(Prompt {
-                text: "hi".to_string()
+                text: "hi".to_string(),
+                images: vec!["shot.png".to_string()]
             }))
             .to_json(),
-            r#"{"schema":1,"type":"prompt","time":"2026-10-04T13:00:00.000Z","text":"hi"}"#
+            r#"{"schema":1,"type":"prompt","time":"2026-10-04T13:00:00.000Z","text":"hi","images":["shot.png"]}"#
         );
         assert_eq!(
             at(Body::Text(Text {

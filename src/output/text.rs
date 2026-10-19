@@ -25,7 +25,11 @@ impl TextFormatter {
     pub fn lines(&mut self, event: &Event) -> Vec<String> {
         match &event.body {
             Body::Start(start) => self.note(start.sandbox).into_iter().collect(),
-            Body::Prompt(prompt) => vec![format!("[main] prompt {}", first_line(&prompt.text))],
+            Body::Prompt(prompt) => vec![format!(
+                "[main] prompt {}{}",
+                first_line(&prompt.text),
+                image_count(prompt.images.len())
+            )],
             Body::ToolStart(_) => Vec::new(),
             Body::Tool(tool) => {
                 let denied = if tool.denied { " (denied)" } else { "" };
@@ -166,6 +170,14 @@ fn usage_items(counts: &TokenCounts) -> String {
         .collect()
 }
 
+fn image_count(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        1 => " (+1 image)".to_string(),
+        count => format!(" (+{count} images)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,9 +266,24 @@ mod tests {
         let mut text = TextFormatter::new(SandboxMode::On, "");
         assert_eq!(
             text.lines(&event(Body::Prompt(Prompt {
-                text: "fix tests\nmore".to_string()
+                text: "fix tests\nmore".to_string(),
+                images: Vec::new()
             }))),
             vec!["[main] prompt fix tests"]
+        );
+        assert_eq!(
+            text.lines(&event(Body::Prompt(Prompt {
+                text: "read this".to_string(),
+                images: vec!["a.png".to_string()]
+            }))),
+            vec!["[main] prompt read this (+1 image)"]
+        );
+        assert_eq!(
+            text.lines(&event(Body::Prompt(Prompt {
+                text: "compare".to_string(),
+                images: vec!["a.png".to_string(), "b.png".to_string()]
+            }))),
+            vec!["[main] prompt compare (+2 images)"]
         );
         assert_eq!(
             text.lines(&event(Body::Text(Text {

@@ -40,6 +40,7 @@
     <tr><td><code>src/runtime/codex.rs</code></td><td><code>Codex</code>、<code>MIN_VERSION</code>、<code>SERVICE_HOSTS</code>、<code>SERVICE_HOST</code>、<code>sandbox_command</code></td><td>codex</td></tr>
     <tr><td><code>src/transcript.rs</code></td><td><code>Saved</code>、<code>Transcript</code>、<code>store</code>、<code>create_store</code>、<code>locate</code>、<code>find_file</code>、<code>find_file_within</code>、<code>copy_into</code>、<code>save</code></td><td>保存与继续会话</td></tr>
     <tr><td><code>src/doctor.rs</code></td><td><code>run</code>、<code>connect</code>、<code>selected</code>、<code>COMMAND_TIMEOUT</code>、<code>USAGE_EXIT_CODE</code></td><td>doctor 检查</td></tr>
+    <tr><td><code>src/image.rs</code></td><td><code>Image</code>、<code>ImageKind</code>、<code>read_images</code>、<code>write_copies</code>、<code>base64</code></td><td>图片</td></tr>
     <tr><td><code>src/json.rs</code></td><td><code>string</code>、<code>optional_string</code>、<code>joined_text</code>、<code>first_line</code></td><td>三个运行时的输出映射</td></tr>
   </tbody>
 </table>
@@ -58,6 +59,7 @@ agentrun codex --sandbox off --format jsonl --timeout 600 &lt; task.md</code></p
     <tr><td><code>--cwd DIR</code></td><td>会话的工作目录，必须存在。沙箱运行时，它与会话临时目录是 agent 仅有的可写目录</td><td>当前目录</td></tr>
     <tr><td><code>--prompt TEXT</code></td><td>提示词</td><td>无</td></tr>
     <tr><td><code>--prompt-file FILE</code></td><td>从文件读提示词。与 <code>--prompt</code> 同时给出是用法错误</td><td>无</td></tr>
+    <tr><td><code>--image FILE</code></td><td>与提示词一起交给模型的图片，可重复，见<a href="#images">图片</a></td><td>无</td></tr>
     <tr><td>标准输入</td><td>前两项都没给时从标准输入读提示词。标准输入是终端时不等待，直接报用法错误；提示词为空也是用法错误</td><td></td></tr>
     <tr><td><code>--model ID</code></td><td>模型，原样传给运行时。pi 必须写成 <code>服务商/模型</code>，并检查 pi 实际使用的模型是否一致，见<a href="#pi">pi 一节</a></td><td>不传，用运行时自己的默认配置</td></tr>
     <tr><td><code>--effort LEVEL</code></td><td>推理强度，传给运行时对应的参数：claude-code 的 <code>--effort</code>、codex 的 <code>model_reasoning_effort</code>、pi 的 <code>--thinking</code>。不检查取值</td><td>不传</td></tr>
@@ -96,6 +98,18 @@ agentrun variables: (none)</div>
 <p>可以覆盖的设置包括权限与沙箱设置。工具不阻止，只在 <code>start</code> 事件的 <code>argv</code> 里如实记录，这时安全保证由调用方负责。理由：用户需要为没有预料到的用途保留完整的控制。</p>
 <p>调用方的参数可能让运行时输出工具不认识的事件，例如给 claude-code 传 <code>--include-partial-messages</code> 后，会多出逐字输出的 <code>stream_event</code>。这类事件不进入统一事件流，只写入 <code>--raw</code> 文件。</p>
 
+<h3 id="images">图片</h3>
+<p><code>--image FILE</code> 把一个图片文件与提示词放在同一条用户消息里交给模型，可以重复，图片按给出的顺序排列，数量不限。agentrun 在启动前读出每个文件的全部内容，以下情形是用法错误：</p>
+<ul>
+  <li>文件不存在或读不了，<code>detail</code> 为 <code>cannot read image &lt;路径&gt;: &lt;系统错误&gt;</code>。</li>
+  <li>路径（跟随符号链接之后）不是普通文件，例如目录、FIFO、设备文件，<code>detail</code> 为 <code>image &lt;路径&gt; is not a regular file</code>。文件以非阻塞方式打开，再检查类型。理由：FIFO 会让打开一直阻塞，设备文件的大小是 0、读取没有尽头，这两种都发生在启动前检查里，<code>--timeout</code> 管不到。</li>
+  <li>文件超过 20 MiB（20971520 字节），<code>detail</code> 为 <code>image &lt;路径&gt; is larger than the limit of 20971520 bytes</code>。读取最多读到上限加 1 字节，按实际读到的长度判断。</li>
+  <li>文件不是 PNG、JPEG、GIF 或 WebP，<code>detail</code> 为 <code>image &lt;路径&gt; is not a png, jpeg, gif or webp file (animated png and jpeg-ls are not supported)</code>。类型按文件内容判断，不看扩展名，规则按 pi 1.2.0 识别图片的规则写：PNG 的第一个块必须是长度 13 的 IHDR，IDAT 之前出现 acTL 块（动画 PNG）时不接受；JPEG 第 4 个字节是 0xF7（JPEG-LS）时不接受。pi 只在文件的前 4100 字节里找 acTL，agentrun 检查整个文件，所以 acTL 在 4100 字节之后的动画 PNG 被 agentrun 拒绝，pi 却会接受。理由：pi 不认作图片的文件会被当成文本读进提示词，不报错，模型看不到图片。</li>
+</ul>
+<p>运行时拿到的是 agentrun 读出的内容，不读调用方给的路径。claude-code 的图片直接写进标准输入；pi 与 codex 的图片先写成会话临时目录里的 <code>image-N.扩展名</code>（N 从 1 开始，扩展名按类型取 <code>png</code>、<code>jpg</code>、<code>gif</code>、<code>webp</code>，权限 0600），再把这个路径传给运行时。理由：沙箱打开时 agent 一定能读会话临时目录，调用方的图片可能在别的目录里。<code>--dry-run</code> 不写这些文件，命令里的路径写成 <code>&lt;tempdir&gt;/image-1.png</code>。各运行时的传法见 <a href="#claude-code">claude-code</a>、<a href="#pi">pi</a>、<a href="#codex">codex</a> 三节。</p>
+<p>三个运行时都没有更严的文件大小限制：claude-code 与 pi 把过大的图片缩小后交给模型（实测 48 MB、4000×4000 像素的 PNG），codex 读本地图片时不检查大小、超过 2048 像素时缩小（codex 源码 <code>codex-rs/utils/image</code>）。20 MiB 是 agentrun 自己的上限，理由：图片在启动前整个读进内存，claude-code 的图片还要按 base64 写进标准输入的一行 JSON，体积再增加三分之一。</p>
+<p><code>prompt</code> 事件的 <code>images</code> 按顺序列出调用方写的路径，不转成绝对路径，不写图片内容，见<a href="events.html">事件与输出</a>。</p>
+
 <h3>一次运行的顺序</h3>
 <figure>
 <svg class="diagram" viewBox="0 0 600 400" style="max-width:600px" role="img" aria-label="一次运行的顺序"><defs><marker id="arr-run" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs><rect x="20" y="10" width="340" height="40" rx="8"/><text x="190.0" y="35.0" text-anchor="middle">解析命令行</text><path d="M190,50 L190,78" marker-end="url(#arr-run)"/><rect x="20" y="80" width="340" height="56" rx="8"/><text x="190.0" y="104.0" text-anchor="middle">启动前检查：沙箱、运行时、凭据、</text><text x="190.0" y="122.0" text-anchor="middle">会话临时目录、过滤代理</text><path d="M360,108 L418,108" marker-end="url(#arr-run)"/><text class="note" x="366" y="100" text-anchor="start">失败</text><rect x="420" y="80" width="170" height="56" rx="8"/><text x="505.0" y="104.0" text-anchor="middle">只输出 end（rejected）</text><text x="505.0" y="122.0" text-anchor="middle">退出码 2</text><path d="M190,136 L190,164" marker-end="url(#arr-run)"/><rect x="20" y="166" width="340" height="40" rx="8"/><text x="190.0" y="191.0" text-anchor="middle">在沙箱里启动运行时</text><path d="M190,206 L190,234" marker-end="url(#arr-run)"/><rect x="20" y="236" width="340" height="40" rx="8"/><text x="190.0" y="261.0" text-anchor="middle">逐行解析运行时输出，写统一事件</text><path d="M190,276 L190,304" marker-end="url(#arr-run)"/><rect x="20" y="306" width="340" height="56" rx="8"/><text x="190.0" y="330.0" text-anchor="middle">运行时退出、收到信号或超时：</text><text x="190.0" y="348.0" text-anchor="middle">清理进程组，输出 end</text><path d="M360,334 L418,334" marker-end="url(#arr-run)"/><rect x="420" y="306" width="170" height="56" rx="8"/><text x="505.0" y="330.0" text-anchor="middle">删除临时目录</text><text x="505.0" y="348.0" text-anchor="middle">按退出码表退出</text></svg>
@@ -105,7 +119,7 @@ agentrun variables: (none)</div>
 <h3 id="preflight">启动前检查</h3>
 <p>以下情形在启动运行时之前报错。标准输出只有一个 <code>end</code> 事件，<code>status</code> 为 <code>rejected</code>，<code>detail</code> 写出原因与修正方法；同一个原因另写一行到标准错误；agentrun 以退出码 2 结束。</p>
 <ul>
-  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
+  <li>用法错误：未知子命令或选项、值不合法、提示词来源冲突或为空、<code>--prompt-file</code> 读取失败、<code>--image</code> 读取失败、类型不对或超过上限、<code>--cwd</code> 或 <code>--path</code> 不存在、<code>--raw</code> 文件无法创建、只写 KEY 的 <code>--env</code> 在调用方环境里找不到、<code>--allow-host</code> 格式不对、环境变量 <code>AGENTRUN_SANDBOX</code> 的值不是 <code>on</code>、<code>relax</code>、<code>off</code> 之一。</li>
   <li><code>--env-file</code> 读取失败或格式错误。</li>
   <li>在会话 PATH 里找不到运行时。</li>
   <li>凭据写入失败。</li>
@@ -242,6 +256,12 @@ agentrun variables: (none)</div>
   <li>启动 subagent 的工具在参数与 <code>system/init</code> 的工具列表里叫 <code>Task</code>，在输出的 <code>tool_use</code> 里叫 <code>Agent</code>，两个名字都要识别。<code>--no-subagents</code> 从 <code>--tools</code> 与 <code>--allowedTools</code> 里去掉 <code>Task</code>，生效与否看 init 的工具列表里有没有 <code>Task</code>。</li>
   <li><code>--network full</code> 时两个列表都加上 <code>WebFetch</code> 与 <code>WebSearch</code>；<code>custom</code> 时 <code>--tools</code> 加 <code>WebFetch</code>，<code>--allowedTools</code> 每个主机加一条 <code>WebFetch(domain:HOST)</code>。</li>
   <li>提示词从标准输入传入，不在命令行里：写入一行 JSON <code>{"type":"user","message":{"role":"user","content":"&lt;提示词&gt;"}}</code>，然后关闭标准输入。<code>--replay-user-messages</code> 让 claude-code 把这条消息回显到输出里，agentrun 据此输出 <code>prompt</code> 事件。不加这两个选项时，输出里没有提示词。实测关闭标准输入后进程正常结束（退出码 0）；多行提示词与约 200 KB 的提示词，回显与原文逐字相同；收到 SIGINT 时，回显在中断前已经输出。</li>
+  <li>给了 <code>--image</code> 时，<code>content</code> 换成数组：每张图片一个 image 元素，按给出的顺序排列，最后是提示词的 text 元素。回显里的 text 元素就是提示词原文。
+<pre><code class="language-json">{"type":"user","message":{"role":"user","content":[
+  {"type":"image","source":{"type":"base64","media_type":"image/png","data":"&lt;base64&gt;"}},
+  {"type":"text","text":"&lt;提示词&gt;"}
+]}}</code></pre>
+  claude-code 2.1.303 实测：四种类型都能让模型读出图中的文字；48 MB、4000×4000 像素的 PNG 由 claude-code 缩小后交给模型，不报错。</li>
 </ul>
 <p>沙箱设置（只在沙箱打开时传）：</p>
 <pre><code class="language-json">{
@@ -316,10 +336,11 @@ agentrun variables: (none)</div>
   --no-approve --offline
   --tools read,bash,edit,write,grep,find,ls
   [--model 服务商/模型] [--thinking LEVEL]
-  &lt;-- 之后的调用方参数&gt;</code></pre>
+  &lt;-- 之后的调用方参数&gt; [-- @&lt;图片副本&gt;...]</code></pre>
 <ul>
   <li><code>--no-context-files</code> 不读 <code>AGENTS.md</code> 与 <code>CLAUDE.md</code>；<code>--no-approve</code> 不信任工作目录里的项目级配置，因为工作目录 agent 可写，项目级配置能在 pi 进程内执行代码；<code>--offline</code> 启动时不联网下载资源。</li>
   <li>提示词原文写入标准输入后关闭，不放在命令行里。理由：pi 把以 <code>@</code> 开头的位置参数当成文件路径，写在 <code>--</code> 之后也一样，文件不存在时报 <code>File not found</code> 退出，文件存在时把文件内容当成提示词。pi 去掉标准输入内容首尾的空白（pi 1.0.1 与 1.2.0 相同），所以模型收到的提示词与 <code>prompt</code> 事件都没有首尾的空白与空行，中间的换行与缩进不变；claude-code 与 codex 收到的是原文。调用方参数里的位置参数由 pi 当成消息：第一个直接接在提示词后面，中间不加分隔，之后的每个各算一轮新的消息，以 <code>@</code> 开头的被当成文件。所以调用方参数里只写选项。</li>
+  <li>给了 <code>--image</code> 时，命令最后加上 <code>--</code> 与每个图片副本的 <code>@&lt;路径&gt;</code>。pi 按文件内容识别出图片，把它作为图片元素放进用户消息，并在提示词之后为每个文件加一段 <code>&lt;file name="&lt;路径&gt;"&gt;&lt;/file&gt;</code>；按模型的限制缩小图片时，还在最后追加一行尺寸说明（pi 1.2.0 实测，48 MB、4000×4000 像素的 PNG 被缩小到 2000×2000）。</li>
   <li><code>--effort</code> 传成 <code>--thinking</code>。<code>--max-turns</code> 是用法错误；<code>--no-subagents</code> 不起作用，也不报错。</li>
   <li>沙箱打开时，整条命令前面加上包裹命令，见<a href="isolation.html">沙箱与网络</a>。Linux：
 <pre><code class="language-bash">bwrap --ro-bind / / --bind &lt;cwd&gt; &lt;cwd&gt; --bind &lt;临时目录&gt; &lt;临时目录&gt;
@@ -349,7 +370,7 @@ agentrun variables: (none)</div>
     <tr><td><code>tool_execution_start</code></td><td><code>tool_start</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，summary 由 <code>args</code> 计算</td></tr>
     <tr><td><code>tool_execution_end</code></td><td><code>tool</code>：<code>id</code> 为 <code>toolCallId</code>，<code>name</code> 为 <code>toolName</code>，<code>parent</code> 为 null，<code>denied</code> 为 false（<code>isError</code> 表示执行出错，不是拒绝）。<code>args</code> 不在这个事件里，从对应的 <code>tool_execution_start</code> 取。同一条消息里的多个调用并行执行，结束顺序可能与开始顺序不同</td></tr>
     <tr><td>assistant 的 <code>message_end</code></td><td><code>text</code>：全部 text 元素按顺序用换行连接，不输出 thinking；之后输出 <code>usage</code>：<code>model</code> 为 <code>provider/model</code>，<code>input</code>、<code>output</code>、<code>cacheRead</code>、<code>cacheWrite</code> 对应四个字段（<code>input</code> 不含缓存命中，实测），<code>cost.total</code> 对应 <code>cost_usd</code>；<code>reasoning</code> 与 <code>cost</code> 的其他分项不进统一事件</td></tr>
-    <tr><td>user 的 <code>message_end</code></td><td><code>prompt</code>：全部 text 元素按顺序用换行连接</td></tr>
+    <tr><td>user 的 <code>message_end</code></td><td><code>prompt</code>：全部 text 元素按顺序用换行连接。给了 <code>--image</code> 时，文字以去掉首尾空白的提示词开头、后面是 pi 加的文件段与尺寸说明，这时只取去掉首尾空白的提示词；开头不是它时原样输出</td></tr>
     <tr><td>第一个 assistant 的 <code>message_start</code></td><td>不输出；用于模型检查</td></tr>
   </tbody>
 </table>
@@ -381,6 +402,7 @@ agentrun variables: (none)</div>
 <h3>参数</h3>
 <pre><code class="language-bash">&lt;codex 的绝对路径&gt; exec --json --skip-git-repo-check
   --ignore-user-config --ignore-rules -C &lt;cwd&gt;
+  [--image &lt;图片副本&gt;]...
   -c default_permissions=agentrun
   -c 'permissions.agentrun.filesystem={":root"="read", ":workspace_roots"={"."="write"}, "&lt;会话临时目录&gt;"="write"}'
   -c permissions.agentrun.network.enabled=false
@@ -416,6 +438,7 @@ agentrun variables: (none)</div>
   <li><code>--disable</code> 列表关闭会给模型增加工具或在 codex 进程里执行用户代码的功能。<code>shell_snapshot</code> 与 <code>allow_login_shell=false</code> 让命令不读用户的 shell 配置。其中 <code>computer_use</code>、<code>browser_use</code>、<code>daemon_auto_start</code> 等在 exec 下没有可见效果，仍然关闭。功能名不存在时 codex 报错退出，所以这份列表要随 codex 版本核对。</li>
   <li><code>--no-subagents</code> 加 <code>-c agents.enabled=false --disable multi_agent --disable multi_agent_v2</code>。只关 <code>multi_agent</code> 不够，模型目录里的设置优先（codex 0.159.2 源码）。</li>
   <li><code>--max-turns</code> 是用法错误。</li>
+  <li>给了 <code>--image</code> 时，每个图片副本一组 <code>--image &lt;路径&gt;</code>，紧跟在 <code>-C &lt;cwd&gt;</code> 之后（codex 0.160.1 实测 PNG、JPEG、GIF、WebP 与多张图片）。codex 的 <code>--image</code> 接受一个或多个值，并把逗号当作值之间的分隔符（codex 源码 <code>codex-rs/utils/cli/src/shared_options.rs</code>），所以它后面必须紧跟另一个选项，否则最后的 <code>-</code> 会被当成图片；路径里有逗号时 codex 会把它拆成两个文件，这时启动前报错，<code>detail</code> 为 <code>cannot give images to codex: the path &lt;路径&gt; contains ',', which codex reads as a list separator</code>。副本路径在会话临时目录里，只有 <code>$TMPDIR</code> 含逗号时才会出现这个错误。</li>
 </ul>
 <h3>输出映射</h3>
 <table>

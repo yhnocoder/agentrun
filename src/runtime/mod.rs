@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::cli::{Format, RunArgs, Runtime, SandboxMode};
+use crate::image::Image;
 use crate::network::{HostRule, ProxyEndpoint};
 use crate::output::{Record, SandboxKind};
 use crate::sandbox::{PiState, Sandbox, Wrapper};
@@ -160,6 +161,7 @@ pub struct Invocation {
     pub args: RunArgs,
     pub cwd: PathBuf,
     pub prompt: String,
+    pub images: Vec<Image>,
     pub format: Format,
     pub sandbox: Sandbox,
     pub tempdir: PathBuf,
@@ -182,6 +184,7 @@ impl Invocation {
             args,
             cwd,
             prompt,
+            images: Vec::new(),
             format: Format::Jsonl,
             sandbox: Sandbox::new(SandboxMode::Off, Wrapper::None),
             tempdir: PathBuf::new(),

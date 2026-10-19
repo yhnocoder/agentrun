@@ -72,6 +72,7 @@ interface StartEvent extends EventBase {
 interface PromptEvent extends EventBase {
   type: "prompt"
   text: string
+  images: string[]           // --image 给出的路径，按给出的顺序；没有图片时为 []
 }
 
 // 一次工具调用开始时输出
@@ -194,7 +195,8 @@ interface Usage extends TokenCounts {
   "schema": 1,
   "type": "prompt",
   "time": "2026-10-04T13:00:00.850Z",
-  "text": "给 parse 模块补测试并修复失败"
+  "text": "给 parse 模块补测试并修复失败",
+  "images": []
 }
 {
   "schema": 1,
@@ -324,7 +326,7 @@ interface Usage extends TokenCounts {
   "session_id": null
 }</code></pre>
 <h3>提示词</h3>
-<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。</p>
+<p><code>prompt</code> 让事件流本身记录这次运行的输入，读事件流的人不需要另外保存提示词。它取自运行时在输出里回显的提示词：claude-code 用 <code>--replay-user-messages</code> 回显，pi 的输出里本来就有用户消息。codex 不回显（codex 0.159.2 实测），agentrun 在 <code>start</code> 之后用自己传入的提示词输出。运行时在回显之前就失败时，事件流里没有 <code>prompt</code>。<code>images</code> 列出调用方用 <code>--image</code> 给出的路径，不转成绝对路径，路径里不是 UTF-8 的字节换成 U+FFFD；不写图片内容，也不写 agentrun 在会话临时目录里写的副本路径，见<a href="run.html#images">图片</a>。</p>
 
 <p>运行时输出的非 JSON 行和未识别的事件不进入统一事件流，只写入 <code>--raw</code> 文件，不报错。运行时的标准错误原样转到 agentrun 的标准错误。</p>
 
@@ -393,7 +395,7 @@ interface Usage extends TokenCounts {
 <ul>
   <li><code>tool</code>：<code>tool</code> 加 <code>summary</code>。被拒绝时在 <code>summary</code> 后紧接 <code> (denied)</code>。</li>
   <li><code>tool_start</code>：不显示，每次调用只在结束时由 <code>tool</code> 显示一行。</li>
-  <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。</li>
+  <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。有图片时在后面加上 <code> (+1 image)</code> 或 <code> (+N images)</code>。</li>
   <li><code>text</code>：文字的第一行。</li>
   <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写 <code>agent start 标签 (模型): 描述</code>，模型未知时省去括号。</li>
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>

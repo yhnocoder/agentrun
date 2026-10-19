@@ -90,6 +90,12 @@ pub struct RunArgs {
     pub prompt: Option<String>,
     #[arg(long, value_name = "FILE", help = "Read the prompt from a file")]
     pub prompt_file: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Image given to the model with the prompt (png, jpeg, gif, webp), repeatable"
+    )]
+    pub image: Vec<PathBuf>,
     #[arg(long, value_name = "ID", help = "Model, passed to the runtime as is")]
     pub model: Option<String>,
     #[arg(long, value_name = "LEVEL", help = "Reasoning effort")]

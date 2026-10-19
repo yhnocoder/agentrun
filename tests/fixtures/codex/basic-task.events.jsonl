@@ -1,4 +1,4 @@
-{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents."}
+{"schema":1,"type":"prompt","text":"Create a file named probe.txt in the current working directory containing exactly the text: hello probe. Then read it back and reply with its contents.","images":[]}
 {"schema":1,"type":"text","parent":null,"text":"I’ll create `probe.txt` with the exact text, then read it back."}
 {"schema":1,"type":"tool_start","id":"item_1","parent":null,"name":"command_execution","summary":"shell: /bin/zsh -c \"printf %s 'hello probe' > probe.txt\""}
 {"schema":1,"type":"tool","id":"item_1","parent":null,"name":"command_execution","summary":"shell: /bin/zsh -c \"printf %s 'hello probe' > probe.txt\"","denied":false}
