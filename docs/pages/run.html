@@ -130,7 +130,7 @@ agentrun variables: (none)</div>
 [end] finished 1.9s  in 2.2k  out 5  cached 92%  session 01a1522e-e793-7208-9d60-1a64ea5ed414</div>
 <ul>
   <li><code>DIR</code> 与 <code>DIR/&lt;运行时名&gt;/</code> 不存在时在启动前创建，新建的目录权限为 0700；<code>DIR</code> 是相对路径时相对 agentrun 自己的当前目录。<code>--dry-run</code> 不创建目录。</li>
-  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 只能由字母、数字、<code>-</code> 与 <code>_</code> 组成。找不到时启动前报错，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
+  <li>记录的文件名沿用运行时自己的文件名。<code>--resume ID</code> 在 <code>DIR/&lt;运行时名&gt;/</code> 里找文件名以 <code>ID.jsonl</code> 结尾、且 ID 前面是文件名开头、<code>_</code> 或 <code>-</code> 的文件。ID 只能由字母、数字、<code>-</code> 与 <code>_</code> 组成。只在这次运行时自己的子目录里找，用另一个运行时继续某个运行时保存的 id 同样找不到。找不到时启动前按 <code>rejected</code> 拒绝，<code>detail</code> 为 <code>no saved &lt;运行时名&gt; session &lt;ID&gt; in &lt;目录&gt;</code>。</li>
   <li>保存在运行时退出、进程组清理之后，<code>end</code> 输出之前进行。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行只要留下了记录也照样保存；运行时没有留下记录时 <code>session_id</code> 为 null。移动失败时标准错误多一行 <code>agentrun: cannot save the session: &lt;原因&gt;</code>，<code>session_id</code> 为 null，<code>status</code> 不变。源与目标不在同一个文件系统时先复制再删除源。</li>
   <li>继续时 <code>--cwd</code> 可以与上一次不同，运行时在新的工作目录里工作（三个运行时实测）。<code>--model</code> 等选项每次照常传给运行时。</li>
   <li>不支持同时继续同一个会话。两个运行同时 <code>--resume</code> 同一个 id 时，claude-code 的两份新内容交错写进同一个文件；codex 与 pi 后结束的那次覆盖先结束的那次。</li>
@@ -146,7 +146,7 @@ agentrun variables: (none)</div>
   </tbody>
 </table>
 <ul>
-  <li>claude-code 的新会话写在用户的配置目录里，运行结束后才移走。理由：claude-code 不能把新会话直接写到别的位置（<code>--resume</code> 指向空文件或不存在的文件时报 <code>No conversation found</code>）；改 <code>CLAUDE_CONFIG_DIR</code> 会改变 claude-code 读登录信息的位置：Linux 上登录文件在配置目录里，macOS 上钥匙串里的登录条目名随配置目录改变（未实测）。代价是运行期间这份记录出现在用户自己的 <code>claude --resume</code> 列表里，agentrun 被 SIGKILL 时它留在那里。</li>
+  <li>claude-code 的新会话写在用户的配置目录里，运行结束后才移走。理由：claude-code 不能把新会话直接写到别的位置（<code>--resume</code> 指向空文件、不存在的文件或只有元数据行没有对话的文件时都报 <code>No conversation found</code>，2.1.303 实测）；改 <code>CLAUDE_CONFIG_DIR</code> 会改变 claude-code 读登录信息的位置：Linux 上登录文件在配置目录里，macOS 上钥匙串里的登录条目名随配置目录改变（未实测）。代价是运行期间这份记录出现在用户自己的 <code>claude --resume</code> 列表里，agentrun 被 SIGKILL 时它留在那里。</li>
   <li>pi 的记录先写在会话临时目录里，运行结束后再移到 <code>DIR</code>。理由：pi 整个进程在沙箱里，让它直接写 <code>DIR</code> 就要把 <code>DIR</code> 放进沙箱的可写范围，agent 就能改写其他会话的记录。claude-code 与 codex 的记录由运行时进程自己写，不经过 agentrun 的沙箱，agent 的工具写不到 <code>DIR</code>。</li>
 </ul>
 

@@ -233,7 +233,7 @@ profile bwrap /usr/bin/bwrap flags=(unconfined) {
 </table>
 <p>保存会话（<code>--session-dir</code>）的剩余风险：</p>
 <ul>
-  <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在那里。</li>
+  <li>claude-code 的新会话在运行期间写在用户的配置目录里，运行结束后才移到 <code>--session-dir</code>。只有给出 <code>--session-dir</code> 时这样做，不给时仍加 <code>--no-session-persistence</code>，不写记录。<code>failed</code>、<code>interrupted</code> 与 <code>timeout</code> 的运行同样在结束时移走（云端实测 <code>interrupted</code> 与 <code>timeout</code>）。运行期间用户自己的 <code>claude --resume</code> 列表能看到它；agentrun 被 SIGKILL 时它留在用户的配置目录里。</li>
   <li>pi 的记录在运行期间放在会话临时目录里，沙箱里的 agent 能改写这次会话的记录，改写后的内容随记录一起保存，下次继续时进入模型上下文。其他会话的记录 agent 写不到。</li>
 </ul>
 <p>过滤代理本身的剩余风险：</p>

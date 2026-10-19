@@ -925,3 +925,33 @@ fn resume_needs_session_dir() {
     );
     assert_eq!(end["session_id"], Value::Null);
 }
+
+#[test]
+fn resume_rejects_a_session_saved_by_another_runtime() {
+    let env = Env::with("pi", "#!/bin/sh\nexit 0\n");
+    let session_dir = env.root().join("sessions");
+    std::fs::create_dir_all(session_dir.join("claude-code")).unwrap();
+    std::fs::write(session_dir.join("claude-code/0199-a.jsonl"), "{}\n").unwrap();
+    let output = run(
+        &env,
+        &[
+            "pi",
+            "--session-dir",
+            session_dir.to_str().unwrap(),
+            "--resume",
+            "0199-a",
+            "--prompt",
+            "hi",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        format!(
+            "no saved pi session 0199-a in {}",
+            session_dir.join("pi").display()
+        )
+    );
+}
