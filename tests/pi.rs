@@ -148,6 +148,7 @@ fn fake_pi_run_without_sandbox() {
             json!({"schema": 1, "type": "prompt", "text": "say hi"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "deepseek/deepseek-flash", "input_tokens": 1, "output_tokens": 2,
                 "cache_read_tokens": 3, "cache_write_tokens": 4, "context_tokens": 8}),
+            json!({"schema": 1, "type": "tool_start", "id": "call_1", "parent": null, "name": "bash", "summary": "bash: echo hi"}),
             json!({"schema": 1, "type": "tool", "id": "call_1", "parent": null, "name": "bash", "summary": "bash: echo hi", "denied": false}),
             json!({"schema": 1, "type": "text", "parent": null, "text": "hi there"}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "deepseek/deepseek-flash", "input_tokens": 5, "output_tokens": 6,
