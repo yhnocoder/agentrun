@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::{Adapter, Failure, Invocation, Launch, Version, detail_head};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, optional_string, string};
-use crate::network::proxy_environment;
+use crate::network::{proxy_environment, url_host};
 use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox;
 use crate::session::Session;
@@ -364,19 +364,6 @@ pub(crate) fn service_host(session: &Session) -> Option<String> {
         Some(url) => url_host(&url.to_string_lossy()),
         None => Some(SERVICE_HOST.to_string()),
     }
-}
-
-fn url_host(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let host_port = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    if host_port.starts_with('[') {
-        return None;
-    }
-    let host = host_port.split(':').next().unwrap_or_default();
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 pub(crate) fn login_outcome(line: &Value) -> Option<Result<(), String>> {
@@ -779,22 +766,6 @@ mod tests {
             .launch(Path::new("/opt/bin/dsh"), &invocation)
             .unwrap();
         assert!(launch.service_hosts.is_empty());
-    }
-
-    #[test]
-    fn url_host_cases() {
-        let cases = [
-            ("https://api.deepseek.com", Some("api.deepseek.com")),
-            ("https://API.DeepSeek.com/v1?x=1", Some("api.deepseek.com")),
-            ("http://127.0.0.1:8080/", Some("127.0.0.1")),
-            ("https://a:b@host.example#f", Some("host.example")),
-            ("https://[::1]:443/", None),
-            ("https:///path", None),
-            ("api.deepseek.com", None),
-        ];
-        for (url, host) in cases {
-            assert_eq!(url_host(url).as_deref(), host, "{url}");
-        }
     }
 
     #[test]
