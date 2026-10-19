@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
@@ -6,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{Adapter, Failure, Invocation, Launch, Version, detail_head};
+use super::{Adapter, Failure, Invocation, Launch, Version, detail_head, display_path};
 use crate::cli::{NetworkMode, RunArgs, Runtime};
 use crate::json::{first_line, optional_string, string};
-use crate::network::proxy_environment;
+use crate::network::{proxy_environment, url_host};
 use crate::output::{Record, TokenCounts};
 use crate::sandbox;
 use crate::session::Session;
@@ -58,6 +59,9 @@ const COMPLETED: &str = "completed";
 const ERROR_KIND: &str = "error";
 const NO_IMAGES: &str = "--image is not supported by dsh: its headless mode takes text only";
 const NO_TURN_END_DETAIL: &str = "dsh produced no turn_end";
+const SHELL_TOOLS: [&str; 2] = ["bash", "pwsh"];
+const EXIT_CODE_MARKER: &str = "\n[exit code: ";
+const SIGNAL_MARKER: &str = "\n[killed by signal: ";
 const PROJECT_KEY_MAX: usize = 251;
 
 #[derive(Default)]
@@ -69,6 +73,7 @@ pub struct Dsh {
     session_id: Option<String>,
     turn_end: Option<Value>,
     error: Option<String>,
+    shell_calls: HashSet<String>,
 }
 
 impl Dsh {
@@ -81,9 +86,9 @@ impl Dsh {
             "bash" => input["command"]
                 .as_str()
                 .map(|command| first_line(command).to_string()),
-            "read" | "write" | "edit" | "read_image" => {
-                input["file_path"].as_str().map(|path| self.relative(path))
-            }
+            "read" | "write" | "edit" | "read_image" => input["file_path"]
+                .as_str()
+                .map(|path| display_path(Path::new(path), &self.cwd)),
             "glob" | "grep" => input["pattern"].as_str().map(str::to_string),
             _ => None,
         };
@@ -91,15 +96,6 @@ impl Dsh {
             Some(value) => format!("{name}: {value}"),
             None => name.to_string(),
         }
-    }
-
-    fn relative(&self, path: &str) -> String {
-        Path::new(path)
-            .strip_prefix(&self.cwd)
-            .ok()
-            .filter(|relative| !relative.as_os_str().is_empty())
-            .map(|relative| relative.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string())
     }
 
     fn status(&mut self, line: &Value) -> Vec<Record> {
@@ -226,24 +222,34 @@ impl Adapter for Dsh {
                 vec![Record::Text { parent: None, text }]
             }
             Some("tool_call") => {
+                let id = string(&line["callId"]);
                 let name = string(&line["tool"]);
                 let summary = self.tool_summary(&name, &line["input"]);
+                if SHELL_TOOLS.contains(&name.as_str()) {
+                    self.shell_calls.insert(id.clone());
+                }
                 vec![Record::ToolStart {
-                    id: string(&line["callId"]),
+                    id,
                     parent: None,
                     name,
                     summary,
                 }]
             }
-            Some("tool_result") => vec![Record::ToolEnd {
-                id: string(&line["callId"]),
-                denied: false,
-                error: match line["status"].as_str() {
+            Some("tool_result") => {
+                let id = string(&line["callId"]);
+                let shell = self.shell_calls.remove(&id);
+                let error = match line["status"].as_str() {
                     Some("error") => Some(true),
+                    Some(COMPLETED) if shell => line["result"].as_str().map(command_failed),
                     Some(COMPLETED) => Some(false),
                     _ => None,
-                },
-            }],
+                };
+                vec![Record::ToolEnd {
+                    id,
+                    denied: false,
+                    error,
+                }]
+            }
             Some("final") => {
                 let text = string(&line["text"]);
                 if text.is_empty() {
@@ -327,6 +333,19 @@ pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn command_failed(result: &str) -> bool {
+    let marker_value = |marker: &str| {
+        result
+            .rsplit_once(marker)
+            .and_then(|(_, rest)| rest.strip_suffix(']'))
+            .filter(|value| !value.is_empty() && !value.contains([']', '\n']))
+    };
+    marker_value(SIGNAL_MARKER).is_some()
+        || marker_value(EXIT_CODE_MARKER)
+            .and_then(|code| code.parse::<u32>().ok())
+            .is_some_and(|code| code != 0)
+}
+
 pub(crate) fn saved_session(store: &Path, id: &str) -> Option<PathBuf> {
     let dir = store.join(format!("{SESSION_PREFIX}{id}"));
     is_real_dir(&dir).then_some(dir)
@@ -359,19 +378,6 @@ pub(crate) fn service_host(session: &Session) -> Option<String> {
         Some(url) => url_host(&url.to_string_lossy()),
         None => Some(SERVICE_HOST.to_string()),
     }
-}
-
-fn url_host(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let host_port = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    if host_port.starts_with('[') {
-        return None;
-    }
-    let host = host_port.split(':').next().unwrap_or_default();
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 pub(crate) fn login_outcome(line: &Value) -> Option<Result<(), String>> {
@@ -779,22 +785,6 @@ mod tests {
     }
 
     #[test]
-    fn url_host_cases() {
-        let cases = [
-            ("https://api.deepseek.com", Some("api.deepseek.com")),
-            ("https://API.DeepSeek.com/v1?x=1", Some("api.deepseek.com")),
-            ("http://127.0.0.1:8080/", Some("127.0.0.1")),
-            ("https://a:b@host.example#f", Some("host.example")),
-            ("https://[::1]:443/", None),
-            ("https:///path", None),
-            ("api.deepseek.com", None),
-        ];
-        for (url, host) in cases {
-            assert_eq!(url_host(url).as_deref(), host, "{url}");
-        }
-    }
-
-    #[test]
     fn project_key_matches_dsh() {
         let long = format!("/{}", "a".repeat(300));
         let cases = [
@@ -876,6 +866,50 @@ mod tests {
                 }]
             );
         }
+        for (result, error) in [
+            (json!("ok"), Some(false)),
+            (json!("out\n[exit code: 0]"), Some(false)),
+            (
+                json!("[stderr]\nRead-only file system\n[exit code: 1]"),
+                Some(true),
+            ),
+            (json!("000\n[exit code: 56]"), Some(true)),
+            (json!("partial\n[killed by signal: SIGTERM]"), Some(true)),
+            (json!("echo '\n[exit code: 3]' done"), Some(false)),
+            (json!({"text": "x"}), None),
+        ] {
+            translate(
+                &mut adapter,
+                json!({"type": "tool_call", "callId": "s1", "tool": "bash", "input": {"command": "make"}}),
+            );
+            assert_eq!(
+                translate(
+                    &mut adapter,
+                    json!({"type": "tool_result", "callId": "s1", "status": "completed", "result": result})
+                ),
+                vec![Record::ToolEnd {
+                    id: "s1".to_string(),
+                    denied: false,
+                    error
+                }],
+                "{result}"
+            );
+        }
+        translate(
+            &mut adapter,
+            json!({"type": "tool_call", "callId": "r1", "tool": "read", "input": {"file_path": "log"}}),
+        );
+        assert_eq!(
+            translate(
+                &mut adapter,
+                json!({"type": "tool_result", "callId": "r1", "status": "completed", "result": "x\n[exit code: 1]"})
+            ),
+            vec![Record::ToolEnd {
+                id: "r1".to_string(),
+                denied: false,
+                error: Some(false)
+            }]
+        );
         assert_eq!(
             translate(
                 &mut adapter,
@@ -936,7 +970,7 @@ mod tests {
                 json!({"file_path": "/w/i.png"}),
                 "read_image: i.png",
             ),
-            ("edit", json!({"file_path": "/w"}), "edit: /w"),
+            ("edit", json!({"file_path": "/w"}), "edit: ."),
             ("glob", json!({"pattern": "**/*.rs"}), "glob: **/*.rs"),
             ("grep", json!({"pattern": "fn main"}), "grep: fn main"),
             ("bash", json!({}), "bash"),

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -21,19 +22,19 @@ use crate::output::{
 };
 use crate::process_tree;
 use crate::runtime::{
-    self, Adapter, DETAIL_MAX_CHARS, Failure, Invocation, Launch, PrivateDir, detail_tail,
+    self, Adapter, DETAIL_MAX_CHARS, Failure, Invocation, Launch, PrivateDir, contains, detail_tail,
 };
 use crate::sandbox::wrapper_failure;
 use crate::transcript;
 
 const STDERR_TAIL_BYTES: usize = DETAIL_MAX_CHARS * 4 + 3;
-pub(crate) const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+const TEMP_ENV_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 const DRAIN_PERIOD: Duration = Duration::from_secs(1);
 
 pub struct Exit {
     pub code: Option<i32>,
     pub signal: Option<Signal>,
-    pub timed_out: bool,
+    pub timeout: Option<String>,
     pub limit: Option<String>,
 }
 
@@ -95,6 +96,9 @@ pub(super) fn execute(
         invocation.sandbox.mode,
         &invocation.sandbox.reason,
     );
+    if let Some(note) = session_dir_note(&invocation) {
+        output.add_note(note);
+    }
     let rich_stderr = output.is_rich() && caller.stderr_is_terminal;
 
     let hold = caller.signals.hold();
@@ -152,7 +156,11 @@ pub(super) fn execute(
     let exit = Exit {
         code: exit_code,
         signal: caller.signals.first_signal(),
-        timed_out: caller.signals.timed_out(),
+        timeout: invocation
+            .args
+            .timeout
+            .filter(|_| caller.signals.timed_out())
+            .map(|seconds| format!("--timeout {seconds} reached")),
         limit: relay.limit.take(),
     };
     let store = invocation
@@ -160,11 +168,25 @@ pub(super) fn execute(
         .session_dir
         .as_deref()
         .map(|dir| transcript::store(dir, invocation.runtime));
-    let status = relay.finish(&exit, wrapped, &stderr_tail, store.as_deref(), started);
+    let (status, unsaved) = relay.finish(&exit, wrapped, &stderr_tail, store.as_deref(), started);
+    for dir in &mut guards.private_dirs {
+        dir.keep |= unsaved;
+    }
     if let Some(tempdir) = guards.tempdir.take() {
-        finish_tempdir(tempdir, debug);
+        finish_tempdir(tempdir, debug || unsaved);
     }
     Ok(status.exit_code())
+}
+
+fn session_dir_note(invocation: &Invocation) -> Option<String> {
+    // why(#117): 依赖 prepare 里的 create_store 已经创建了这个目录，contains 才能跟随符号链接比较；移到创建之前时只能按字面比较
+    let dir = invocation.args.session_dir.as_deref()?;
+    (invocation.sandbox.runs() && contains(&invocation.cwd, dir)).then(|| {
+        format!(
+            "--session-dir {} is inside the working directory. The agent can change the saved sessions",
+            dir.display()
+        )
+    })
 }
 
 fn serve_proxy(
@@ -248,12 +270,17 @@ fn spawn_runtime(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for key in TEMP_ENV_VARS {
-        command.env(key, tempdir);
-    }
+    command.envs(temp_environment(tempdir));
     command
         .spawn()
         .map_err(|error| format!("failed to start {program}: {error}"))
+}
+
+pub(crate) fn temp_environment(dir: &Path) -> Vec<(OsString, OsString)> {
+    TEMP_ENV_VARS
+        .iter()
+        .map(|key| (OsString::from(key), dir.as_os_str().to_owned()))
+        .collect()
 }
 
 fn start_event(invocation: &Invocation, launch: &Launch) -> Event {
@@ -326,6 +353,7 @@ struct Relay<'a> {
     rich_stderr: bool,
     limits: Limits,
     limit: Option<String>,
+    unsaved: bool,
 }
 
 impl<'a> Relay<'a> {
@@ -348,6 +376,7 @@ impl<'a> Relay<'a> {
             rich_stderr,
             limits,
             limit: None,
+            unsaved: false,
         }
     }
 
@@ -362,8 +391,18 @@ impl<'a> Relay<'a> {
         let saved = self.adapter.transcript()?;
         match transcript::save(&saved, store) {
             Ok(()) => Some(saved.id),
-            Err(detail) => {
-                self.error_line(&format!("agentrun: cannot save the session: {detail}"));
+            Err(error) => {
+                self.unsaved = true;
+                let detail = error.detail;
+                let kept = error
+                    .kept
+                    .iter()
+                    .map(|entry| entry.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error_line(&format!(
+                    "agentrun: cannot save the session: {detail}. The session is kept in {kept}"
+                ));
                 None
             }
         }
@@ -425,7 +464,7 @@ impl<'a> Relay<'a> {
         stderr_tail: &str,
         store: Option<&Path>,
         started: Instant,
-    ) -> EndStatus {
+    ) -> (EndStatus, bool) {
         let session_id = store.and_then(|store| self.save_transcript(store));
         let (events, status) = conclude(
             self.aggregator,
@@ -440,7 +479,7 @@ impl<'a> Relay<'a> {
             self.caller.emit(&mut self.output, event);
         }
         drop(self.raw);
-        status
+        (status, self.unsaved)
     }
 }
 
@@ -587,10 +626,10 @@ pub fn conclude(
     let mut events = aggregator.push(adapter.after_exit()).events;
     let (rest, summary) = aggregator.finish();
     events.extend(rest);
-    let (status, detail) = match (exit.signal, exit.timed_out, &exit.limit) {
+    let (status, detail) = match (exit.signal, &exit.timeout, &exit.limit) {
         (Some(signal), _, _) => (EndStatus::Interrupted(signal), String::new()),
-        (None, true, _) => (EndStatus::Timeout, String::new()),
-        (None, false, limit) => match (adapter.failure(exit.code), limit) {
+        (None, Some(timeout), _) => (EndStatus::Timeout, timeout.clone()),
+        (None, None, limit) => match (adapter.failure(exit.code), limit) {
             // why(#86): 不能改成按是否发过 SIGTERM 判定，运行时已经在退出、退出码定为 0 之后才收到信号时会被误记为 limit
             (None, _) => (EndStatus::Finished, String::new()),
             (Some(_), Some(limit)) => (EndStatus::Limit, limit.clone()),
@@ -671,7 +710,7 @@ mod tests {
         let exit = Exit {
             code: Some(code),
             signal: None,
-            timed_out: false,
+            timeout: None,
             limit: None,
         };
         let (events, _) = conclude(
@@ -756,31 +795,35 @@ mod tests {
 
     #[test]
     fn limit_comes_after_signals_and_timeout_and_only_replaces_a_failure() {
-        let exit = |signal, timed_out, limit: Option<&str>| Exit {
+        let exit = |signal, timeout: Option<&str>, limit: Option<&str>| Exit {
             code: None,
             signal,
-            timed_out,
+            timeout: timeout.map(str::to_string),
             limit: limit.map(str::to_string),
         };
         let failed = || Some(Failure::Message("failed".to_string()));
+        let timeout = Some("--timeout 5 reached");
         assert_eq!(
-            status(exit(Some(Signal::Interrupt), false, Some("over")), failed()),
+            status(
+                exit(Some(Signal::Interrupt), timeout, Some("over")),
+                failed()
+            ),
             (EndStatus::Interrupted(Signal::Interrupt), String::new())
         );
         assert_eq!(
-            status(exit(None, true, Some("over")), failed()),
-            (EndStatus::Timeout, String::new())
+            status(exit(None, timeout, Some("over")), failed()),
+            (EndStatus::Timeout, "--timeout 5 reached".to_string())
         );
         assert_eq!(
-            status(exit(None, false, Some("over")), failed()),
+            status(exit(None, None, Some("over")), failed()),
             (EndStatus::Limit, "over".to_string())
         );
         assert_eq!(
-            status(exit(None, false, None), failed()),
+            status(exit(None, None, None), failed()),
             (EndStatus::Failed, "failed".to_string())
         );
         assert_eq!(
-            status(exit(None, false, Some("over")), None),
+            status(exit(None, None, Some("over")), None),
             (EndStatus::Finished, String::new())
         );
     }

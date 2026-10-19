@@ -33,8 +33,7 @@ agentrun dsh --model deepseek-v4-pro --effort max --prompt "..."</code></pre>
 <p>dsh 的模型名直接写 DeepSeek 的模型，例如 <code>deepseek-flash</code> 或 <code>deepseek-v4-pro</code>；<code>--effort</code> 取 <code>off</code>、<code>low</code>、<code>high</code>、<code>max</code>。模型名写错时，dsh 在第一次请求模型时失败，<code>detail</code> 以 <code>INVALID_REQUEST:</code> 开头并列出可用的模型。</p>
 <p>pi 的模型必须写成 <code>服务商/模型</code>。pi 找不到指定的模型时会改用别的模型继续运行，所以 agentrun 会在 pi 开始请求之前核对 pi 实际选中的模型，不一致就停止运行。只写模型名会直接报错：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --model deepseek-flash --format text --prompt hi
-<span class="dim">[end]</span> rejected --model for pi must be provider/model, got 'deepseek-flash'
-agentrun: --model for pi must be provider/model, got 'deepseek-flash'</div>
+<span class="dim">[end]</span> rejected --model for pi must be provider/model, got 'deepseek-flash'</div>
 
 <h2 id="prompt">传入提示词</h2>
 <p>三种方式，选一种：</p>
@@ -104,20 +103,18 @@ removed: (none)
 agentrun variables: (none)</div>
 <p>写了 <code>--env NAME</code>，环境里却没有这个变量时，agentrun 会拒绝运行，避免你以为变量已经传进去了：</p>
 <div class="term"><span class="prompt">$</span> agentrun pi --env NOT_SET --format text --prompt hi
-<span class="dim">[end]</span> rejected --env NOT_SET: not set in the caller's environment
-agentrun: --env NOT_SET: not set in the caller's environment</div>
+<span class="dim">[end]</span> rejected --env NOT_SET: not set in the caller's environment</div>
 
 <h2 id="timeout">限制运行时间</h2>
 <p>用 <code>--timeout</code> 给出秒数。到时 agentrun 停止运行时和它启动的所有进程，结果是 <code>timeout</code>，退出码 3：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --timeout 5 --format text --prompt "运行 sleep 30，然后回复 done"
 <span class="dim">[main]</span> prompt 运行 sleep 30，然后回复 done
 <span class="dim">[main]</span> tool Bash: sleep 30
-<span class="dim">[main]</span> tool Bash: sleep 30
-<span class="dim">[main]</span> text `sleep 30` 已在后台运行,结束时我会收到通知。等它跑完再回复 done。
-<span class="dim">[end]</span> timeout 6.9s  in 52.6k  out 0.3k  cached 88%  $0.0281
+<span class="dim">[main]</span> text `sleep 30` 已在后台运行，30 秒结束后我会回复 done。
+<span class="dim">[end]</span> timeout 7.1s  in 21.7k  out 0.2k  cached 49%  $0.0930  --timeout 5 reached
 <span class="prompt">$</span> echo $?
 3</div>
-<p>按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
+<p><code>[end]</code> 行的最后写出你给的时限。按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
 
 <h2 id="limits">限制轮数与 token</h2>
 <p>当你担心 agent 反复调用模型、用掉过多的 token 时，给出上限。<code>--max-turns N</code> 限制主 agent 调用模型的次数，subagent 的调用不计入；<code>--max-tokens N</code> 限制所有模型调用（包括 subagent）的 token 数之和。超过上限时 agentrun 停止运行时和它启动的所有进程，结果是 <code>limit</code>，退出码 4：</p>
@@ -137,16 +134,16 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --format text --prompt "在 notes.txt 里写一句问候语"
 <span class="dim">[main]</span> prompt 在 notes.txt 里写一句问候语
 <span class="dim">[main]</span> tool Write: notes.txt
-<span class="dim">[main]</span> text 我已经在 `/tmp/demo/notes.txt` 里写了一句问候语:"你好!祝你今天一切顺利,心情愉快!"
-<span class="dim">[end]</span> finished 6.2s  in 25.4k  out 0.2k  cached 79%  $0.0204  session e5e30275-bbaf-467c-a1d7-1c3f5e22468c</div>
+<span class="dim">[main]</span> text 我已经在 `/tmp/demo/notes.txt` 里写了一句问候语:“你好!祝你今天一切顺利!”
+<span class="dim">[end]</span> finished 7.1s  in 25.7k  out 0.2k  cached 79%  $0.0209  session 8b72e446-ee5f-4d7d-88d9-d057af9b458d</div>
 <p><code>[end]</code> 行最后的 <code>session</code> 是会话 id；jsonl 格式下它是 <code>end</code> 事件的 <code>session_id</code> 字段。下一次运行给出同一个 <code>--session-dir</code> 和 <code>--resume &lt;会话 id&gt;</code>，agent 记得上一次做过什么：</p>
-<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume e5e30275-bbaf-467c-a1d7-1c3f5e22468c --format text --prompt "把你刚才写的那句话翻译成英文，追加到同一个文件"
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 8b72e446-ee5f-4d7d-88d9-d057af9b458d --format text --prompt "把你刚才写的那句话翻译成英文，追加到同一个文件"
 <span class="dim">[main]</span> prompt 把你刚才写的那句话翻译成英文，追加到同一个文件
-<span class="dim">[main]</span> tool Bash: echo "Hello! Wishing you a smooth and happy day!" &gt;&gt; /tmp/demo/notes.txt &amp;&amp; cat /tmp/demo/notes.txt
-<span class="dim">[main]</span> text 已把英文翻译追加到 `/tmp/demo/notes.txt`。现在文件内容是:
-<span class="dim">[end]</span> finished 6.9s  in 54.2k  out 0.4k  cached 86%  $0.0347  session e5e30275-bbaf-467c-a1d7-1c3f5e22468c</div>
+<span class="dim">[main]</span> tool Edit: notes.txt
+<span class="dim">[main]</span> text 我已经把英文翻译追加到 `/tmp/demo/notes.txt` 的第二行:“Hello! Wishing you all the best today!”
+<span class="dim">[end]</span> finished 6.0s  in 54.9k  out 0.4k  cached 86%  $0.0352  session 8b72e446-ee5f-4d7d-88d9-d057af9b458d</div>
 <p>用 dsh 时，继续会话要用与第一次相同的 <code>--cwd</code>，换了工作目录时 dsh 报错，这次运行失败，见<a href="#faq">常见问题</a>。</p>
-<p>继续后会话 id 不变，可以一直用同一个 id 接着运行。会话记录按运行时分开保存在 <code>~/agent-sessions/claude-code/</code> 这样的子目录里，只能用同一个子命令继续。<code>--session-dir</code> 放在工作目录之外，否则 agent 能改写保存的会话。不要同时用同一个 id 运行两次。保存的方式见<a href="run.html#sessions">保存与继续会话</a>。</p>
+<p>继续后会话 id 不变，可以一直用同一个 id 接着运行。会话记录按运行时分开保存在 <code>~/agent-sessions/claude-code/</code> 这样的子目录里，只能用同一个子命令继续。<code>--session-dir</code> 放在工作目录之外，否则 agent 能改写保存的会话；放在工作目录里时运行照常进行，沙箱开启时 text 与 rich 格式输出的第一行是 <code>[note] --session-dir … is inside the working directory. The agent can change the saved sessions</code>。不要同时用同一个 id 运行两次。保存的方式见<a href="run.html#sessions">保存与继续会话</a>。</p>
 
 <h2 id="containers">在 docker 与 Cloud Managed 容器里运行</h2>
 <h3>Cloud Managed 容器</h3>
@@ -178,13 +175,12 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 <p>agentrun 把 <code>AGENTRUN_CODEX_AUTH</code> 与 <code>AGENTRUN_PI_AUTH</code> 写成运行时的登录文件，然后从 agent 的环境里删掉这两个变量，agent 读不到它们。</p>
 <p>没有设 <code>AGENTRUN_SANDBOX=off</code> 时，你会看到：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "用一句话说明 greet.py 做什么"
-agentrun: sandbox is not available: bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor
 <span class="dim">[end]</span> rejected sandbox is not available: bwrap cannot start: Creating new namespace failed: Operation not permitted. In a docker container use --sandbox off. On Ubuntu 23.10 or later, allow bwrap to create user namespaces with an AppArmor profile: https://yhnocoder.github.io/agentrun/pages/isolation.html#apparmor</div>
 <p>沙箱关闭后，每次运行的输出第一行会提醒你这一点：</p>
 <div class="term"><span class="warn">[note] sandbox not running (--sandbox off). agentrun does not restrict what the agent reads or writes or which hosts it reaches</span></div>
 
 <h2 id="ci">在脚本与 CI 里判断成败</h2>
-<p>只看退出码就能区分三类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
+<p>只看退出码就能区分这几类情况：0 是完成，1 是 agent 没完成，2 是环境或命令有问题，3 是超过 <code>--timeout</code>，4 是超过 <code>--max-turns</code> 或 <code>--max-tokens</code>，130 与 143 是 agentrun 被 Ctrl-C 或 SIGTERM 中断。退出码 2 时原样重试不会成功，适合让 CI 直接失败并提示去修环境。完整的退出码表见<a href="quickstart.html#script">快速开始</a>与<a href="run.html">运行</a>。</p>
 <p>在 CI 里建议显式写 <code>--format jsonl</code> 和 <code>--timeout</code>，并在作业开始时对你用的运行时运行一次 <code>agentrun doctor</code>，例如 <code>agentrun doctor claude-code</code>，让环境问题在第一步就暴露出来。</p>
 <p>三种情况不会让结果变成失败：agent 的某次工具调用被拒绝，某次工具调用执行出错（例如命令的退出码不为 0），以及某个 subagent 失败。agent 会看到这些结果并决定下一步。如果你的流程需要把它们当作失败，从事件流里查：</p>
 <pre><code class="language-bash">jq -c 'select(.type == "tool" and .denied)' run.jsonl
@@ -276,7 +272,7 @@ Bash: ls missing.txt</div>
 <p>每种组合剩下的风险见<a href="isolation.html">沙箱与网络</a>。</p>
 
 <h2 id="faq">常见问题</h2>
-<p>启动前发现的问题，agentrun 在标准错误写一行 <code>agentrun:</code> 开头的说明，并以退出码 2 结束。先运行一次 <code>agentrun doctor</code>，多数问题会在对应的一行里写明。</p>
+<p>启动前发现的问题，agentrun 输出 <code>[end] rejected</code> 加原因，并以退出码 2 结束；格式是 jsonl，或者标准输出与标准错误不都是终端时（例如输出写到文件），标准错误另有一行 <code>agentrun:</code> 开头的同一说明。先运行一次 <code>agentrun doctor</code>，多数问题会在对应的一行里写明。</p>
 
 <h3><code>sandbox is not available: bwrap cannot start</code></h3>
 <p>沙箱启动不了。在 docker 容器里，设 <code>AGENTRUN_SANDBOX=off</code>，见<a href="#containers">在 docker 与 Cloud Managed 容器里运行</a>。在本机 Linux 上，确认装了 <code>bubblewrap</code> 与 <code>socat</code>；Ubuntu 23.10 及以后的版本还要给 <code>bwrap</code> 加一个 AppArmor profile，做法见<a href="isolation.html#apparmor">这里</a>。</p>
@@ -305,8 +301,7 @@ Bash: ls missing.txt</div>
 <h3><code>codex login file ... not found</code></h3>
 <p>codex 要求登录信息保存在文件里。在本机运行 <code>codex login</code>；在容器里用 <code>AGENTRUN_CODEX_AUTH</code> 传入 <code>auth.json</code> 的内容：</p>
 <div class="term"><span class="prompt">$</span> agentrun codex --format text --prompt hi
-<span class="dim">[end]</span> rejected codex login file /root/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH
-agentrun: codex login file /root/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</div>
+<span class="dim">[end]</span> rejected codex login file /root/.codex/auth.json not found. Run codex login, or pass its content in AGENTRUN_CODEX_AUTH</div>
 
 <h3>pi 用的模型和你想的不一样</h3>
 <p>pi 遇到拼错的模型名会照样运行，没有设置默认模型时还会改用环境里其他可用的服务商。doctor 的 <code>login</code> 一行会报出这两种情况：</p>
@@ -327,15 +322,16 @@ No API key found for anthropic.
 <h3><code>no saved claude-code session ... in ...</code></h3>
 <p><code>--resume</code> 给出的会话在 <code>--session-dir</code> 里找不到。确认 <code>--session-dir</code> 与保存时相同，子命令与保存时的运行时相同，会话 id 没有抄错：</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 76393ad0-3433-47bd-a4d4-47d35df96724 --format text --prompt "继续"
-<span class="dim">[end]</span> rejected no saved claude-code session 76393ad0-3433-47bd-a4d4-47d35df96724 in /root/agent-sessions/claude-code
-agentrun: no saved claude-code session 76393ad0-3433-47bd-a4d4-47d35df96724 in /root/agent-sessions/claude-code</div>
+<span class="dim">[end]</span> rejected no saved claude-code session 76393ad0-3433-47bd-a4d4-47d35df96724 in /root/agent-sessions/claude-code</div>
+<p>会话是用另一个子命令保存的时，说明的末尾写出保存它的运行时，换成那个子命令继续：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 01a1531b-25be-76aa-b37f-347776815ddf --format text --prompt "继续"
+<span class="dim">[end]</span> rejected no saved claude-code session 01a1531b-25be-76aa-b37f-347776815ddf in /root/agent-sessions/claude-code; it was saved by pi, continue it with agentrun pi</div>
 <p>只写了 id 的一部分时报 <code>--resume "76393ad0" is not a session id</code>，从 <code>[end]</code> 行或 <code>end</code> 事件复制完整的 id。</p>
 
 <h3><code>DEEPSEEK_API_KEY is not set in the session environment</code></h3>
 <p>用 dsh 时，会话环境里没有 DeepSeek 的 API key。agentrun 只从环境变量取这个 key，写在 <code>~/.dsh/.env</code> 或工作目录 <code>.env</code> 里的 key 不起作用：</p>
 <div class="term"><span class="prompt">$</span> agentrun dsh --format text --prompt hi
-<span class="dim">[end]</span> rejected DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=&lt;key&gt;
-agentrun: DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=&lt;key&gt;</div>
+<span class="dim">[end]</span> rejected DEEPSEEK_API_KEY is not set in the session environment. Export it, or pass it with --env DEEPSEEK_API_KEY=&lt;key&gt;</div>
 <p>先 <code>export DEEPSEEK_API_KEY=...</code>，或者写成 <code>--env DEEPSEEK_API_KEY=...</code>。key 无效时运行会启动，结果是 <code>failed</code>，<code>detail</code> 以 <code>AUTH:</code> 开头；<code>agentrun doctor dsh</code> 的 <code>login</code> 一行也会报出同样的原因。</p>
 <h3><code>failed to observe session ... corrupt session log</code></h3>
 <p>用 dsh 继续会话时换了 <code>--cwd</code>。dsh 只能在第一次运行的工作目录里继续一个会话：</p>

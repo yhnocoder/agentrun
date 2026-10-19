@@ -10,7 +10,7 @@ A program that needs a coding agent calls agentrun with a runtime and a prompt. 
 
 - It starts the runtime in a sandbox. The agent can write only to the working directory and to a temporary directory for the session, and its commands cannot reach the network unless `--network` allows it.
 - It keeps the agent away from the user's own runtime configuration, plugins, rules and session history.
-- It converts the different output of the four runtimes into one event stream and decides success or failure in the same way for all of them. The exit code reports the result: 0 when the agent finished, 1 when it failed, 2 when agentrun refused to start it.
+- It converts the different output of the four runtimes into one event stream and decides success or failure in the same way for all of them. The exit code reports the result: 0 when the agent finished, 1 when it failed, 2 when agentrun refused to start it, 3 when it ran past `--timeout`, 4 when it went over `--max-turns` or `--max-tokens`, and 130 or 143 when agentrun was interrupted.
 - It checks before starting that the runtime, its login and the sandbox can be used. `agentrun doctor` runs the same checks on their own, and every failed check says what to fix.
 
 ## Supported runtimes and environments

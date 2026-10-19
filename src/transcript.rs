@@ -3,6 +3,7 @@ use std::io::ErrorKind;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use uuid::Uuid;
 use uuid::fmt::Hyphenated;
 
@@ -10,6 +11,8 @@ use crate::cli::Runtime;
 use crate::runtime::dsh;
 
 const FILE_SUFFIX: &str = ".jsonl";
+const STAGED_SUFFIX: &str = ".agentrun-saving";
+const REPLACED_SUFFIX: &str = ".agentrun-replaced";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Saved {
@@ -41,26 +44,42 @@ pub fn create_store(store: &Path) -> Result<(), String> {
         })
 }
 
-pub fn locate(store: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
+pub fn locate(session_dir: &Path, runtime: Runtime, id: &str) -> Result<Saved, String> {
     if !is_session_id(id) {
         return Err(format!("--resume {id:?} is not a session id"));
     }
-    let found = match runtime {
-        Runtime::Dsh => dsh::saved_session(store, id),
-        Runtime::ClaudeCode | Runtime::Codex | Runtime::Pi => find_file(store, id),
-    };
-    found
-        .map(|file| Saved {
+    let own = store(session_dir, runtime);
+    recover(&own);
+    if let Some(file) = saved(&own, runtime, id) {
+        return Ok(Saved {
             id: id.to_string(),
             file,
-        })
-        .ok_or_else(|| {
-            format!(
-                "no saved {} session {id} in {}",
-                runtime.name(),
-                store.display()
-            )
-        })
+        });
+    }
+    let missing = format!(
+        "no saved {} session {id} in {}",
+        runtime.name(),
+        own.display()
+    );
+    let saved_by = Runtime::value_variants()
+        .iter()
+        .copied()
+        .filter(|other| *other != runtime)
+        .find(|other| saved(&store(session_dir, *other), *other, id).is_some());
+    Err(match saved_by {
+        Some(other) => format!(
+            "{missing}; it was saved by {0}, continue it with agentrun {0}",
+            other.name()
+        ),
+        None => missing,
+    })
+}
+
+fn saved(store: &Path, runtime: Runtime, id: &str) -> Option<PathBuf> {
+    match runtime {
+        Runtime::Dsh => dsh::saved_session(store, id),
+        Runtime::ClaudeCode | Runtime::Codex | Runtime::Pi => find_file(store, id),
+    }
 }
 
 fn is_session_id(id: &str) -> bool {
@@ -148,8 +167,15 @@ pub fn copy_dir_into(source: &Path, dir: &Path) -> Result<PathBuf, String> {
         .map(|()| target)
 }
 
-pub fn save(transcript: &Transcript, store: &Path) -> Result<(), String> {
-    for entry in &transcript.entries {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveError {
+    pub detail: String,
+    pub kept: Vec<PathBuf>,
+}
+
+pub fn save(transcript: &Transcript, store: &Path) -> Result<(), SaveError> {
+    recover(store);
+    for (index, entry) in transcript.entries.iter().enumerate() {
         let Some(name) = entry.file_name() else {
             continue;
         };
@@ -157,12 +183,17 @@ pub fn save(transcript: &Transcript, store: &Path) -> Result<(), String> {
         if *entry == target {
             continue;
         }
-        move_entry(entry, &target).map_err(|error| {
-            format!(
+        move_entry(entry, &target).map_err(|error| SaveError {
+            detail: format!(
                 "cannot move {} to {}: {error}",
                 entry.display(),
                 store.display()
-            )
+            ),
+            kept: transcript.entries[index..]
+                .iter()
+                .filter(|entry| entry.parent() != Some(store))
+                .cloned()
+                .collect(),
         })?;
     }
     if let Some(dir) = &transcript.emptied_dir {
@@ -171,15 +202,81 @@ pub fn save(transcript: &Transcript, store: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn move_entry(source: &Path, target: &Path) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(target).is_ok_and(|metadata| metadata.is_dir()) {
-        std::fs::remove_dir_all(target)?;
-    }
-    match std::fs::rename(source, target) {
-        Err(error) if error.kind() == ErrorKind::CrossesDevices => {
-            copy_tree(source, target)?;
-            remove_tree(source)
+fn recover(store: &Path) {
+    let Ok(entries) = std::fs::read_dir(store) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(target_name) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix('.'))
+            .and_then(|name| name.strip_suffix(REPLACED_SUFFIX))
+        else {
+            continue;
+        };
+        let target = store.join(target_name);
+        if std::fs::symlink_metadata(&target).is_ok() {
+            let _ = remove_tree(&entry.path());
+        } else {
+            let _ = std::fs::rename(entry.path(), &target);
         }
+    }
+}
+
+fn move_entry(source: &Path, target: &Path) -> std::io::Result<()> {
+    let staged = beside(target, STAGED_SUFFIX);
+    remove_if_present(&staged)?;
+    let copied = stage(source, &staged).inspect_err(|_| {
+        let _ = remove_if_present(&staged);
+    })?;
+    replace(&staged, target).inspect_err(|_| {
+        if copied {
+            let _ = remove_if_present(&staged);
+        } else {
+            let _ = std::fs::rename(&staged, source);
+        }
+    })?;
+    if copied {
+        remove_tree(source)?;
+    }
+    Ok(())
+}
+
+fn stage(source: &Path, staged: &Path) -> std::io::Result<bool> {
+    match std::fs::rename(source, staged) {
+        Err(error) if error.kind() == ErrorKind::CrossesDevices => {
+            copy_tree(source, staged).map(|()| true)
+        }
+        result => result.map(|()| false),
+    }
+}
+
+fn replace(staged: &Path, target: &Path) -> std::io::Result<()> {
+    if !std::fs::symlink_metadata(target).is_ok_and(|metadata| metadata.is_dir()) {
+        return std::fs::rename(staged, target);
+    }
+    let replaced = beside(target, REPLACED_SUFFIX);
+    remove_if_present(&replaced)?;
+    std::fs::rename(target, &replaced)?;
+    if let Err(error) = std::fs::rename(staged, target) {
+        let _ = std::fs::rename(&replaced, target);
+        return Err(error);
+    }
+    let _ = remove_tree(&replaced);
+    Ok(())
+}
+
+fn beside(target: &Path, suffix: &str) -> PathBuf {
+    let mut name = std::ffi::OsString::from(".");
+    name.push(target.file_name().unwrap_or_default());
+    name.push(suffix);
+    target.with_file_name(name)
+}
+
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match remove_tree(path) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         result => result,
     }
 }
@@ -235,9 +332,11 @@ mod tests {
     #[test]
     fn locate_finds_a_direct_file_and_rejects_others() {
         let root = tempfile::tempdir().unwrap();
-        let file = root.path().join(format!("rollout-1-{ID}.jsonl"));
+        let codex = store(root.path(), Runtime::Codex);
+        std::fs::create_dir(&codex).unwrap();
+        let file = codex.join(format!("rollout-1-{ID}.jsonl"));
         touch(&file);
-        std::fs::create_dir(root.path().join(format!("{ID}.jsonl.d"))).unwrap();
+        std::fs::create_dir(codex.join(format!("{ID}.jsonl.d"))).unwrap();
         assert_eq!(
             locate(root.path(), Runtime::Codex, ID),
             Ok(Saved {
@@ -250,7 +349,7 @@ mod tests {
             locate(root.path(), Runtime::Pi, other),
             Err(format!(
                 "no saved pi session {other} in {}",
-                root.path().display()
+                root.path().join("pi").display()
             ))
         );
         for partial in [
@@ -273,6 +372,39 @@ mod tests {
             Err("--resume \"\" is not a session id".to_string())
         );
         assert!(locate(&root.path().join("missing"), Runtime::Pi, ID).is_err());
+    }
+
+    #[test]
+    fn locate_names_the_runtime_that_saved_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        let codex = store(root.path(), Runtime::Codex);
+        std::fs::create_dir(&codex).unwrap();
+        touch(&codex.join(format!("rollout-1-{ID}.jsonl")));
+        assert_eq!(
+            locate(root.path(), Runtime::Pi, ID),
+            Err(format!(
+                "no saved pi session {ID} in {}; it was saved by codex, continue it with agentrun codex",
+                root.path().join("pi").display()
+            ))
+        );
+    }
+
+    #[test]
+    fn locate_names_dsh_when_its_session_directory_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let dsh = store(root.path(), Runtime::Dsh);
+        std::fs::create_dir_all(dsh.join(format!("session-{ID}"))).unwrap();
+        assert_eq!(
+            locate(root.path(), Runtime::Dsh, ID).map(|saved| saved.file),
+            Ok(dsh.join(format!("session-{ID}")))
+        );
+        assert_eq!(
+            locate(root.path(), Runtime::ClaudeCode, ID),
+            Err(format!(
+                "no saved claude-code session {ID} in {}; it was saved by dsh, continue it with agentrun dsh",
+                root.path().join("claude-code").display()
+            ))
+        );
     }
 
     #[test]
@@ -333,6 +465,133 @@ mod tests {
         assert!(!store.join(format!("{ID}/subagents/old.jsonl")).exists());
         assert!(!root.path().join("work").exists());
         assert!(in_place.is_file());
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_older_copy_and_leaves_nothing_staged() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store");
+        create_store(&store).unwrap();
+        let saved_dir = store.join(format!("session-{ID}"));
+        std::fs::create_dir(&saved_dir).unwrap();
+        std::fs::write(saved_dir.join("log.jsonl"), "old\n").unwrap();
+        let saved_file = store.join(format!("{ID}.jsonl"));
+        std::fs::write(&saved_file, "old\n").unwrap();
+        let transcript = |name: String| Transcript {
+            id: ID.to_string(),
+            entries: vec![root.path().join("missing").join(name)],
+            emptied_dir: None,
+        };
+        assert!(save(&transcript(format!("session-{ID}")), &store).is_err());
+        assert!(save(&transcript(format!("{ID}.jsonl")), &store).is_err());
+        assert_eq!(
+            std::fs::read_to_string(saved_dir.join("log.jsonl")).unwrap(),
+            "old\n"
+        );
+        assert_eq!(std::fs::read_to_string(&saved_file).unwrap(), "old\n");
+        assert_eq!(std::fs::read_dir(&store).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_target_that_cannot_be_replaced_leaves_the_new_session_where_it_was() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store");
+        create_store(&store).unwrap();
+        std::fs::write(store.join(ID), "in the way\n").unwrap();
+        let file = root.path().join(format!("work/{ID}.jsonl"));
+        let dir = root.path().join(format!("work/{ID}"));
+        touch(&file);
+        touch(&dir.join("subagents/agent-1.jsonl"));
+        let transcript = Transcript {
+            id: ID.to_string(),
+            entries: vec![file.clone(), dir.clone()],
+            emptied_dir: None,
+        };
+        let error = save(&transcript, &store).unwrap_err();
+        assert_eq!(error.kept, vec![dir.clone()]);
+        assert!(dir.join("subagents/agent-1.jsonl").is_file());
+        assert!(!file.exists() && store.join(format!("{ID}.jsonl")).is_file());
+        assert_eq!(
+            std::fs::read_to_string(store.join(ID)).unwrap(),
+            "in the way\n"
+        );
+        assert_eq!(std::fs::read_dir(&store).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn an_older_copy_left_aside_by_an_interrupted_save_is_found_again() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(root.path(), Runtime::Dsh);
+        let name = format!("session-{ID}");
+        touch(&store.join(format!(".{name}{REPLACED_SUFFIX}/log.jsonl")));
+        assert_eq!(
+            locate(root.path(), Runtime::Dsh, ID).unwrap().file,
+            store.join(&name)
+        );
+        assert!(store.join(format!("{name}/log.jsonl")).is_file());
+        assert_eq!(std::fs::read_dir(&store).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn save_clears_what_an_interrupted_save_left_behind() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store");
+        let name = format!("session-{ID}");
+        touch(&store.join(format!(".{name}{STAGED_SUFFIX}/partial.jsonl")));
+        touch(&store.join(format!(".{name}{REPLACED_SUFFIX}/old.jsonl")));
+        touch(&store.join(format!("{name}/old.jsonl")));
+        let source = root.path().join("work").join(&name);
+        touch(&source.join("new.jsonl"));
+        let transcript = Transcript {
+            id: ID.to_string(),
+            entries: vec![source.clone()],
+            emptied_dir: None,
+        };
+        save(&transcript, &store).unwrap();
+        let names: Vec<_> = std::fs::read_dir(&store)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [std::ffi::OsString::from(&name)]);
+        assert!(store.join(format!("{name}/new.jsonl")).is_file());
+        assert!(!store.join(format!("{name}/old.jsonl")).exists());
+        assert!(!source.exists());
+    }
+
+    #[test]
+    fn save_across_file_systems_replaces_the_older_copy() {
+        use std::os::unix::fs::MetadataExt;
+        let shm = Path::new("/dev/shm");
+        let Ok(work) = tempfile::tempdir_in(shm) else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let device = |path: &Path| std::fs::metadata(path).unwrap().dev();
+        if device(work.path()) == device(root.path()) {
+            return;
+        }
+        let store = root.path().join("store");
+        let name = format!("session-{ID}");
+        touch(&store.join(format!("{name}/old.jsonl")));
+        std::fs::write(store.join(format!("{ID}.jsonl")), "old\n").unwrap();
+        let dir = work.path().join(&name);
+        touch(&dir.join("new.jsonl"));
+        let file = work.path().join(format!("{ID}.jsonl"));
+        std::fs::write(&file, "new\n").unwrap();
+        let transcript = Transcript {
+            id: ID.to_string(),
+            entries: vec![dir.clone(), file.clone()],
+            emptied_dir: None,
+        };
+        save(&transcript, &store).unwrap();
+        assert!(store.join(format!("{name}/new.jsonl")).is_file());
+        assert!(!store.join(format!("{name}/old.jsonl")).exists());
+        assert_eq!(
+            std::fs::read_to_string(store.join(format!("{ID}.jsonl"))).unwrap(),
+            "new\n"
+        );
+        assert!(!dir.exists() && !file.exists());
+        assert_eq!(std::fs::read_dir(&store).unwrap().count(), 2);
     }
 
     #[test]

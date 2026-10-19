@@ -33,9 +33,9 @@
     <tr><td><code>src/output/event.rs</code></td><td><code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>ToolStart</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code>）、<code>EndStatus</code>、<code>Signal</code></td><td>统一事件流、end.status</td></tr>
     <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>total</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code>、<code>cost</code></td><td>用量与费用、text 格式里的用量与费用写法</td></tr>
     <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>main_calls</code>、<code>tokens</code>）、<code>Record</code>、<code>Translated</code></td><td>tool_start 与 tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
-    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
-    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
-    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
+    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>、<code>add_note</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
+    <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>add_note</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
+    <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>（<code>add_note</code>）、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
 <p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。其中 <code>Record::CallStart</code>（一次模型调用开始）与 <code>Record::CallUsage</code>（还没输出 <code>usage</code> 的调用到当时为止的用量）带 <code>parent</code>，不输出事件，运行框架每处理完一行原始输出，用 <code>main_calls</code> 与 <code>tokens</code> 检查<a href="run.html#limits">轮数与 token 上限</a>。三种输出格式都从同一个事件序列生成。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
@@ -64,7 +64,7 @@ interface StartEvent extends EventBase {
   }
   deny_read: string[]        // agent 不能读的路径：默认列表在前，--deny-read 在后
   model: string | null       // --model 的值，未给时为 null
-  cwd: string                // 绝对路径
+  cwd: string                // 真实的绝对路径，符号链接已展开
   argv: string[]             // 实际执行的完整命令，不含提示词
   env: string[]              // --env 与 --env-file 设置的变量名，不含值
 }
@@ -396,27 +396,27 @@ interface Usage extends TokenCounts {
   </tbody>
 </table>
 <ul>
-  <li><code>detail</code>：<code>failed</code> 时是运行时给出的错误信息，没有时是标准错误的最后 500 个字符，再没有时是一句固定说明；<code>rejected</code> 时是原因与修正方法；<code>limit</code> 时是哪个上限、上限值与实际值；其余为空字符串。</li>
+  <li><code>detail</code>：<code>failed</code> 时是运行时给出的错误信息，没有时是标准错误的最后 500 个字符，再没有时是一句固定说明；<code>rejected</code> 时是原因与修正方法；<code>limit</code> 时是哪个上限、上限值与实际值；<code>timeout</code> 时是 <code>--timeout N reached</code>，N 是给出的秒数；其余为空字符串。</li>
   <li><code>result</code>：主 agent 最后一段文字，没有时为 null。调用方只需要答案时读这一项。</li>
   <li><code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 时，<code>result</code> 与 <code>usage</code> 照常取已经收到的内容。</li>
   <li><code>session_id</code>：给出 <code>--session-dir</code> 且运行时留下了会话记录时，是保存进去的会话 id，可以传给下一次运行的 <code>--resume</code>；其余为 null。<code>failed</code>、<code>interrupted</code>、<code>timeout</code> 与 <code>limit</code> 的运行只要留下了记录也照样保存，见<a href="run.html#sessions">保存与继续会话</a>。</li>
 </ul>
 
 <h2>text 格式</h2>
-<p><code>--format text</code> 每个事件一行，格式是 <code>[agent 标签] 事件类型 内容</code>。主 agent 的标签是 <code>main</code>，subagent 的标签是小写的类型加编号，例如 <code>explore#1</code>、<code>general-purpose#2</code>。没有 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部输出。</p>
+<p><code>--format text</code> 每个事件以一行 <code>[agent 标签] 事件类型 内容</code> 开头，除 <code>text</code> 与 <code>end</code> 外都只占这一行。主 agent 的标签是 <code>main</code>，subagent 的标签是小写的类型加编号，例如 <code>explore#1</code>、<code>general-purpose#2</code>。没有 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部事件（<code>text</code> 的续行不带标签，取不到）。</p>
 <ul>
   <li><code>tool</code>：<code>tool</code> 加 <code>summary</code>。被拒绝时在 <code>summary</code> 后紧接 <code> (denied)</code>，执行出错时紧接 <code> (error)</code>。</li>
   <li><code>tool_start</code>：不显示，每次调用只在结束时由 <code>tool</code> 显示一行。</li>
   <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。有图片时在后面加上 <code> (+1 image)</code> 或 <code> (+N images)</code>。</li>
-  <li><code>text</code>：文字的第一行。</li>
+  <li><code>text</code>：跳过空白行，第一行接在 <code>text</code> 后面，之后最多再显示 2 行，每行缩进 4 个空格；还有剩余时再加一行 <code>    … (+N lines)</code>（只剩 1 行时写 <code>(+1 line)</code>）。常量是 <code>text.rs</code> 的 <code>PREVIEW_LINES</code>（3）。理由：模型的回答常以「Output:」这类引导句开头，只显示第一行看不到内容；全部显示又会让中途的每段说明占满屏幕。</li>
   <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写 <code>agent start 标签 (模型): 描述</code>，模型未知时省去括号。</li>
   <li><code>subagent_end</code>：由结束的 subagent 自己的标签开头，写 <code>agent 状态 耗时s 模型</code>，后接用量。</li>
   <li><code>network</code>：放行的连接不显示；被拒绝的显示一行 <code>[main] net denied 主机:端口 (原因)</code>。代理不知道连接来自哪个 subagent，标签一律是 <code>[main]</code>。</li>
   <li><code>usage</code>：不单独显示，计入 <code>end</code> 行。</li>
-  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、费用、<code>session 会话id</code>（<code>session_id</code> 不为 null 时）与 <code>detail</code>；费用写成 <code>$</code> 加四位小数，例如 <code>$0.0437</code>，<code>end.usage.cost_usd</code> 为 null 时省去；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
+  <li><code>end</code>：<code>[end] 状态 耗时s</code>，后接用量、费用、<code>session 会话id</code>（<code>session_id</code> 不为 null 时）与 <code>detail</code>；费用写成 <code>$</code> 加四位小数，例如 <code>$0.0437</code>，<code>end.usage.cost_usd</code> 为 null 时省去；<code>rejected</code> 时只写 <code>[end] rejected detail</code>。<code>end.result</code> 有非空白的内容，并且去掉空白行后多于 3 行，或者与主 agent 最后一段文字不同（逐行比较，忽略空白行与行尾空白）时，<code>end</code> 行之前先输出一行 <code>[result]</code>，再原样输出 <code>result</code>（只去掉开头与末尾的换行），理由：最终回答在 <code>text</code> 行里被截断时，调用方在终端里也要能读到完整答案；dsh 的 <code>result</code> 取自 <code>final</code>，可能与最后一段文字不同，在达到上限而停止时也可能没有对应的文字。其余情况下 <code>text</code> 行已经完整显示了最终回答，不再重复。<code>detail</code> 末尾的换行去掉，其余每个换行（<code>\r\n</code>、<code>\n</code> 或 <code>\r</code>）替换成一个空格，所以 <code>end</code> 也只占一行；jsonl 的 <code>detail</code> 字段保留原样。</li>
   <li>用量写成 <code>in X  out Y  cached N%</code>，各项之间、以及与前面的内容之间用两个空格。X 是 <code>input_tokens</code>、<code>cache_read_tokens</code> 与 <code>cache_write_tokens</code> 之和，缺失的项不计，三项都缺失时省去 <code>in</code>；Y 是 <code>output_tokens</code>，缺失时省去；N 是 <code>cache_read_tokens</code> 占 X 的百分比，四舍五入到整数，<code>cache_read_tokens</code> 缺失或 X 为 0 时省去。理由：运行时报告的 <code>input_tokens</code> 只是没有命中缓存的部分，单独显示会让输入看起来接近零。</li>
   <li>token 数字：小于 100 写原值；小于 1,000,000 写成以千为单位、一位小数加 <code>k</code>（912 写成 <code>0.9k</code>）；更大的写成以百万为单位、一位小数加 <code>M</code>。rich 格式的面板用同样的写法。jsonl 仍输出原始数字。</li>
-  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。</li>
+  <li>沙箱没有运行时，第一行是 <code>[note]</code> 提示，见<a href="isolation.html#sandbox">沙箱与网络</a>。沙箱运行、<code>--session-dir</code> 在工作目录之内时，第一行是 <code>[note] --session-dir DIR is inside the working directory. The agent can change the saved sessions</code>，见<a href="run.html#sessions">保存与继续会话</a>。<code>[note]</code> 行在 <code>start</code> 事件的位置输出，jsonl 格式没有对应的事件。</li>
 </ul>
 <p>一个 agent 显示的模型取它最近一次 <code>usage</code> 的 <code>model</code>；还没有 <code>usage</code> 时取 <code>subagent_start</code> 的 <code>model</code>，主 agent 取 <code>start</code> 的 <code>model</code>；都没有时不显示。</p>
 <div class="term"><span class="prompt">$</span> agentrun claude-code --format text --prompt "给 parse 模块补测试并修复失败"
@@ -455,9 +455,9 @@ subagent  2 running <span class="ref">2</span>
 <span class="dim">───────────────────────────────────────────────────────────────────────────</span>
 ⠸ main  claude-sonnet-5-5  Bash: cargo check  0:24  in 54.2k  cached 78%  ctx 61.3k <span class="ref">3</span></div>
 <ol class="callouts">
-  <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，每行带 agent 标签，终端的滚动缓冲保留全部历史。</li>
+  <li>滚动区。提示词、已完成的工具调用、文字与 subagent 的启动和结束按 <code>text</code> 格式逐行输出，终端的滚动缓冲保留全部历史。最近 3 段文字（常量 <code>RECENT_TEXTS</code>）按 <code>text</code> 格式显示多行，它们和其后的行先画在面板上方、每次随面板重画；出现第 4 段文字时，最早的一段只留第一行，和它后面直到下一段文字之前的行一起写入滚动区。这几段加上面板高于终端时，也按同样的方式从最早的一段开始折叠，理由：重画只能擦除屏幕上可见的行。运行结束时剩下的几段完整写入滚动区，再输出 <code>[result]</code> 与 <code>end</code> 行。制表符换成 4 个空格，理由：计算行数时要知道每行占几列。</li>
   <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。标签与模型取自 <code>TextFormatter</code> 记下的值，与 text 格式显示的相同。</li>
-  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
+  <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。状态栏比终端宽度少用 3 列，宽度不够时先截断工具、再截断整行，理由：按 Ctrl-C 时终端在光标处回显 <code>^C</code>，光标在状态栏末尾，状态栏占满一行时回显会折到下一行，结束时擦除少擦一行，面板的分隔线留在滚动区里。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
 <p>「正在执行的工具」从事件流取：rich 记下已经收到 <code>tool_start</code>、还没收到同 <code>id</code> 的 <code>tool</code> 的调用，按 <code>parent</code> 分到各个 agent，每个 agent 显示其中最近开始的一个。</p>
 <p>面板每 100 毫秒重画一次，滚动区每输出一行也立即重画；动画每 100 毫秒换一帧。面板第一次出现时隐藏光标，结束时恢复。</p>
@@ -465,7 +465,7 @@ subagent  2 running <span class="ref">2</span>
 <p>rich 只用暗色（SGR 2）显示滚动区的 agent 标签与面板的分隔线。环境变量 <code>NO_COLOR</code> 存在且不为空时不输出 SGR 序列，其他控制序列（移动光标、清屏、隐藏光标）照常输出。</p>
 <p>已知限制：</p>
 <ul>
-  <li>运行中把终端变窄时，已经画出的面板行会被终端折成多行，下一次擦除少擦几行，屏幕上留下面板的残留。之后的面板按新宽度绘制，不影响滚动区的内容。</li>
+  <li>运行中把终端变窄时，已经画出的面板行与面板上方最近几段文字会被终端折成多行，下一次擦除少擦几行，屏幕上留下残留。之后按新宽度绘制，不影响已经写入滚动区的内容。</li>
   <li>面板不响应按键。运行中按键输入的字符会显示在面板上，被下一次重画覆盖。</li>
 </ul>
 </main>
