@@ -155,7 +155,7 @@ fn fake_pi_run_without_sandbox() {
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
                 "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12,
                     "by_model": {"deepseek/deepseek-flash": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12}}},
-                "result": "hi there"}),
+                "result": "hi there", "session_id": null}),
         ]
     );
     assert!(env.leftovers().is_empty());
@@ -460,4 +460,75 @@ fn run_ends_after_the_sandboxed_agent_removes_the_proxy_socket() {
     assert_eq!(end["type"], "end");
     assert_eq!(end["status"], "finished");
     assert!(env.leftovers().is_empty());
+}
+
+const SESSION_PI: &str = r#"#!/bin/sh
+id=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session-dir) file="$2/2026-10-19T03-02-50-431Z_$id.jsonl" ;;
+    --session) file="$2" ;;
+    --) prompt="$2" ;;
+  esac
+  shift
+done
+printf '%s\n' "$prompt" >> "$file"
+touch "$SAVED_SESSIONS/written-by-the-agent" 2>/dev/null
+echo "{\"type\":\"session\",\"version\":3,\"id\":\"$id\"}"
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"provider":"deepseek","model":"deepseek-flash","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}'
+"#;
+
+#[test]
+fn session_dir_saves_the_session_and_resume_continues_it() {
+    let env = Env::with("pi", SESSION_PI);
+    write_user_file(
+        &env,
+        "settings.json",
+        "{\"defaultProvider\":\"deepseek\",\"defaultModel\":\"deepseek-flash\"}",
+    );
+    let sandbox = if support::sandbox_available() {
+        "on"
+    } else {
+        "off"
+    };
+    let sessions = env.root().join("sessions");
+    let saved = sessions.join("pi");
+    let variable = format!("SAVED_SESSIONS={}", saved.display());
+    let session_run = |extra: &[&str], prompt: &str| {
+        let mut args = vec![
+            "--sandbox",
+            sandbox,
+            "--env",
+            variable.as_str(),
+            "--session-dir",
+            sessions.to_str().unwrap(),
+        ];
+        args.extend(extra);
+        args.extend(["--prompt", prompt]);
+        let output = run(&env, &args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        support::events(&output)
+    };
+    let id = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    let file = saved.join(format!("2026-10-19T03-02-50-431Z_{id}.jsonl"));
+    let first = session_run(&[], "first");
+    assert_eq!(first.last().unwrap()["session_id"], id);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "first\n");
+
+    let second = session_run(&["--resume", id], "second");
+    assert_eq!(second.last().unwrap()["session_id"], id);
+    let argv = second[0]["argv"].as_array().unwrap();
+    let index = argv.iter().position(|arg| arg == "--session").unwrap();
+    assert!(
+        argv[index + 1]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/pi-session/2026-10-19T03-02-50-431Z_{id}.jsonl")),
+        "{argv:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "first\nsecond\n");
+    if sandbox == "on" {
+        assert!(!saved.join("written-by-the-agent").exists());
+    }
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }

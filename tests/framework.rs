@@ -72,7 +72,7 @@ fn normal_run_without_echo_outputs_prompt_after_start() {
                         "m1": {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 5, "cache_write_tokens": 1},
                         "unknown": {"input_tokens": 3, "output_tokens": 4, "cache_read_tokens": null, "cache_write_tokens": null}
                     }},
-                "result": "all done"}),
+                "result": "all done", "session_id": null}),
         ]
     );
     assert!(env.leftovers().is_empty());

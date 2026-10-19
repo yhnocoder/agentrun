@@ -89,6 +89,21 @@ agentrun: --env NOT_SET: not set in the caller's environment</div>
 3</div>
 <p>按 Ctrl-C 的效果相同：agentrun 先让运行时自己退出，5 秒后还没退出就强制结束，然后输出 <code>[end] interrupted</code>。agent 在后台启动的命令也会一起结束。</p>
 
+<h2 id="resume">接着上一次运行继续</h2>
+<p>默认每次运行都是新会话。想在上一次运行的基础上继续，例如「测试还是没过，接着修」，第一次运行时用 <code>--session-dir</code> 指定一个保存会话的目录：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --format text --prompt "在 notes.txt 里写一句问候语"
+<span class="dim">[main]</span> prompt 在 notes.txt 里写一句问候语
+<span class="dim">[main]</span> tool Write: notes.txt
+<span class="dim">[main]</span> text 我已经在 `/tmp/demo/notes.txt` 里写了一句问候语:“你好!祝你今天一切顺利。”
+<span class="dim">[end]</span> finished 6.3s  in 34.0k  out 0.2k  cached 84%  session 76393ad0-3433-47bd-a4d4-47d35df96723</div>
+<p><code>[end]</code> 行最后的 <code>session</code> 是会话 id；jsonl 格式下它是 <code>end</code> 事件的 <code>session_id</code> 字段。下一次运行给出同一个 <code>--session-dir</code> 和 <code>--resume &lt;会话 id&gt;</code>，agent 记得上一次做过什么：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 76393ad0-3433-47bd-a4d4-47d35df96723 --format text --prompt "把你刚才写的那句话翻译成英文，追加到同一个文件"
+<span class="dim">[main]</span> prompt 把你刚才写的那句话翻译成英文，追加到同一个文件
+<span class="dim">[main]</span> tool Bash: echo "Hello! Wishing you all the best today." &gt;&gt; /tmp/demo/notes.txt &amp;&amp; cat /tmp/demo/notes.txt
+<span class="dim">[main]</span> text 我已把英文翻译追加到 `/tmp/demo/notes.txt` 的第 2 行:
+<span class="dim">[end]</span> finished 6.5s  in 71.4k  out 0.4k  cached 89%  session 76393ad0-3433-47bd-a4d4-47d35df96723</div>
+<p>继续后会话 id 不变，可以一直用同一个 id 接着运行。会话记录按运行时分开保存在 <code>~/agent-sessions/claude-code/</code> 这样的子目录里，只能用同一个子命令继续。不要同时用同一个 id 运行两次。保存的方式见<a href="run.html#sessions">保存与继续会话</a>。</p>
+
 <h2 id="containers">在 docker 与 Cloud Managed 容器里运行</h2>
 <h3>Cloud Managed 容器</h3>
 <p>在 Cloud Managed 容器（例如 Claude Code 的云端环境）里，沙箱的用法与本机 Linux 相同。在环境的 setup 脚本里安装 <code>bubblewrap</code> 与 <code>socat</code>，命令与本机完全相同。</p>
@@ -175,7 +190,7 @@ jq -c 'select(.type == "subagent_end" and .status == "failed")' run.jsonl</code>
   <tbody>
     <tr><td>写文件</td><td>只能写工作目录（<code>--cwd</code>，默认是当前目录）和一个临时目录，运行结束后临时目录会被删除</td></tr>
     <tr><td>联网</td><td>按 <code>--network</code>，默认不能联网</td></tr>
-    <tr><td>你的配置</td><td>不读取你自己的运行时设置、插件、规则文件与会话记录，每次运行都从干净的状态开始</td></tr>
+    <tr><td>你的配置</td><td>不读取你自己的运行时设置、插件、规则文件与会话记录。不用 <code>--resume</code> 时每次运行都从干净的状态开始</td></tr>
     <tr><td>你的登录</td><td>使用你已有的登录，不改动你的登录文件</td></tr>
   </tbody>
 </table>
@@ -232,6 +247,12 @@ agentrun: codex login file /root/.codex/auth.json not found. Run codex login, or
 No API key found for anthropic.
 <span class="dim">（后略）</span>
 <span class="dim">[end]</span> failed 0.7s  No API key found for anthropic.</div>
+
+<h3><code>no saved claude-code session ... in ...</code></h3>
+<p><code>--resume</code> 给出的会话在 <code>--session-dir</code> 里找不到。确认 <code>--session-dir</code> 与保存时相同，子命令与保存时的运行时相同，会话 id 写完整：</p>
+<div class="term"><span class="prompt">$</span> agentrun claude-code --session-dir ~/agent-sessions --resume 76393ad0 --format text --prompt "继续"
+<span class="dim">[end]</span> rejected no saved claude-code session 76393ad0 in /root/agent-sessions/claude-code
+agentrun: no saved claude-code session 76393ad0 in /root/agent-sessions/claude-code</div>
 
 <h3><code>--env NAME: not set in the caller's environment</code></h3>
 <p>你写了 <code>--env NAME</code>，但当前环境里没有这个变量。先 <code>export NAME=...</code>，或者写成 <code>--env NAME=VALUE</code>。</p>

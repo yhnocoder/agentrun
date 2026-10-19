@@ -220,7 +220,7 @@ fn fake_codex_run_without_sandbox() {
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
                 "usage": {"input_tokens": 60, "output_tokens": 7, "cache_read_tokens": 40, "cache_write_tokens": 2,
                     "by_model": {"gpt-5.3-codex": {"input_tokens": 60, "output_tokens": 7, "cache_read_tokens": 40, "cache_write_tokens": 2}}},
-                "result": "done"}),
+                "result": "done", "session_id": null}),
         ]
     );
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
@@ -623,5 +623,81 @@ fn custom_network_runs_the_filter_proxy_with_the_service_hosts() {
         ]
     );
     assert_eq!(upstream.served(), 2);
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+const SESSION_CODEX: &str = r#"#!/bin/sh
+id=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b
+resumed=
+while [ $# -gt 0 ]; do
+  if [ "$1" = resume ]; then
+    resumed="$2"
+  fi
+  shift
+done
+prompt=$(cat)
+if [ -n "$resumed" ]; then
+  id="$resumed"
+  file=$(find "$CODEX_HOME/sessions" -name "*-$id.jsonl")
+else
+  mkdir -p "$CODEX_HOME/sessions/2026/10/19"
+  file="$CODEX_HOME/sessions/2026/10/19/rollout-2026-10-19T03-04-46-$id.jsonl"
+fi
+printf '%s\n' "$prompt" >> "$file"
+cat <<LINES
+{"type":"thread.started","thread_id":"$id"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+LINES
+"#;
+
+#[test]
+fn session_dir_saves_the_rollout_and_resume_continues_it() {
+    let env = with_login(SESSION_CODEX);
+    let sessions = env.root().join("sessions");
+    let first = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--session-dir",
+            sessions.to_str().unwrap(),
+            "--prompt",
+            "first",
+        ],
+    );
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+    let id = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    assert_eq!(support::events(&first).pop().unwrap()["session_id"], id);
+    let file = sessions.join(format!("codex/rollout-2026-10-19T03-04-46-{id}.jsonl"));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "first\n");
+
+    let second = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--session-dir",
+            sessions.to_str().unwrap(),
+            "--resume",
+            id,
+            "--prompt",
+            "second",
+        ],
+    );
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    let events = support::events(&second);
+    let argv = events[0]["argv"].as_array().unwrap();
+    assert_eq!(
+        argv[argv.len() - 3..],
+        [json!("resume"), json!(id), json!("-")]
+    );
+    assert_eq!(events.last().unwrap()["session_id"], id);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "first\nsecond\n");
+    assert_eq!(
+        std::fs::read_dir(sessions.join("codex")).unwrap().count(),
+        1
+    );
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }

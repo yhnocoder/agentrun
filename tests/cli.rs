@@ -911,3 +911,17 @@ fn help_starts_with_package_description() {
     let help = String::from_utf8(output.stdout).unwrap();
     assert_eq!(help.lines().next(), Some(env!("CARGO_PKG_DESCRIPTION")));
 }
+
+#[test]
+fn resume_needs_session_dir() {
+    let env = Env::new();
+    let output = run(&env, &["pi", "--resume", "0199-a", "--prompt", "hi"]);
+    assert_eq!(output.status.code(), Some(2));
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        "the following required arguments were not provided: --session-dir <DIR>"
+    );
+    assert_eq!(end["session_id"], Value::Null);
+}

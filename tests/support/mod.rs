@@ -38,6 +38,7 @@ pub fn invocation(runtime: Runtime, cwd: &Path, prompt: &str, sandboxed: bool) -
     let Parsed::Run(runtime, args) = cli.command.into_parsed() else {
         unreachable!("the tests parse runtime subcommands");
     };
+    let args = *args;
     let wrapper = if sandboxed {
         Wrapper::Bubblewrap {
             bwrap: PathBuf::from("/usr/bin/bwrap"),
@@ -103,7 +104,7 @@ pub fn replay(adapter: &mut dyn Adapter, raw: &Path, prompt: &str) -> Vec<Value>
     for line in content.split(|byte| *byte == b'\n') {
         events.extend(translate_line(line, adapter, &mut aggregator).events);
     }
-    let (rest, _) = conclude(aggregator, adapter, wrapped, &exit, &stderr, started);
+    let (rest, _) = conclude(aggregator, adapter, wrapped, &exit, &stderr, None, started);
     events.extend(rest);
     events
         .iter()

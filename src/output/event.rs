@@ -266,6 +266,7 @@ pub struct End {
     pub duration_ms: u64,
     pub usage: Usage,
     pub result: Option<String>,
+    pub session_id: Option<String>,
 }
 
 impl End {
@@ -277,6 +278,7 @@ impl End {
             duration_ms: started.elapsed().as_millis() as u64,
             usage: Usage::default(),
             result: None,
+            session_id: None,
         }
     }
 }
@@ -302,6 +304,7 @@ mod tests {
         assert_eq!(end.detail, "bad");
         assert_eq!(end.usage, Usage::default());
         assert_eq!(end.result, None);
+        assert_eq!(end.session_id, None);
     }
 
     #[test]
@@ -463,10 +466,11 @@ mod tests {
             duration_ms: 3,
             usage: Usage::default(),
             result: None,
+            session_id: Some("0199-a".to_string()),
         }));
         assert_eq!(
             event.to_json(),
-            r#"{"schema":1,"type":"end","time":"2026-10-04T13:00:00.000Z","status":"rejected","exit_code":null,"detail":"bad","duration_ms":3,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null}"#
+            r#"{"schema":1,"type":"end","time":"2026-10-04T13:00:00.000Z","status":"rejected","exit_code":null,"detail":"bad","duration_ms":3,"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"by_model":{}},"result":null,"session_id":"0199-a"}"#
         );
     }
 }

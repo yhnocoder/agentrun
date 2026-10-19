@@ -11,6 +11,7 @@ use crate::network::proxy_environment;
 use crate::output::{Record, SandboxKind, TokenCounts};
 use crate::sandbox::{self, PiState};
 use crate::session::Session;
+use crate::transcript::{Transcript, copy_into, create_store, find_file};
 
 const STATE_DIR_VARIABLE: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const STATE_HOME_SUBDIR: &str = ".pi/agent";
@@ -32,11 +33,10 @@ const WRITABLE_STATE_ENTRIES: [&str; 5] = [
     "models-store.json.lock",
     "settings.json.lock",
 ];
-const FIXED_ARGS: [&str; 12] = [
-    "-p",
-    "--mode",
-    "json",
-    "--no-session",
+const OUTPUT_ARGS: [&str; 3] = ["-p", "--mode", "json"];
+const NO_SESSION: &str = "--no-session";
+const SESSION_STAGE_SUBDIR: &str = "pi-session";
+const FIXED_ARGS: [&str; 8] = [
     "--no-extensions",
     "--no-skills",
     "--no-prompt-templates",
@@ -57,6 +57,8 @@ pub struct Pi {
     mismatch: Option<String>,
     prompt_echoed: bool,
     last_stop: Option<Stop>,
+    session_stage: Option<PathBuf>,
+    session_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -85,7 +87,36 @@ impl Pi {
             mismatch: None,
             prompt_echoed: false,
             last_stop: None,
+            session_stage: None,
+            session_id: None,
         }
+    }
+
+    fn session_args(&mut self, invocation: &Invocation) -> Result<Vec<String>, String> {
+        if invocation.args.session_dir.is_none() {
+            return Ok(vec![NO_SESSION.to_string()]);
+        }
+        let stage = invocation.tempdir.join(SESSION_STAGE_SUBDIR);
+        self.session_stage = Some(stage.clone());
+        let Some(saved) = &invocation.resume else {
+            if !invocation.args.dry_run {
+                create_store(&stage)?;
+            }
+            return Ok(vec![
+                "--session-dir".to_string(),
+                stage.to_string_lossy().into_owned(),
+            ]);
+        };
+        self.session_id = Some(saved.id.clone());
+        let staged = if invocation.args.dry_run {
+            stage.join(saved.file.file_name().unwrap_or_default())
+        } else {
+            copy_into(&saved.file, &stage)?
+        };
+        Ok(vec![
+            "--session".to_string(),
+            staged.to_string_lossy().into_owned(),
+        ])
     }
 
     fn message_start(&mut self, message: &Value) -> Vec<Record> {
@@ -163,6 +194,8 @@ impl Adapter for Pi {
         let user_dir = user_state_dir(&invocation.session, &invocation.cwd);
         let state = session_state(user_dir.as_deref(), invocation.args.dry_run)?;
         let mut argv = vec![executable.to_string_lossy().into_owned()];
+        argv.extend(OUTPUT_ARGS.iter().map(|arg| arg.to_string()));
+        argv.extend(self.session_args(invocation)?);
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
         argv.push(TOOLS.to_string());
         if let Some(model) = &invocation.args.model {
@@ -218,6 +251,12 @@ impl Adapter for Pi {
 
     fn translate(&mut self, line: &Value) -> Vec<Record> {
         match line["type"].as_str() {
+            Some("session") => {
+                if self.session_id.is_none() {
+                    self.session_id = optional_string(&line["id"]);
+                }
+                Vec::new()
+            }
             Some("tool_execution_start") => {
                 let name = string(&line["toolName"]);
                 let summary = tool_summary(&name, &line["args"]);
@@ -259,6 +298,17 @@ impl Adapter for Pi {
             Some(_) => None,
             None => Some(Failure::Message(NO_REPLY_DETAIL.to_string())),
         }
+    }
+
+    fn transcript(&self) -> Option<Transcript> {
+        let stage = self.session_stage.as_ref()?;
+        let id = self.session_id.clone()?;
+        let file = find_file(stage, &id)?;
+        Some(Transcript {
+            id,
+            entries: vec![file],
+            emptied_dir: None,
+        })
     }
 }
 
@@ -543,6 +593,8 @@ mod tests {
 
     fn fixed(executable: &str) -> Vec<String> {
         let mut argv = vec![executable.to_string()];
+        argv.extend(OUTPUT_ARGS.iter().map(|arg| arg.to_string()));
+        argv.push(NO_SESSION.to_string());
         argv.extend(FIXED_ARGS.iter().map(|arg| arg.to_string()));
         argv.push(TOOLS.to_string());
         argv
@@ -1513,5 +1565,116 @@ mod tests {
             open.failure(Some(0)),
             Some(Failure::Message("stopReason: error".to_string()))
         );
+    }
+
+    const SAVED_ID: &str = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+    fn session_args(launch: &Launch) -> Vec<String> {
+        launch.argv[4..6].to_vec()
+    }
+
+    #[test]
+    fn session_dir_stages_a_new_session_in_the_tempdir() {
+        let setup = Setup::new();
+        let env = setup.with_home();
+        let mut pi = Pi::new();
+        let launch = pi
+            .launch(
+                Path::new("/opt/bin/pi"),
+                &setup.invocation(&pairs(&env), false, &["--session-dir", "/saved"]),
+            )
+            .unwrap();
+        let stage = setup.tempdir().join("pi-session");
+        assert_eq!(
+            session_args(&launch),
+            [
+                "--session-dir".to_string(),
+                stage.to_string_lossy().into_owned()
+            ]
+        );
+        assert!(!launch.argv.contains(&"--no-session".to_string()));
+        assert!(stage.is_dir());
+        assert_eq!(pi.transcript(), None);
+        pi.translate(&json!({"type":"session","version":3,"id":SAVED_ID}));
+        assert_eq!(pi.transcript(), None);
+        let file = stage.join(format!("2026-10-19T03-02-50-431Z_{SAVED_ID}.jsonl"));
+        std::fs::write(&file, "{}\n").unwrap();
+        assert_eq!(
+            pi.transcript(),
+            Some(Transcript {
+                id: SAVED_ID.to_string(),
+                entries: vec![file],
+                emptied_dir: None,
+            })
+        );
+    }
+
+    fn resumed(setup: &Setup, extra: &[&str]) -> (Pi, Launch, PathBuf) {
+        let env = setup.with_home();
+        let file = setup.root.path().join(format!(
+            "saved/pi/2026-10-19T03-02-50-431Z_{SAVED_ID}.jsonl"
+        ));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{\"old\":1}\n").unwrap();
+        let mut args = vec!["--session-dir", "/saved", "--resume", SAVED_ID];
+        args.extend(extra);
+        let mut invocation = setup.invocation(&pairs(&env), false, &args);
+        invocation.resume = Some(crate::transcript::Saved {
+            id: SAVED_ID.to_string(),
+            file: file.clone(),
+        });
+        let mut pi = Pi::new();
+        let launch = pi.launch(Path::new("/opt/bin/pi"), &invocation).unwrap();
+        let staged = setup
+            .tempdir()
+            .join("pi-session")
+            .join(file.file_name().unwrap());
+        (pi, launch, staged)
+    }
+
+    #[test]
+    fn resume_copies_the_saved_session_into_the_stage() {
+        let setup = Setup::new();
+        let (pi, launch, staged) = resumed(&setup, &[]);
+        assert_eq!(
+            session_args(&launch),
+            [
+                "--session".to_string(),
+                staged.to_string_lossy().into_owned()
+            ]
+        );
+        assert_eq!(std::fs::read_to_string(&staged).unwrap(), "{\"old\":1}\n");
+        assert_eq!(pi.transcript().unwrap().entries, vec![staged]);
+    }
+
+    #[test]
+    fn dry_run_resume_copies_nothing() {
+        let setup = Setup::new();
+        let (_, launch, staged) = resumed(&setup, &["--dry-run"]);
+        assert_eq!(
+            session_args(&launch),
+            [
+                "--session".to_string(),
+                staged.to_string_lossy().into_owned()
+            ]
+        );
+        assert!(!staged.exists());
+    }
+
+    #[test]
+    fn without_session_dir_nothing_is_saved() {
+        let setup = Setup::new();
+        let env = setup.with_home();
+        let mut pi = Pi::new();
+        let launch = pi
+            .launch(
+                Path::new("/opt/bin/pi"),
+                &setup.invocation(&pairs(&env), false, &[]),
+            )
+            .unwrap();
+        assert_eq!(launch.argv[4], "--no-session");
+        pi.translate(&json!({"type":"session","version":3,"id":SAVED_ID}));
+        assert_eq!(pi.transcript(), None);
+        assert!(!setup.tempdir().join("pi-session").exists());
     }
 }

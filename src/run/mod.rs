@@ -24,6 +24,7 @@ use crate::output::{End, EndStatus, Event, Output, write_end};
 use crate::runtime::{Adapter, Invocation, Launch};
 use crate::sandbox;
 use crate::session::{Session, find_executable, parse_env_args, read_env_file, resolve_path_dirs};
+use crate::transcript::{self, Saved};
 use execute::execute;
 use signal::SharedWriter;
 
@@ -84,7 +85,7 @@ impl Caller {
 }
 
 enum Command {
-    Run(Runtime, RunArgs),
+    Run(Runtime, Box<RunArgs>),
     Doctor(DoctorArgs),
     Connect(ConnectArgs),
     Exit(u8),
@@ -145,7 +146,7 @@ pub fn run(mut caller: Caller, adapters: &AdapterLookup) -> u8 {
             {
                 return code;
             }
-            let prepared = set_up(&mut caller, runtime, args, format, adapters, &mut guards);
+            let prepared = set_up(&mut caller, runtime, *args, format, adapters, &mut guards);
             (format, prepared)
         }
         Command::UsageError(detail) => (fallback_format, Err(detail)),
@@ -310,6 +311,7 @@ fn prepare(
     adapter.check_args(&args)?;
     let allow_hosts = network::check_usage(args.network, &args.allow_host)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
+    let (args, resume) = resolve_session_dir(runtime, args)?;
     let prompt = read_prompt(caller, &args)?;
     let env_args = parse_env_args(&args.env, &caller.env)?;
     let path_dirs = resolve_path_dirs(&args.path)?;
@@ -336,6 +338,7 @@ fn prepare(
         format,
         sandbox,
         allow_hosts,
+        resume,
         ..Invocation::new(runtime, args, cwd, prompt, session)
     };
     Ok(Ready {
@@ -359,6 +362,28 @@ fn resolve_cwd(cwd: Option<&Path>) -> Result<PathBuf, String> {
         ));
     }
     std::path::absolute(&cwd).map_err(|error| format!("--cwd {}: {error}", cwd.display()))
+}
+
+fn resolve_session_dir(
+    runtime: Runtime,
+    mut args: RunArgs,
+) -> Result<(RunArgs, Option<Saved>), String> {
+    let Some(dir) = &args.session_dir else {
+        return Ok((args, None));
+    };
+    let dir = std::path::absolute(dir)
+        .map_err(|error| format!("--session-dir {}: {error}", dir.display()))?;
+    let store = transcript::store(&dir, runtime);
+    let resume = args
+        .resume
+        .as_deref()
+        .map(|id| transcript::locate(&store, runtime, id))
+        .transpose()?;
+    if !args.dry_run {
+        transcript::create_store(&store)?;
+    }
+    args.session_dir = Some(dir);
+    Ok((args, resume))
 }
 
 fn read_prompt(caller: &mut Caller, args: &RunArgs) -> Result<String, String> {

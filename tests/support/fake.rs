@@ -7,6 +7,7 @@ use agentrun::network::proxy_environment;
 use agentrun::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
 use agentrun::runtime::{Adapter, Failure, Invocation, Launch, PrivateDir};
 use agentrun::sandbox;
+use agentrun::transcript::Transcript;
 use serde_json::Value;
 
 pub const SIGNAL_IN_LAUNCH: &str = "AGENTRUN_TEST_SIGNAL_IN_LAUNCH";
@@ -159,6 +160,10 @@ impl Adapter for FakeAdapter {
             Some(detail) => Some(Failure::from_detail(detail.clone())),
             None => (exit_code != Some(0)).then_some(Failure::Unexplained),
         }
+    }
+
+    fn transcript(&self) -> Option<Transcript> {
+        None
     }
 }
 

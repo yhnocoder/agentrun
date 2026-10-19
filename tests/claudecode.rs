@@ -162,7 +162,7 @@ fn fake_claude_run_without_sandbox() {
             json!({"schema": 1, "type": "end", "status": "finished", "exit_code": 0, "detail": "",
                 "usage": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12,
                     "by_model": {"claude-sonnet-5-5": {"input_tokens": 6, "output_tokens": 8, "cache_read_tokens": 10, "cache_write_tokens": 12}}},
-                "result": "hi there"}),
+                "result": "hi there", "session_id": null}),
         ]
     );
 }
@@ -239,6 +239,111 @@ fn dry_run_with_sandbox_writes_tempdir_placeholder() {
     );
     assert!(command.contains("--permission-mode dontAsk"), "{command}");
     assert!(env.leftovers().is_empty());
+}
+
+const SESSION_CLAUDE: &str = r#"#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session-id) id="$2" ;;
+    --resume) file="$2" ;;
+  esac
+  shift
+done
+read -r line
+if [ -n "${file:-}" ]; then
+  id=$(basename "$file" .jsonl)
+else
+  project="$HOME/.claude/projects/-work"
+  mkdir -p "$project/$id/subagents"
+  echo '{"agent":1}' > "$project/$id/subagents/agent-1.jsonl"
+  file="$project/$id.jsonl"
+fi
+printf '%s\n' "$line" >> "$file"
+cat <<LINES
+{"type":"system","subtype":"init","session_id":"$id","tools":[]}
+{"type":"result","subtype":"success","is_error":false,"result":"ok"}
+LINES
+"#;
+
+fn session_run(env: &Env, extra: &[&str], prompt: &str) -> Value {
+    let sessions = env.root().join("sessions");
+    let mut args = vec![
+        "--sandbox",
+        "off",
+        "--session-dir",
+        sessions.to_str().unwrap(),
+    ];
+    args.extend(extra);
+    args.extend(["--prompt", prompt]);
+    let output = run(env, &args, "");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let events = support::events(&output);
+    assert_eq!(events.last().unwrap()["status"], "finished");
+    json!({"argv": events[0]["argv"], "end": events.last().unwrap()})
+}
+
+#[test]
+fn session_dir_saves_the_session_and_resume_continues_it() {
+    let env = Env::with("claude", SESSION_CLAUDE);
+    let first = session_run(&env, &[], "first");
+    let id = first["end"]["session_id"].as_str().unwrap().to_string();
+    assert_eq!(option_value(&first["argv"], "--session-id"), id);
+    assert!(
+        !first["argv"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("--no-session-persistence"))
+    );
+    let saved = env.root().join("sessions/claude-code");
+    let file = saved.join(format!("{id}.jsonl"));
+    assert!(saved.join(&id).join("subagents/agent-1.jsonl").is_file());
+    assert!(!env.home().join(".claude/projects/-work").exists());
+
+    let second = session_run(&env, &["--resume", &id], "second");
+    assert_eq!(second["end"]["session_id"], id.as_str());
+    assert_eq!(
+        option_value(&second["argv"], "--resume"),
+        file.to_string_lossy()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"second\"}}\n"
+    );
+    assert!(!env.home().join(".claude/projects/-work").exists());
+
+    let output = run(
+        &env,
+        &[
+            "--sandbox",
+            "off",
+            "--session-dir",
+            env.root().join("sessions").to_str().unwrap(),
+            "--resume",
+            "0199-missing",
+            "--prompt",
+            "third",
+        ],
+        "",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "rejected");
+    assert_eq!(
+        end["detail"],
+        format!(
+            "no saved claude-code session 0199-missing in {}",
+            saved.display()
+        )
+    );
+}
+
+#[test]
+fn without_session_dir_the_end_has_no_session_id() {
+    let env = Env::with("claude", SESSION_CLAUDE);
+    let output = run(&env, &["--sandbox", "off", "--prompt", "hi"], "");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["session_id"], Value::Null);
 }
 
 const CURL_CLAUDE: &str = r#"#!/bin/sh
