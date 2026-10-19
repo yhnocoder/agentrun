@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
@@ -79,6 +80,7 @@ pub struct Codex {
     turn_completed: bool,
     turn_failed: Option<String>,
     last_error: Option<String>,
+    started_items: HashSet<String>,
 }
 
 impl Codex {
@@ -86,34 +88,59 @@ impl Codex {
         Codex::default()
     }
 
+    fn item_started(&mut self, item: &Value) -> Vec<Record> {
+        let Some(start) = self.tool_start(item) else {
+            return Vec::new();
+        };
+        if !self.started_items.insert(string(&item["id"])) {
+            return Vec::new();
+        }
+        vec![start]
+    }
+
     fn item_completed(&mut self, item: &Value) -> Vec<Record> {
-        let summary = match item["type"].as_str() {
-            Some("command_execution") => {
-                self.note_sandbox_failure(&item["aggregated_output"]);
-                format!("shell: {}", first_line(&string(&item["command"])))
-            }
-            Some("file_change") => format!("patch: {}", self.changed_paths(&item["changes"])),
-            Some("mcp_tool_call") => {
-                format!("mcp: {}.{}", string(&item["server"]), string(&item["tool"]))
-            }
+        match item["type"].as_str() {
+            Some("command_execution") => self.note_sandbox_failure(&item["aggregated_output"]),
             Some("agent_message") => {
                 return vec![Record::Text {
                     parent: None,
                     text: string(&item["text"]),
                 }];
             }
-            _ => return Vec::new(),
+            _ => {}
+        }
+        let Some(start) = self.tool_start(item) else {
+            return Vec::new();
         };
         let id = string(&item["id"]);
-        vec![
-            Record::ToolStart {
-                id: id.clone(),
-                parent: None,
-                name: string(&item["type"]),
-                summary,
-            },
-            Record::ToolEnd { id, denied: false },
-        ]
+        let end = Record::ToolEnd {
+            id: id.clone(),
+            denied: false,
+        };
+        if self.started_items.remove(&id) {
+            vec![end]
+        } else {
+            vec![start, end]
+        }
+    }
+
+    fn tool_start(&self, item: &Value) -> Option<Record> {
+        let summary = match item["type"].as_str() {
+            Some("command_execution") => {
+                format!("shell: {}", first_line(&string(&item["command"])))
+            }
+            Some("file_change") => format!("patch: {}", self.changed_paths(&item["changes"])),
+            Some("mcp_tool_call") => {
+                format!("mcp: {}.{}", string(&item["server"]), string(&item["tool"]))
+            }
+            _ => return None,
+        };
+        Some(Record::ToolStart {
+            id: string(&item["id"]),
+            parent: None,
+            name: string(&item["type"]),
+            summary,
+        })
     }
 
     fn note_sandbox_failure(&mut self, output: &Value) {
@@ -248,6 +275,7 @@ impl Adapter for Codex {
 
     fn translate(&mut self, line: &Value) -> Vec<Record> {
         match line["type"].as_str() {
+            Some("item.started") => self.item_started(&line["item"]),
             Some("item.completed") => self.item_completed(&line["item"]),
             Some("turn.completed") => {
                 self.turn_completed = true;
@@ -948,7 +976,8 @@ mod tests {
             }]
         );
         for other in [
-            json!({"type":"item.started","item":{"id":"item_5","type":"command_execution","command":"ls"}}),
+            json!({"type":"item.started","item":{"id":"item_5","type":"agent_message","text":""}}),
+            json!({"type":"item.started","item":{"id":"item_8","type":"collab_tool_call","tool":"wait"}}),
             json!({"type":"item.completed","item":{"id":"item_6","type":"collab_tool_call","tool":"wait"}}),
             json!({"type":"item.completed","item":{"id":"item_7","type":"reasoning","text":"hm"}}),
             json!({"type":"thread.started","thread_id":"t"}),
@@ -956,6 +985,111 @@ mod tests {
         ] {
             assert!(translate(&mut codex, other.clone()).is_empty(), "{other}");
         }
+    }
+
+    #[test]
+    fn started_item_gives_tool_start_and_its_completion_only_tool_end() {
+        let mut codex = Codex::new();
+        codex.cwd = PathBuf::from("/work/repo");
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex\nmore","aggregated_output":"","exit_code":null,"status":"in_progress"}})
+            ),
+            [Record::ToolStart {
+                id: "item_1".to_string(),
+                parent: None,
+                name: "command_execution".to_string(),
+                summary: "shell: latexmk -xelatex".to_string(),
+            }]
+        );
+        assert!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","status":"in_progress"}})
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/repo/a.txt","kind":"add"}],"status":"in_progress"}})
+            ),
+            [Record::ToolStart {
+                id: "item_2".to_string(),
+                parent: None,
+                name: "file_change".to_string(),
+                summary: "patch: a.txt".to_string(),
+            }]
+        );
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"fs","tool":"read","status":"in_progress"}})
+            ),
+            [Record::ToolStart {
+                id: "item_3".to_string(),
+                parent: None,
+                name: "mcp_tool_call".to_string(),
+                summary: "mcp: fs.read".to_string(),
+            }]
+        );
+        for (id, completed) in [
+            (
+                "item_1",
+                json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"latexmk -xelatex","aggregated_output":"ok","exit_code":0}}),
+            ),
+            (
+                "item_2",
+                json!({"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/repo/a.txt","kind":"add"}]}}),
+            ),
+            (
+                "item_3",
+                json!({"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"fs","tool":"read"}}),
+            ),
+        ] {
+            assert_eq!(
+                translate(&mut codex, completed),
+                [Record::ToolEnd {
+                    id: id.to_string(),
+                    denied: false,
+                }]
+            );
+        }
+        assert_eq!(
+            translate(
+                &mut codex,
+                json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls"}})
+            )
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn bwrap_output_after_a_started_item_is_still_a_sandbox_failure() {
+        let mut codex = Codex::new();
+        codex.sandboxed = true;
+        translate(
+            &mut codex,
+            json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":""}}),
+        );
+        assert_eq!(
+            translate(
+                &mut codex,
+                bwrap_output("item_1", "bwrap: setting up uid map: Permission denied")
+            ),
+            [Record::ToolEnd {
+                id: "item_1".to_string(),
+                denied: false,
+            }]
+        );
+        assert_eq!(
+            codex.failure(Some(0)),
+            Some(Failure::Message(
+                "sandbox failed to start: setting up uid map: Permission denied".to_string()
+            ))
+        );
     }
 
     #[test]

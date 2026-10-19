@@ -153,6 +153,7 @@ fn fake_claude_run_without_sandbox() {
         events[1..],
         [
             json!({"schema": 1, "type": "prompt", "text": "say hi"}),
+            json!({"schema": 1, "type": "tool_start", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi"}),
             json!({"schema": 1, "type": "tool", "id": "toolu_1", "parent": null, "name": "Bash", "summary": "Bash: echo hi", "denied": false}),
             json!({"schema": 1, "type": "usage", "parent": null, "model": "claude-sonnet-5-5", "input_tokens": 1, "output_tokens": 2,
                 "cache_read_tokens": 3, "cache_write_tokens": 4, "cost_usd": null, "context_tokens": 8}),

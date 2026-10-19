@@ -30,21 +30,21 @@
     <tr><th>文件</th><th>主要类型与函数</th><th>本页对应的章节</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>src/output/event.rs</code></td><td><code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code>）、<code>EndStatus</code>、<code>Signal</code></td><td>统一事件流、end.status</td></tr>
+    <tr><td><code>src/output/event.rs</code></td><td><code>Event</code>、<code>Body</code>、<code>Start</code>、<code>SandboxKind</code>、<code>NetworkInfo</code>、<code>Prompt</code>、<code>ToolStart</code>、<code>Tool</code>、<code>Text</code>、<code>UsageReport</code>、<code>SubagentStart</code>、<code>SubagentStatus</code>、<code>SubagentEnd</code>、<code>Network</code>、<code>NetworkReason</code>、<code>End</code>（<code>early</code>）、<code>EndStatus</code>、<code>Signal</code></td><td>统一事件流、end.status</td></tr>
     <tr><td><code>src/output/usage.rs</code></td><td><code>TokenCounts</code>（<code>context_tokens</code>、<code>summary</code>）、<code>Usage</code>（<code>sum</code>）、<code>tokens</code>、<code>cost</code></td><td>用量与费用、text 格式里的用量与费用写法</td></tr>
-    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>、<code>open_tools</code>）、<code>Record</code>、<code>Translated</code>、<code>OpenTools</code></td><td>tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
-    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>、<code>set_open_tools</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
+    <tr><td><code>src/output/aggregate.rs</code></td><td><code>Aggregator</code>（<code>begin</code>、<code>push</code>、<code>finish</code>）、<code>Record</code>、<code>Translated</code></td><td>tool_start 与 tool 事件的时机、subagent 与 parent、用量合计、未结束调用的补发</td></tr>
+    <tr><td><code>src/output/mod.rs</code></td><td><code>Output</code>（<code>select</code>）、<code>write_end</code></td><td>text 格式、rich 格式</td></tr>
     <tr><td><code>src/output/text.rs</code></td><td><code>TextFormatter</code>（<code>lines</code>、<code>subagent_label</code>、<code>subagent_model</code>）</td><td>text 格式、<code>[note]</code> 行</td></tr>
     <tr><td><code>src/output/rich.rs</code></td><td><code>Rich</code>、<code>REFRESH_PERIOD</code>、<code>terminal_size</code></td><td>rich 格式</td></tr>
   </tbody>
 </table>
-<p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成，运行框架每处理完一行原始输出，把 <code>Aggregator::open_tools</code> 的快照交给 rich，用来显示正在执行的工具。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
+<p>适配器输出的是 <code>output::Record</code>，<code>Aggregator</code> 把它们转成本页的事件：补 <code>parent</code>、给 subagent 编号、合计用量、在 <code>end</code> 之前补发未结束的调用与 subagent。三种输出格式都从同一个事件序列生成。理由：事件是唯一的事实来源，text 与 rich 只做展示。</p>
 
 <h2>统一事件流</h2>
-<p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。字段只增不改时 <code>schema</code> 不变；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
+<p><code>--format jsonl</code> 时，标准输出每行是一个 JSON 对象，每行写完立即 flush。第一个事件一定是 <code>start</code>，最后一个一定是 <code>end</code>；启动前就失败时只有一个 <code>end</code>。增加字段或增加事件类型时 <code>schema</code> 不变，调用方忽略不认识的 <code>type</code>；删除或改变已有字段的含义时加 1。每个事件的字段按下面类型定义里的顺序输出。</p>
 <pre id="event-types"><code class="language-typescript">type Event =
-  | StartEvent | PromptEvent | ToolEvent | TextEvent | UsageEvent
-  | SubagentStartEvent | SubagentEndEvent | NetworkEvent | EndEvent
+  | StartEvent | PromptEvent | ToolStartEvent | ToolEvent | TextEvent
+  | UsageEvent | SubagentStartEvent | SubagentEndEvent | NetworkEvent | EndEvent
 
 interface EventBase {
   schema: 1                  // 事件格式的版本号
@@ -72,6 +72,15 @@ interface StartEvent extends EventBase {
 interface PromptEvent extends EventBase {
   type: "prompt"
   text: string
+}
+
+// 一次工具调用开始时输出
+interface ToolStartEvent extends EventBase {
+  type: "tool_start"
+  id: string                 // 与这次调用的 tool 事件的 id 相同
+  parent: string | null      // 与这次调用的 tool 事件的 parent 相同
+  name: string
+  summary: string            // 与这次调用的 tool 事件的 summary 相同
 }
 
 // 一次工具调用结束时输出
@@ -199,6 +208,15 @@ interface Usage extends TokenCounts {
 }
 {
   "schema": 1,
+  "type": "tool_start",
+  "time": "2026-10-04T13:00:03.900Z",
+  "id": "toolu_02",
+  "parent": "toolu_01",
+  "name": "Grep",
+  "summary": "Grep: parse_line"
+}
+{
+  "schema": 1,
   "type": "tool",
   "time": "2026-10-04T13:00:04.410Z",
   "id": "toolu_02",
@@ -243,6 +261,15 @@ interface Usage extends TokenCounts {
       }
     }
   }
+}
+{
+  "schema": 1,
+  "type": "tool_start",
+  "time": "2026-10-04T13:00:15.900Z",
+  "id": "toolu_03",
+  "parent": null,
+  "name": "Bash",
+  "summary": "Bash: cargo test"
 }
 {
   "schema": 1,
@@ -301,10 +328,11 @@ interface Usage extends TokenCounts {
 
 <h3>tool 事件在调用结束时输出</h3>
 <p><code>tool</code> 在收到这次调用的结果时输出，因为调用是否被拒绝要在调用之后才知道。运行时结束时还没有结果的调用，在 <code>end</code> 之前补发。被拒绝的调用不改变 <code>end.status</code>：运行时会把拒绝结果交还模型，由模型决定下一步，是否算失败由调用方根据 <code>denied</code> 判断。不提供「被拒绝即停止」的选项。</p>
+<p>调用开始时先输出 <code>tool_start</code>，调用方据此显示正在执行的工具。同一次调用的 <code>tool_start</code> 与 <code>tool</code> 的 <code>id</code>、<code>parent</code>、<code>name</code>、<code>summary</code> 相同，<code>parent</code> 在调用开始时按已经启动的 subagent 确定，结束时沿用。每个 <code>tool_start</code> 之后都有一个同 <code>id</code> 的 <code>tool</code>，包括在 <code>end</code> 之前补发的。运行时只在调用结束时才报告这次调用的，<code>tool_start</code> 与 <code>tool</code> 一起输出。</p>
 <p><code>denied</code> 只表示运行时权限机制的拒绝，例如 claude-code 的 auto 模式分类器拒绝一条命令。被沙箱拦下的命令表现为命令出错，<code>denied</code> 为 false。pi 没有权限机制，<code>denied</code> 恒为 false。</p>
 
 <h3>subagent 与 parent</h3>
-<p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code> 与 <code>subagent_end</code>，不输出 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
+<p>主 agent 的事件 <code>parent</code> 为 null。subagent 内部的 <code>tool_start</code>、<code>tool</code>、<code>text</code>、<code>usage</code>、<code>subagent_start</code> 事件，<code>parent</code> 是启动它的 <code>subagent_start</code> 的 <code>id</code>；subagent 再启动 subagent 时按同样的规则嵌套。启动 subagent 的那次工具调用只输出 <code>subagent_start</code> 与 <code>subagent_end</code>，不输出 <code>tool_start</code> 与 <code>tool</code>。理由：调用方据此知道 subagent 何时开始与结束，不需要认识每个运行时的工具名。</p>
 <p>主 agent 与多个 subagent 可以同时运行，它们的事件在流里交错出现。<code>id</code> 是运行时给出的工具调用 id，较长，用于关联事件；<code>number</code> 用于显示。</p>
 <p>运行结束时还没结束的 subagent，在 <code>end</code> 之前补发 <code>status</code> 为 <code>failed</code> 的 <code>subagent_end</code>，<code>duration_ms</code> 记到运行结束时。subagent 失败不改变 <code>end.status</code>，理由是主 agent 可能已经处理了它的失败并完成任务。</p>
 <p>subagent 与主 agent 在同一个运行时进程里运行，受同样的沙箱与权限限制。claude-code 与 codex 默认允许启动 subagent，给出 <code>--no-subagents</code> 时关闭；pi 没有 subagent。codex 的输出里没有 subagent 的启动事件与 subagent 内部的事件，所以 codex 的事件流里没有 <code>subagent_start</code> 与 <code>subagent_end</code>，subagent 做的事不出现在事件流里（codex 0.159.2 实测）。</p>
@@ -361,6 +389,7 @@ interface Usage extends TokenCounts {
 <p><code>--format text</code> 每个事件一行，格式是 <code>[agent 标签] 事件类型 内容</code>。主 agent 的标签是 <code>main</code>，subagent 的标签是小写的类型加编号，例如 <code>explore#1</code>、<code>general-purpose#2</code>。没有 subagent 时也带 <code>[main]</code>。理由：主 agent 与 subagent 的事件交错出现，每行都带标签才能分辨来源，也能用 <code>grep '^\[explore#1\]'</code> 取出一个 subagent 的全部输出。</p>
 <ul>
   <li><code>tool</code>：<code>tool</code> 加 <code>summary</code>。被拒绝时在 <code>summary</code> 后紧接 <code> (denied)</code>。</li>
+  <li><code>tool_start</code>：不显示，每次调用只在结束时由 <code>tool</code> 显示一行。</li>
   <li><code>prompt</code>：<code>prompt</code> 加提示词的第一行，标签是 <code>[main]</code>。</li>
   <li><code>text</code>：文字的第一行。</li>
   <li><code>subagent_start</code>：由启动它的 agent 的标签开头，写 <code>agent start 标签 (模型): 描述</code>，模型未知时省去括号。</li>
@@ -412,7 +441,7 @@ subagent  2 running <span class="ref">2</span>
   <li>subagent 列表。出现过 subagent 之后才显示，每个运行中的 subagent 一行：动画、标签、模型、描述、它正在执行的工具、已运行时间、最近一次 <code>usage</code> 的上下文占用。按启动顺序排列。subagent 结束后从列表移除，结束行进入滚动区。没有运行中的 subagent 时显示「0 running」。终端宽度不够时截断描述。标签与模型取自 <code>TextFormatter</code> 记下的值，与 text 格式显示的相同。</li>
   <li>状态栏。动画、<code>main</code> 标签与主 agent 的模型、主 agent 正在执行的工具、已用时间、累计用量（到目前为止全部 <code>usage</code> 之和，包括 subagent，只写 <code>in</code> 与 <code>cached</code>，不写 <code>out</code>）、主 agent 的上下文占用。运行时没报告的项不显示。结束时状态栏换成 <code>end</code> 行，subagent 列表清除。</li>
 </ol>
-<p>「正在执行的工具」在调用开始时就要显示，而 <code>tool</code> 事件在调用结束时才输出，所以 rich 从解析器内部记录的「已开始、未结束的调用」取这一项，不从事件流取。</p>
+<p>「正在执行的工具」从事件流取：rich 记下已经收到 <code>tool_start</code>、还没收到同 <code>id</code> 的 <code>tool</code> 的调用，按 <code>parent</code> 分到各个 agent，每个 agent 显示其中最近开始的一个。</p>
 <p>面板每 100 毫秒重画一次，滚动区每输出一行也立即重画；动画每 100 毫秒换一帧。面板第一次出现时隐藏光标，结束时恢复。</p>
 <p>rich 显示期间，如果标准错误也是终端，运行时写到标准错误的内容与 agentrun 自己写到标准错误的行（例如 <code>[debug]</code> 行）按行插入滚动区，不加标签与颜色，不完整的最后一行在运行结束时输出。理由：两路输出落在同一个终端上，直接写出会打在面板中间。标准错误不是终端时照常直接写出。</p>
 <p>rich 只用暗色（SGR 2）显示滚动区的 agent 标签与面板的分隔线。环境变量 <code>NO_COLOR</code> 存在且不为空时不输出 SGR 序列，其他控制序列（移动光标、清屏、隐藏光标）照常输出。</p>
