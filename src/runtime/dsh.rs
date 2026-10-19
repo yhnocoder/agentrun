@@ -30,6 +30,8 @@ const HOME_SUBDIR: &str = "dsh-home";
 const AGENTS_SUBDIR: &str = "dsh-agents";
 const PATCH_FILE: &str = "dsh-patch.yml";
 const SESSIONS_SUBDIR: &str = "sessions";
+const USER_HOME_SUBDIR: &str = ".dsh";
+pub(crate) const ENV_FILE: &str = ".env";
 const SESSION_PREFIX: &str = "session-";
 const PROFILE: &str = "headless";
 const STDIN_TASK: &str = "-";
@@ -193,6 +195,7 @@ impl Adapter for Dsh {
             &invocation.cwd,
             &invocation.tempdir,
             None,
+            &invocation.denied_reads,
             invocation.proxy.as_ref(),
             dry_run,
         )?;
@@ -311,6 +314,17 @@ impl Adapter for Dsh {
             emptied_dir: None,
         })
     }
+}
+
+pub(crate) fn user_home(session: &Session, cwd: &Path) -> Option<PathBuf> {
+    session.runtime_dir(cwd, HOME_VARIABLE, USER_HOME_SUBDIR)
+}
+
+pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    user_home(session, cwd)
+        .map(|home| home.join(SESSIONS_SUBDIR))
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn saved_session(store: &Path, id: &str) -> Option<PathBuf> {

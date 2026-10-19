@@ -12,14 +12,20 @@ use crate::image::{Image, base64};
 use crate::json::{first_line, joined_text, optional_string, string};
 use crate::network::{HostRule, PORT_PLACEHOLDER, ProxyEndpoint};
 use crate::output::{Record, SandboxKind, SubagentStatus, TokenCounts, Usage};
+use crate::session::Session;
 use crate::transcript::{Transcript, find_file};
 
 pub(crate) const MIN_VERSION: Version = Version(2, 1, 288);
 pub(crate) const SERVICE_HOST: &str = "api.anthropic.com";
+const CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
+const CONFIG_HOME_SUBDIR: &str = ".claude";
+const LOGIN_FILE: &str = ".credentials.json";
+const PROJECTS_SUBDIR: &str = "projects";
 const TOOLS: [&str; 7] = ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Task"];
 const ALLOWED_WITHOUT_SANDBOX: [&str; 6] = ["Read", "Edit", "Write", "Glob", "Grep", "Task"];
 const ALLOWED_WITH_SANDBOX: [&str; 3] = ["Read", "Glob", "Grep"];
 const PATH_TOOLS: [&str; 2] = ["Edit", "Write"];
+const PATTERN_CHARACTERS: [char; 7] = ['\\', '*', '?', '[', ']', '{', '}'];
 const WEB_FETCH_TOOL: &str = "WebFetch";
 const WEB_SEARCH_TOOL: &str = "WebSearch";
 const SOCAT_LISTEN_VARIABLE: &str = "SOCAT_DEFAULT_LISTEN_IP";
@@ -34,9 +40,11 @@ const SYNTHETIC_MODEL: &str = "<synthetic>";
 const DEFAULT_SUBAGENT_KIND: &str = "general-purpose";
 const NO_RESULT_DETAIL: &str = "runtime exited with code 0 without a result event";
 const RANDOM_SOURCE: &str = "/dev/urandom";
-const CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
-const CONFIG_HOME_SUBDIR: &str = ".claude";
-const PROJECTS_SUBDIR: &str = "projects";
+const TOOL_USE_ERROR_TAG: &str = "<tool_use_error>";
+const SETTINGS_DENIALS: [&str; 2] = [
+    "denied by your permission settings",
+    "Read deny rule in your permission settings",
+];
 
 #[derive(Default)]
 pub struct ClaudeCode {
@@ -112,8 +120,17 @@ struct ImageSource {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Settings<'a> {
-    auto_memory_directory: &'a str,
-    sandbox: SandboxSettings<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permissions: Option<PermissionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_memory_directory: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sandbox: Option<SandboxSettings<'a>>,
+}
+
+#[derive(Serialize)]
+struct PermissionSettings {
+    deny: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -131,6 +148,8 @@ struct SandboxSettings<'a> {
 #[serde(rename_all = "camelCase")]
 struct FilesystemSettings<'a> {
     allow_write: [&'a str; 2],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deny_read: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -276,7 +295,7 @@ impl ClaudeCode {
                 records.extend(self.flush_usages());
                 records.push(Record::SubagentEnd { id, status });
             } else {
-                let denied = self.denied.contains(&id);
+                let denied = self.denied.contains(&id) || denied_by_settings(block);
                 records.push(Record::ToolEnd {
                     id,
                     denied,
@@ -361,7 +380,7 @@ impl Adapter for ClaudeCode {
                 .collect();
             for dir in [&cwd, &tempdir] {
                 for tool in PATH_TOOLS {
-                    rules.push(path_rule(tool, dir));
+                    rules.push(path_rule(tool, dir, "/**"));
                 }
             }
             rules.push(SUBAGENT_TOOL.to_string());
@@ -421,14 +440,18 @@ impl Adapter for ClaudeCode {
             "--allowedTools".to_string(),
             allowed.join(","),
         ]);
-        if sandboxed {
-            argv.push("--settings".to_string());
-            argv.push(sandbox_settings(
+        let denied = denied_paths(&invocation.denied_reads);
+        let sandbox = sandboxed.then(|| {
+            sandbox_settings(
                 &cwd,
                 &tempdir,
-                &memory_dir.to_string_lossy(),
+                &denied,
                 invocation.proxy.as_ref().map(proxy_port),
-            ));
+            )
+        });
+        if sandbox.is_some() || !denied.is_empty() {
+            argv.push("--settings".to_string());
+            argv.push(settings(&denied, &memory_dir.to_string_lossy(), sandbox));
         }
         if let Some(model) = &invocation.args.model {
             argv.push("--model".to_string());
@@ -545,8 +568,16 @@ impl Adapter for ClaudeCode {
     }
 }
 
-fn path_rule(tool: &str, dir: &str) -> String {
-    format!("{tool}(//{}/**)", dir.strip_prefix('/').unwrap_or(dir))
+fn path_rule(tool: &str, path: &str, suffix: &str) -> String {
+    let relative = path.strip_prefix('/').unwrap_or(path);
+    let mut escaped = String::with_capacity(relative.len());
+    for character in relative.chars() {
+        if PATTERN_CHARACTERS.contains(&character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    format!("{tool}(//{escaped}{suffix})")
 }
 
 fn domain_rule(rule: &HostRule) -> String {
@@ -560,30 +591,80 @@ fn proxy_port(proxy: &ProxyEndpoint) -> Value {
     }
 }
 
-fn sandbox_settings(
-    cwd: &str,
-    tempdir: &str,
-    memory_dir: &str,
-    proxy_port: Option<Value>,
-) -> String {
+pub(crate) fn login_file(session: &Session, cwd: &Path) -> Option<PathBuf> {
+    session
+        .runtime_dir(cwd, CONFIG_DIR_VARIABLE, CONFIG_HOME_SUBDIR)
+        .map(|dir| dir.join(LOGIN_FILE))
+}
+
+pub(crate) fn history_paths(session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    session
+        .runtime_dir(cwd, CONFIG_DIR_VARIABLE, CONFIG_HOME_SUBDIR)
+        .map(|dir| dir.join(PROJECTS_SUBDIR))
+        .into_iter()
+        .collect()
+}
+
+fn denied_by_settings(block: &Value) -> bool {
+    let text = joined_text(&block["content"]);
+    block["is_error"] == Value::Bool(true)
+        && text.starts_with(TOOL_USE_ERROR_TAG)
+        && SETTINGS_DENIALS.iter().any(|denial| text.contains(denial))
+}
+
+fn denied_paths(denied_reads: &[PathBuf]) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    for path in denied_reads {
+        let real = std::fs::canonicalize(path).ok();
+        for path in std::iter::once(path).chain(real.as_ref()) {
+            let text = path.to_string_lossy().into_owned();
+            if !paths.contains(&text) {
+                paths.push(text);
+            }
+        }
+    }
+    paths
+}
+
+fn read_rules(denied: &[String]) -> Vec<String> {
+    denied
+        .iter()
+        .flat_map(|path| [path_rule("Read", path, ""), path_rule("Read", path, "/**")])
+        .collect()
+}
+
+fn settings(denied: &[String], memory_dir: &str, sandbox: Option<SandboxSettings>) -> String {
     serde_json::to_string(&Settings {
-        auto_memory_directory: memory_dir,
-        sandbox: SandboxSettings {
-            enabled: true,
-            fail_if_unavailable: true,
-            auto_allow_bash_if_sandboxed: true,
-            allow_unsandboxed_commands: false,
-            filesystem: FilesystemSettings {
-                allow_write: [cwd, tempdir],
-            },
-            network: NetworkSettings {
-                allowed_domains: [],
-                http_proxy_port: proxy_port.clone(),
-                socks_proxy_port: proxy_port,
-            },
-        },
+        permissions: (!denied.is_empty()).then(|| PermissionSettings {
+            deny: read_rules(denied),
+        }),
+        auto_memory_directory: sandbox.is_some().then_some(memory_dir),
+        sandbox,
     })
     .expect("settings serialize")
+}
+
+fn sandbox_settings<'a>(
+    cwd: &'a str,
+    tempdir: &'a str,
+    denied: &[String],
+    proxy_port: Option<Value>,
+) -> SandboxSettings<'a> {
+    SandboxSettings {
+        enabled: true,
+        fail_if_unavailable: true,
+        auto_allow_bash_if_sandboxed: true,
+        allow_unsandboxed_commands: false,
+        filesystem: FilesystemSettings {
+            allow_write: [cwd, tempdir],
+            deny_read: denied.to_vec(),
+        },
+        network: NetworkSettings {
+            allowed_domains: [],
+            http_proxy_port: proxy_port.clone(),
+            socks_proxy_port: proxy_port,
+        },
+    }
 }
 
 fn prompt_line(prompt: &str, images: &[Image]) -> Vec<u8> {
@@ -771,6 +852,83 @@ mod tests {
             r#"{"autoMemoryDirectory":"/tmp/agentrun-abc/claude-memory","sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"filesystem":{"allowWrite":["/work/repo","/tmp/agentrun-abc"]},"network":{"allowedDomains":[]}}}"#.to_string(),
         ]);
         assert_eq!(argv_without_session_id(&launch), expected);
+    }
+
+    fn settings_of(launch: &Launch) -> Value {
+        let index = launch
+            .argv
+            .iter()
+            .position(|arg| arg == "--settings")
+            .unwrap();
+        serde_json::from_str(&launch.argv[index + 1]).unwrap()
+    }
+
+    #[test]
+    fn denied_reads_become_read_rules_and_sandbox_deny_read() {
+        let root = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(root.path()).unwrap();
+        std::fs::create_dir(real.join("ssh")).unwrap();
+        std::os::unix::fs::symlink(real.join("ssh"), real.join("link")).unwrap();
+        let denied = vec![real.join("link"), PathBuf::from("/nonexistent/.netrc")];
+        let link = real.join("link").to_string_lossy().into_owned();
+        let ssh = real.join("ssh").to_string_lossy().into_owned();
+        let rule = |path: &str, suffix: &str| format!("Read(/{path}{suffix})");
+        let rules = json!([
+            rule(&link, ""),
+            rule(&link, "/**"),
+            rule(&ssh, ""),
+            rule(&ssh, "/**"),
+            "Read(//nonexistent/.netrc)",
+            "Read(//nonexistent/.netrc/**)",
+        ]);
+        for sandboxed in [true, false] {
+            let invocation = Invocation {
+                denied_reads: denied.clone(),
+                ..invocation(sandboxed, &[])
+            };
+            let launch = ClaudeCode::new()
+                .launch(Path::new("/usr/bin/claude"), &invocation)
+                .unwrap();
+            let settings = settings_of(&launch);
+            assert_eq!(settings["permissions"]["deny"], rules, "{settings}");
+            if sandboxed {
+                assert_eq!(
+                    settings["sandbox"]["filesystem"]["denyRead"],
+                    json!([link, ssh, "/nonexistent/.netrc"])
+                );
+            } else {
+                assert_eq!(settings.get("sandbox"), None, "{settings}");
+            }
+        }
+    }
+
+    #[test]
+    fn path_rules_escape_pattern_characters() {
+        let invocation = Invocation {
+            cwd: PathBuf::from("/work/w[1]"),
+            denied_reads: vec![PathBuf::from("/data/a*b{c}?\\d")],
+            ..invocation(true, &[])
+        };
+        let launch = ClaudeCode::new()
+            .launch(Path::new("/usr/bin/claude"), &invocation)
+            .unwrap();
+        let index = launch
+            .argv
+            .iter()
+            .position(|arg| arg == "--allowedTools")
+            .unwrap();
+        assert!(
+            launch.argv[index + 1].contains(r"Edit(//work/w\[1\]/**),Write(//work/w\[1\]/**)"),
+            "{}",
+            launch.argv[index + 1]
+        );
+        assert_eq!(
+            settings_of(&launch)["permissions"]["deny"],
+            json!([
+                r"Read(//data/a\*b\{c\}\?\\d)",
+                r"Read(//data/a\*b\{c\}\?\\d/**)"
+            ])
+        );
     }
 
     #[test]
@@ -1348,6 +1506,32 @@ mod tests {
                 error: Some(false),
             }]
         );
+        let results = [
+            (
+                "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>",
+                true,
+            ),
+            (
+                "<tool_use_error>File is covered by a Read deny rule in your permission settings and cannot be written.</tool_use_error>",
+                true,
+            ),
+            (
+                "Exit code 1\nFile is in a directory that is denied by your permission settings.",
+                false,
+            ),
+        ];
+        for (content, denied) in results {
+            let result = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t4", "is_error": true, "content": content}]}});
+            assert_eq!(
+                adapter.translate(&result),
+                vec![Record::ToolEnd {
+                    id: "t4".to_string(),
+                    denied,
+                    error: Some(true),
+                }],
+                "{content}"
+            );
+        }
         let handback = assistant(
             Some("A"),
             "m",

@@ -3,7 +3,7 @@ pub mod codex;
 pub mod dsh;
 pub mod pi;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,23 @@ use dsh::Dsh;
 use pi::Pi;
 
 pub const DETAIL_MAX_CHARS: usize = 500;
+pub const DENIED_HOME_ENTRIES: [&str; 9] = [
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".config/gh",
+    ".netrc",
+    ".kube",
+    ".docker/config.json",
+    ".config/gcloud",
+    ".azure",
+];
+const RUNTIMES: [Runtime; 4] = [
+    Runtime::ClaudeCode,
+    Runtime::Codex,
+    Runtime::Pi,
+    Runtime::Dsh,
+];
 
 pub trait Adapter {
     fn runtime(&self) -> Runtime;
@@ -129,6 +146,99 @@ pub(crate) fn sandbox_state(
     }
 }
 
+pub(crate) fn login_file(runtime: Runtime, session: &Session, cwd: &Path) -> Option<PathBuf> {
+    match runtime {
+        Runtime::ClaudeCode => claudecode::login_file(session, cwd),
+        Runtime::Codex => codex::user_home(session, cwd).map(|home| home.join(codex::LOGIN_FILE)),
+        Runtime::Pi => pi::user_state_dir(session, cwd).map(|dir| dir.join(pi::LOGIN_FILE)),
+        Runtime::Dsh => dsh::user_home(session, cwd).map(|home| home.join(dsh::ENV_FILE)),
+    }
+}
+
+fn reads_login_inside_sandbox(runtime: Runtime) -> bool {
+    runtime == Runtime::Pi
+}
+
+pub fn default_denied_reads(runtime: Runtime, session: &Session, cwd: &Path) -> Vec<PathBuf> {
+    let home = session
+        .env
+        .get(OsStr::new("HOME"))
+        .filter(|home| !home.is_empty())
+        .map(|home| cwd.join(home));
+    let mut paths: Vec<PathBuf> = home
+        .iter()
+        .flat_map(|home| DENIED_HOME_ENTRIES.iter().map(|entry| home.join(entry)))
+        .collect();
+    paths.extend(
+        RUNTIMES
+            .into_iter()
+            .filter(|other| *other != runtime || !reads_login_inside_sandbox(runtime))
+            .filter_map(|other| login_file(other, session, cwd)),
+    );
+    paths.extend(claudecode::history_paths(session, cwd));
+    paths.extend(codex::history_paths(session, cwd));
+    paths.extend(dsh::history_paths(session, cwd));
+    paths.retain(|path| !contains(path, cwd));
+    paths
+}
+
+pub(crate) fn denied_reads(
+    runtime: Runtime,
+    args: &RunArgs,
+    session: &Session,
+    cwd: &Path,
+    temp_base: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let mut needed = vec![
+        ("working directory", cwd.to_path_buf()),
+        ("temporary directory", temp_base.to_path_buf()),
+    ];
+    if runtime == Runtime::Pi {
+        needed.extend(pi::user_state_dir(session, cwd).map(|dir| ("pi state directory", dir)));
+    }
+    let mut paths = if args.no_default_deny_read {
+        Vec::new()
+    } else {
+        default_denied_reads(runtime, session, cwd)
+    };
+    paths.retain(|path| needed.iter().all(|(_, dir)| !contains(path, dir)));
+    for given in &args.deny_read {
+        if given.to_string_lossy().starts_with('~') {
+            return Err(format!(
+                "--deny-read {}: ~ is not expanded, give the full path",
+                given.display()
+            ));
+        }
+        let path = std::path::absolute(given)
+            .map_err(|error| format!("--deny-read {}: {error}", given.display()))?;
+        if let Some((name, dir)) = needed.iter().find(|(_, dir)| contains(&path, dir)) {
+            return Err(format!(
+                "--deny-read {}: contains the {name} {}",
+                given.display(),
+                dir.display()
+            ));
+        }
+        paths.push(path);
+    }
+    let mut unique = Vec::new();
+    for path in paths {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    Ok(unique)
+}
+
+fn contains(path: &Path, dir: &Path) -> bool {
+    if dir.starts_with(path) {
+        return true;
+    }
+    match (std::fs::canonicalize(path), std::fs::canonicalize(dir)) {
+        (Ok(path), Ok(dir)) => dir.starts_with(path),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
     Message(String),
@@ -177,6 +287,7 @@ pub struct Invocation {
     pub tempdir: PathBuf,
     pub session: Session,
     pub allow_hosts: Vec<HostRule>,
+    pub denied_reads: Vec<PathBuf>,
     pub proxy: Option<ProxyEndpoint>,
     pub resume: Option<Saved>,
 }
@@ -200,6 +311,7 @@ impl Invocation {
             tempdir: PathBuf::new(),
             session,
             allow_hosts: Vec::new(),
+            denied_reads: Vec::new(),
             proxy: None,
             resume: None,
         }
@@ -226,6 +338,7 @@ pub struct Launch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::parse_run;
 
     fn session(runtime: Runtime, state_dir: Option<&Path>) -> Session {
         let env: Vec<(OsString, OsString)> = state_dir
@@ -316,6 +429,169 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(state.dir, std::fs::canonicalize(&state_dir).unwrap());
+    }
+
+    fn env_session(runtime: Runtime, env: &[(&str, &str)]) -> Session {
+        let env: Vec<(OsString, OsString)> = env
+            .iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect();
+        Session::assemble(runtime, &env, &[], &[], &[])
+    }
+
+    fn home_entries(home: &str) -> Vec<PathBuf> {
+        DENIED_HOME_ENTRIES
+            .iter()
+            .map(|entry| Path::new(home).join(entry))
+            .collect()
+    }
+
+    #[test]
+    fn default_denied_reads_list_home_entries_login_files_but_pis_own_and_histories() {
+        let cwd = Path::new("/nonexistent/work");
+        let home = [("HOME", "/nonexistent/home")];
+        let logins = [
+            (
+                Runtime::ClaudeCode,
+                "/nonexistent/home/.claude/.credentials.json",
+            ),
+            (Runtime::Codex, "/nonexistent/home/.codex/auth.json"),
+            (Runtime::Pi, "/nonexistent/home/.pi/agent/auth.json"),
+            (Runtime::Dsh, "/nonexistent/home/.dsh/.env"),
+        ];
+        for (runtime, _) in logins {
+            let mut expected = home_entries("/nonexistent/home");
+            expected.extend(
+                logins
+                    .iter()
+                    .filter(|(other, _)| runtime != Runtime::Pi || *other != Runtime::Pi)
+                    .map(|(_, login)| PathBuf::from(login)),
+            );
+            expected.extend(
+                [
+                    "/nonexistent/home/.claude/projects",
+                    "/nonexistent/home/.codex/sessions",
+                    "/nonexistent/home/.codex/history.jsonl",
+                    "/nonexistent/home/.dsh/sessions",
+                ]
+                .map(PathBuf::from),
+            );
+            assert_eq!(
+                default_denied_reads(runtime, &env_session(runtime, &home), cwd),
+                expected,
+                "{runtime:?}"
+            );
+        }
+        let moved = env_session(
+            Runtime::Pi,
+            &[
+                ("HOME", "/nonexistent/home"),
+                ("CLAUDE_CONFIG_DIR", "/nonexistent/claude"),
+                ("CODEX_HOME", "relative/codex"),
+                ("DSH_HOME", "/nonexistent/dsh"),
+            ],
+        );
+        let paths = default_denied_reads(Runtime::Pi, &moved, cwd);
+        assert_eq!(
+            paths[DENIED_HOME_ENTRIES.len()..],
+            [
+                PathBuf::from("/nonexistent/claude/.credentials.json"),
+                PathBuf::from("/nonexistent/work/relative/codex/auth.json"),
+                PathBuf::from("/nonexistent/dsh/.env"),
+                PathBuf::from("/nonexistent/claude/projects"),
+                PathBuf::from("/nonexistent/work/relative/codex/sessions"),
+                PathBuf::from("/nonexistent/work/relative/codex/history.jsonl"),
+                PathBuf::from("/nonexistent/dsh/sessions"),
+            ]
+        );
+        assert_eq!(
+            default_denied_reads(Runtime::Codex, &env_session(Runtime::Codex, &[]), cwd),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn default_denied_reads_leave_out_paths_that_contain_the_working_directory() {
+        let session = env_session(Runtime::Pi, &[("HOME", "/nonexistent/home")]);
+        let paths = default_denied_reads(
+            Runtime::Pi,
+            &session,
+            Path::new("/nonexistent/home/.ssh/project"),
+        );
+        assert!(!paths.contains(&PathBuf::from("/nonexistent/home/.ssh")));
+        assert!(paths.contains(&PathBuf::from("/nonexistent/home/.aws")));
+    }
+
+    #[test]
+    fn denied_reads_add_the_given_paths_after_the_defaults() {
+        let cwd = std::env::current_dir().unwrap();
+        let session = env_session(Runtime::Pi, &[("HOME", "/nonexistent/home")]);
+        let temp = Path::new("/nonexistent/tmp");
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["agentrun", "pi", "--prompt", "hi"];
+            argv.extend(extra);
+            parse_run(&argv).1
+        };
+        let given = parse(&[
+            "--deny-read",
+            "secrets",
+            "--deny-read",
+            "/nonexistent/home/.ssh",
+        ]);
+        let paths = denied_reads(Runtime::Pi, &given, &session, &cwd, temp).unwrap();
+        assert_eq!(
+            paths.len(),
+            default_denied_reads(Runtime::Pi, &session, &cwd).len() + 1
+        );
+        assert_eq!(paths.last(), Some(&cwd.join("secrets")));
+        let only = parse(&["--no-default-deny-read", "--deny-read", "/nonexistent/x"]);
+        assert_eq!(
+            denied_reads(Runtime::Pi, &only, &session, &cwd, temp).unwrap(),
+            [PathBuf::from("/nonexistent/x")]
+        );
+        let parent = cwd.parent().unwrap().to_str().unwrap().to_string();
+        let containing = parse(&["--deny-read", &parent]);
+        assert_eq!(
+            denied_reads(Runtime::Pi, &containing, &session, &cwd, temp),
+            Err(format!(
+                "--deny-read {parent}: contains the working directory {}",
+                cwd.display()
+            ))
+        );
+        let rejected = [
+            (
+                "/nonexistent",
+                "contains the temporary directory /nonexistent/tmp",
+            ),
+            (
+                "/nonexistent/home/.pi",
+                "contains the pi state directory /nonexistent/home/.pi/agent",
+            ),
+            ("~/.ssh", "~ is not expanded, give the full path"),
+        ];
+        for (given, error) in rejected {
+            assert_eq!(
+                denied_reads(
+                    Runtime::Pi,
+                    &parse(&["--deny-read", given]),
+                    &session,
+                    &cwd,
+                    temp
+                ),
+                Err(format!("--deny-read {given}: {error}"))
+            );
+        }
+        let codex_session = env_session(Runtime::Codex, &[("HOME", "/nonexistent/home")]);
+        assert!(
+            denied_reads(
+                Runtime::Codex,
+                &parse(&["--deny-read", "/nonexistent/home/.pi"]),
+                &codex_session,
+                &cwd,
+                temp
+            )
+            .is_ok()
+        );
     }
 
     #[test]

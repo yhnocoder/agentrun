@@ -797,10 +797,15 @@ fn real_bwrap_pi_checks_bind_the_state_dir_and_reach_the_allowed_host() {
         .collect();
     assert_eq!(pi_sandbox_commands.len(), 2, "{debug}");
     let state_dir = std::fs::canonicalize(env.home().join(".pi/agent")).unwrap();
+    let codex_login = std::fs::canonicalize(env.home().join(".codex/auth.json")).unwrap();
+    let kept = kept_dir(&debug);
+    let unreadable = std::fs::canonicalize(kept.join("pi-sandbox/unreadable.txt")).unwrap();
     assert!(
         pi_sandbox_commands[0].contains(&format!(
-            "--bind {0} {0} --ro-bind {0}/settings.json {0}/settings.json --dev /dev",
-            state_dir.display()
+            "--bind {0} {0} --ro-bind {0}/settings.json {0}/settings.json --ro-bind /dev/null {1} --ro-bind /dev/null {2} --dev /dev",
+            state_dir.display(),
+            codex_login.display(),
+            unreadable.display()
         )),
         "{debug}"
     );
@@ -817,7 +822,6 @@ fn real_bwrap_pi_checks_bind_the_state_dir_and_reach_the_allowed_host() {
             && network_command.contains(" doctor-connect 127.0.0.1 "),
         "{network_command}"
     );
-    let kept = kept_dir(&debug);
     assert!(kept.join("pi-sandbox/work/inside.txt").exists());
     assert!(!kept.join("pi-sandbox/outside.txt").exists());
     std::fs::remove_dir_all(kept).unwrap();
@@ -902,6 +906,24 @@ fn real_bwrap_codex_sandbox_check_reports_the_outside_write() {
     let kept = kept_dir(&debug);
     assert!(kept.join("codex-sandbox/outside.txt").exists());
     std::fs::remove_dir_all(kept).unwrap();
+    assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_check_reports_a_read_of_a_denied_path() {
+    let Some((env, system)) = real_bwrap_doctor() else {
+        return;
+    };
+    const CODEX_BLOCKING_ONLY_WRITES: &str = "#!/bin/sh\nif [ \"$1\" = login ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nif [ \"$1\" = sandbox ]; then while [ \"$1\" != -- ]; do shift; done; shift; for base; do :; done; ln -s /nonexistent/outside.txt \"$base/outside.txt\"; exec \"$@\"; fi\nexit 0\n";
+    env.install("codex", CODEX_BLOCKING_ONLY_WRITES);
+    let output = doctor_with_bwrap(&env, &system, &["codex"]);
+    assert_eq!(
+        line_for(&stdout_lines(&output), "codex", "sandbox"),
+        "[fail] codex        sandbox     a read of a denied path succeeded",
+        "{output:?}"
+    );
+    assert_eq!(output.status.code(), Some(1));
     assert!(env.leftovers().is_empty(), "{:?}", env.leftovers());
 }
 

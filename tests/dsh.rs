@@ -293,7 +293,7 @@ fn turn_end_error_is_the_failure_detail() {
 }
 
 const LIMITED_DSH: &str = r#"#!/bin/sh
-trap 'exit 0' TERM
+trap 'echo "{\"type\":\"final\",\"text\":\"partial\"}"; exit 0' TERM
 cat > /dev/null
 echo '{"type":"session","sessionId":"session-1","cwd":"/w"}'
 echo '{"type":"status","phase":"turn_start","turn":1}'
@@ -324,8 +324,32 @@ fn limits_stop_dsh_and_the_result_is_limit() {
         assert_eq!(end["status"], "limit");
         assert_eq!(end["exit_code"], 0);
         assert_eq!(end["detail"], detail);
+        assert_eq!(end["result"], "partial");
     }
     assert!(env.leftovers().is_empty());
+}
+
+const OVER_LIMIT_DSH: &str = r#"#!/bin/sh
+trap '' TERM
+cat > /dev/null
+echo '{"type":"session","sessionId":"session-1","cwd":"/w"}'
+echo '{"type":"status","phase":"step_start","turn":1,"step":1}'
+echo '{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":1,"outputTokens":2,"cacheReadTokens":3,"cacheWriteTokens":4,"totalTokens":10}}'
+echo '{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}'
+echo '{"type":"final","text":"done"}'
+"#;
+
+#[test]
+fn a_run_that_completed_its_turn_is_finished_even_over_the_limit() {
+    let env = Env::with("dsh", OVER_LIMIT_DSH);
+    let output = run(
+        &env,
+        &["--sandbox", "off", "--max-tokens", "9", "--prompt", "hi"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let end = support::events(&output).pop().unwrap();
+    assert_eq!(end["status"], "finished");
+    assert_eq!(end["result"], "done");
 }
 
 const SESSION_DSH: &str = r#"#!/bin/sh
